@@ -1,7 +1,4 @@
-using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
-using Unity.VisualScripting;
 using UnityEngine;
 
 public class PanelFunctions : MonoBehaviour
@@ -33,7 +30,7 @@ public class PanelFunctions : MonoBehaviour
     private void OrderPanelItems(){
 
          // Get all children that are not in the uiElements list.
-         List<Transform> allChildren = new();
+        List<Transform> allChildren = new();
         foreach(var child in allChildren){
             if(!uiElements.Contains(child)){
                 allChildren.Add(child);
