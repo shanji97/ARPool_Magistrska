@@ -1,25 +1,23 @@
-using System.Collections;
-using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class MenuFunctions : MonoBehaviour
 {
-    // Start is called before the first frame update
-    void Start()
+    public void QuitApplication()
     {
-        
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-        
-    }
-
-    public void QuitApplication(){
-        if(!Application.isEditor)
+        if (!Application.isEditor)
             Application.Quit();
         else
-            Debug.Log("Quit Application from inside the editor"); 
+            Debug.Log("Quit Application from inside the editor");
+    }
+
+    public void ResetSettings()
+    {
+        AppSettings.Instance.ResetSettings();
+
+        foreach (var bindable in FindObjectsOfType<MonoBehaviour>().OfType<ISettingsBindable>())
+        {
+            bindable.LoadFromSettings(AppSettings.Instance.Settings);
+        }
     }
 }
