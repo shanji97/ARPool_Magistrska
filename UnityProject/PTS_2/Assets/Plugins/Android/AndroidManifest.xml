@@ -23,4 +23,7 @@
   <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="true" />
   <uses-permission android:name="com.oculus.permission.USE_SCENE" />
   <uses-permission android:name="com.oculus.permission.BOUNDARY_VISIBILITY" />
+  <!--Camera API permissions-->
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-permission android:name="horizonos.permission.HEADSET_CAMERA" />
 </manifest>

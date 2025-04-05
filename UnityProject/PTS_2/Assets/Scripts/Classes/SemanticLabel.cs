@@ -3,7 +3,6 @@ using System.Linq;
 
 public static class SemanticLabel
 {
-
     //v72 and v74 constants.
 
     #region Room Structure
@@ -48,7 +47,7 @@ public static class SemanticLabel
 
     #endregion
 
-    #region  MeshObjectsa and unclassiofied objects
+    #region  MeshObjectsa and unclassified objects
     public const string GLOBAL_MESH = "GLOBAL_MESH";
     public const string OTHER = "OTHER";
     #endregion
@@ -70,6 +69,4 @@ public static class SemanticLabel
         combined = all.Aggregate(combined, (current, list) => current.Concat(list).ToList());
         return combined;
     }
-
-
 }

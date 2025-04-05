@@ -7,20 +7,20 @@ using UnityEngine;
 [RequireComponent(typeof(TMP_Dropdown))]
 public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReactive
 {
-    public string settingKey;
+    public string SettingsKey;
     public string defaultValue;
 
     public TMP_Dropdown dropdown;
-    private List<string> options = new();
+    private List<string> _options = new();
     private string currentValue = string.Empty;
 
     public List<string> Options
     {
         get
         {
-            return options == null || !options.Any() ?
+            return _options == null || !_options.Any() ?
                  GenerateOptionsFromSettings(AppSettings.Instance.Settings) :
-                 options;
+                 _options;
         }
     }
 
@@ -35,36 +35,34 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
     {
         AppSettings.OnSettingsChanged += OnSettingsChanged;
     }
+    
     public void OnDisable()
     {
         AppSettings.OnSettingsChanged -= OnSettingsChanged;
     }
 
-
     // General 
     public void LoadFromSettings(UserSettings settings)
     {
         dropdown.ClearOptions();
-        options = GenerateOptionsFromSettings(settings);
-
-
-        dropdown.AddOptions(options);
+        _options = GenerateOptionsFromSettings(settings);
+        dropdown.AddOptions(_options);
         currentValue = GetSettingValue(settings);
-        var index = options.IndexOf(currentValue);
 
-        index = index == -1 ? options.IndexOf(defaultValue) : index;
-        var optionsPresent = options.Any();
+        var index = _options.IndexOf(currentValue);
+        index = index == -1 ? _options.IndexOf(defaultValue) : index;
+        var optionsPresent = _options.Any();
         if (index == -1 && optionsPresent)
             index = 0;
         else if (index == -1 && !optionsPresent)
-            Debug.LogError($"No element present in the {options} collection with the settings key value {settingKey}");
+            Debug.LogError($"No element present in the {_options} collection with the settings key value {SettingsKey}");
 
         dropdown.SetValueWithoutNotify(index);
 
         dropdown.onValueChanged.RemoveAllListeners();
         dropdown.onValueChanged.AddListener(i =>
         {
-            currentValue = options[i];
+            currentValue = _options[i];
             AppSettings.Instance.SetAndSave(SaveToSettings);
         });
     }
@@ -76,7 +74,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
 
     private string GetSettingValue(UserSettings settings)
     {
-        return settingKey switch
+        return SettingsKey switch
         {
             nameof(settings.SelectedLabel) => settings.SelectedLabel,
             nameof(settings.ApiMode) => settings.ApiMode.ToString(),
@@ -86,7 +84,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
 
     private void SetSettingValue(UserSettings settings, string value)
     {
-        switch (settingKey)
+        switch (SettingsKey)
         {
             case nameof(settings.SelectedLabel):
                 settings.SelectedLabel = value;
@@ -96,14 +94,14 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
                     settings.ApiMode = mode;
                 break;
             default:
-                Debug.LogWarning($"Unknown setting key: {settingKey}");
+                Debug.LogWarning($"Unknown setting key: {SettingsKey}");
                 break;
         }
     }
 
     private List<string> GenerateOptionsFromSettings(UserSettings settings)
     {
-        return settingKey switch
+        return SettingsKey switch
         {
             nameof(settings.SelectedLabel) => SemanticLabel.GetCandidatesForCueBallDetection(),
 
@@ -115,22 +113,13 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
         };
     }
 
-    private void UpdateDropdownOptions()
-    {
-        if (dropdown == null)
-            dropdown = GetComponent<TMP_Dropdown>();
-
-        dropdown.ClearOptions();
-        dropdown.AddOptions(options);
-    }
-
     public void OnSettingsChanged(UserSettings settings)
     {
-        if (settingKey == nameof(settings.SelectedLabel))
+        if (SettingsKey == nameof(settings.SelectedLabel))
         {
             bool shouldEnable = settings.ApiMode == ApiMode.SemanticLabeling;
             dropdown.interactable = shouldEnable;
-            options = GenerateOptionsFromSettings(settings);
+            _options = GenerateOptionsFromSettings(settings);
             LoadFromSettings(settings);
         }
     }
