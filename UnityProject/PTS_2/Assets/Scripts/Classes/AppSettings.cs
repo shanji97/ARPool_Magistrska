@@ -1,7 +1,10 @@
-using System;
-using System.IO;
 using Newtonsoft.Json;
+using System;
+using System.Collections;
+using System.IO;
 using UnityEngine;
+using Meta.XR.MRUtilityKit;
+using Unity.VisualScripting;
 
 public class AppSettings : MonoBehaviour
 {
@@ -12,7 +15,7 @@ public class AppSettings : MonoBehaviour
     public static event Action<UserSettings> OnSettingsChanged;
 
     public static bool HasInstance => _instance != null;
-    
+
     private static AppSettings _instance;
 
     public static AppSettings Instance
@@ -82,5 +85,14 @@ public class AppSettings : MonoBehaviour
     {
         Settings = new UserSettings();
         Save();
+    }
+
+
+    public void HandleScanControl()
+    {
+        if (Settings.ScanControl == ScanControl.ReScanScene)
+        {
+            // StartCoroutine(StartFreshScan());
+        }
     }
 }

@@ -78,6 +78,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
         {
             nameof(settings.SelectedLabel) => settings.SelectedLabel,
             nameof(settings.ApiMode) => settings.ApiMode.ToString(),
+            nameof(settings.ScanControl) => settings.ScanControl.ToString(),
             _ => defaultValue
         };
     }
@@ -93,6 +94,10 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
                 if (Enum.TryParse(value, out ApiMode mode))
                     settings.ApiMode = mode;
                 break;
+            case nameof(settings.ScanControl):
+                if (Enum.TryParse(value, out ScanControl control))
+                    settings.ScanControl = control;
+                break;
             default:
                 Debug.LogWarning($"Unknown setting key: {SettingsKey}");
                 break;
@@ -106,6 +111,8 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
             nameof(settings.SelectedLabel) => SemanticLabel.GetCandidatesForCueBallDetection(),
 
             nameof(settings.ApiMode) => Enum.GetNames(typeof(ApiMode)).ToList(),
+
+            nameof(settings.ScanControl) => Enum.GetNames(typeof(ScanControl)).ToList(),
 
             // Add more if needed
 
