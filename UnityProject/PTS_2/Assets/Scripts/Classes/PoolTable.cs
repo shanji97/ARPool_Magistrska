@@ -22,7 +22,6 @@ public class PoolTable
         new PoolTable("Large (9ft)", 2.84f, 1.42f, TableType.Large)
     };
 
-    // Private constructor for static presets
     private PoolTable(string name, float length, float width, TableType type)
     {
         Name = name;
@@ -32,7 +31,6 @@ public class PoolTable
         StandardTable = true;
     }
 
-    // Constructor from type
     public PoolTable(TableType typeOfStandardTable)
     {
         var preset = StandardTables.FirstOrDefault(t => t.Type == typeOfStandardTable);
@@ -52,14 +50,14 @@ public class PoolTable
         }
     }
 
-    // Constructor from raw values
     public PoolTable(float length, float width, string name = "")
     {
+        if(width > length)
+            (length, width) = (width, length);
+
         TrySetStandardTable(length, width);
         if (!StandardTable)
-        {
             AssignCustomTable(length, width, name);
-        }
     }
 
     private void AssignCustomTable(float length, float width, string name = "")

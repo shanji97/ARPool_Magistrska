@@ -44,8 +44,10 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
     // General 
     public void LoadFromSettings(UserSettings settings)
     {
-        dropdown.ClearOptions();
+        SettingsKey = string.IsNullOrEmpty(SettingsKey) ? gameObject.name : SettingsKey;
+
         _options = GenerateOptionsFromSettings(settings);
+        dropdown.ClearOptions();
         dropdown.AddOptions(_options);
         currentValue = GetSettingValue(settings);
 

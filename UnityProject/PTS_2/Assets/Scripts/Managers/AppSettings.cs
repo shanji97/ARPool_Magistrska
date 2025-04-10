@@ -1,10 +1,7 @@
 using Newtonsoft.Json;
 using System;
-using System.Collections;
 using System.IO;
 using UnityEngine;
-using Meta.XR.MRUtilityKit;
-using Unity.VisualScripting;
 
 public class AppSettings : MonoBehaviour
 {
@@ -77,7 +74,15 @@ public class AppSettings : MonoBehaviour
         else
         {
             var json = File.ReadAllText(Path);
-            Settings = JsonConvert.DeserializeObject<UserSettings>(json) ?? new UserSettings();
+            try
+            {
+                Settings = JsonConvert.DeserializeObject<UserSettings>(json) ?? new UserSettings();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("Failed to load settings. Default settings are going to be applied. \r\nException message: " + e.Message);
+                Settings = new UserSettings();
+            }
         }
     }
 
@@ -85,14 +90,5 @@ public class AppSettings : MonoBehaviour
     {
         Settings = new UserSettings();
         Save();
-    }
-
-
-    public void HandleScanControl()
-    {
-        if (Settings.ScanControl == ScanControl.ReScanScene)
-        {
-            // StartCoroutine(StartFreshScan());
-        }
     }
 }

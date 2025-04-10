@@ -9,6 +9,7 @@ public class UserSettings
     public ScanControl ScanControl { get; set; } = ScanControl.ReScanScene;
 
     public PoolTable DefaultTable { get; set; } = new PoolTable(TableType.Small);
+
 }
 
 public enum ScanControl

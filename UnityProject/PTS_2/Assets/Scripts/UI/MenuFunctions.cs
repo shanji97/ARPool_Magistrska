@@ -4,17 +4,18 @@ using UnityEngine.SceneManagement;
 
 public class MenuFunctions : MonoBehaviour
 {
+    #region  MAIN MENU
     public void PlayGame()
     {
         var sceneToLoad = AppSettings.Instance.Settings.ApiMode switch
         {
-            
+
             ApiMode.PassThroughCameraAPI => "PassThroughCameraScene",
             ApiMode.SemanticLabeling => "SemanticLabelingScene",
             _ => null
         };
 
-        if(!string.IsNullOrEmpty(sceneToLoad) && SceneExists(sceneToLoad))
+        if (!string.IsNullOrEmpty(sceneToLoad) && SceneExists(sceneToLoad))
         {
             PrepareRequiredSettings(sceneToLoad);
 
@@ -46,10 +47,11 @@ public class MenuFunctions : MonoBehaviour
 
     private bool SceneExists(string sceneName)
     {
-        for(int i = 0; i< SceneManager.sceneCountInBuildSettings; i++){
+        for (int i = 0; i < SceneManager.sceneCountInBuildSettings; i++)
+        {
             var scenePath = SceneUtility.GetScenePathByBuildIndex(i);
             var scene = System.IO.Path.GetFileNameWithoutExtension(scenePath);
-            if(scene == sceneName)
+            if (scene == sceneName)
                 return true;
         }
 
@@ -58,13 +60,25 @@ public class MenuFunctions : MonoBehaviour
 
     private void PrepareRequiredSettings(string sceneToLoad)
     {
-      
+
         if (sceneToLoad == "SemanticLabelingScene")
         {
-            if(AppSettings.Instance.Settings.ScanControl == ScanControl.ReScanScene)
+            if (AppSettings.Instance.Settings.ScanControl == ScanControl.ReScanScene)
             {
                 // ClearSavedData();
             }
         }
     }
+    #endregion
+
+
+    #region SEMANTIC LABELING SCENE
+
+    public void SpawnPockets()
+    {
+
+    }
+
+
+    #endregion
 }

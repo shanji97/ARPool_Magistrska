@@ -13,6 +13,14 @@ public class PanelFunctions : MonoBehaviour
 #if !DEVELOPMENT_BUILD && !UNITY_EDITOR
         DestroyPlaygroundButton();
 #endif
+
+        CanvasElement = CanvasElement == null ? transform.parent : CanvasElement;
+        if (CanvasElement == null)
+        {
+            Debug.LogError("CanvasElement is null. Please assign it in the inspector or set it in the code.");
+            return;
+        }
+    
         OrderPanelItems();
     }
 
@@ -29,12 +37,14 @@ public class PanelFunctions : MonoBehaviour
     }
 #endif
 
-    private void OrderPanelItems(){
-
-         // Get all children that are not in the uiElements list.
+    private void OrderPanelItems()
+    {
+        // Get all children that are not in the uiElements list.
         List<Transform> allChildren = new();
-        foreach(Transform child in CanvasElement){
-            if(!UiElements.Contains(child)){
+        foreach (Transform child in CanvasElement)
+        {
+            if (!UiElements.Contains(child))
+            {
                 allChildren.Add(child);
             }
         }
@@ -43,7 +53,8 @@ public class PanelFunctions : MonoBehaviour
         finalOrder.AddRange(UiElements);
         finalOrder.AddRange(allChildren);
 
-        for(var i = 0; i < finalOrder.Count; i++){
+        for (var i = 0; i < finalOrder.Count; i++)
+        {
             finalOrder[i].SetSiblingIndex(i);
         }
     }
