@@ -55,6 +55,7 @@ public class PoolTable
         if(width > length)
             (length, width) = (width, length);
 
+
         TrySetStandardTable(length, width);
         if (!StandardTable)
             AssignCustomTable(length, width, name);
@@ -64,7 +65,7 @@ public class PoolTable
     {
         Length = length;
         Width = width;
-        Name = string.IsNullOrWhiteSpace(name) ? "Custom Table" + DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss") : name;
+        Name = string.IsNullOrWhiteSpace(name) ? "Custom Table added on" + DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss") : name;
         Type = TableType.Custom;
         StandardTable = false;
     }

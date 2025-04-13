@@ -155,11 +155,9 @@ MonoBehaviour:
     type: 3}
   PlayableLineMarkerPrefab: {fileID: 7064113239061146343, guid: 6141438d283cc804c8744d29a79c56d4,
     type: 3}
-  TableSelectionMarkerPrefab: {fileID: 4377371660129041788, guid: 97b478e9786fe1640acdba0f0d5380c3,
+  TableSelectionMarkerPrefab: {fileID: 461944043692556950, guid: 3ee23c69a9cf09249a2c48a406a914d8,
     type: 3}
-  CanvasPrefab: {fileID: 0}
   PocketYOffset: 0.01
-  _verticalCanvasOffset: 0.08
 --- !u!4 &97657398
 Transform:
   m_ObjectHideFlags: 0
@@ -1389,6 +1387,18 @@ PrefabInstance:
       propertyPath: SceneSettings.DataSource
       value: 2
       objectReference: {fileID: 0}
+    - target: {fileID: 3613868102660323786, guid: c2e00db6d2dfa42ac8d821db8d493a44,
+        type: 3}
+      propertyPath: SceneSettings.RoomPrefabs.Array.data[0]
+      value: 
+      objectReference: {fileID: 5618556046422172173, guid: 029ede24e76b24d0888dc235dd0b96f2,
+        type: 3}
+    - target: {fileID: 3613868102660323786, guid: c2e00db6d2dfa42ac8d821db8d493a44,
+        type: 3}
+      propertyPath: SceneSettings.RoomPrefabs.Array.data[1]
+      value: 
+      objectReference: {fileID: 5618556046422172173, guid: 4b454e8ccd6764ccdbcd91586969863f,
+        type: 3}
     - target: {fileID: 8047981335285221976, guid: c2e00db6d2dfa42ac8d821db8d493a44,
         type: 3}
       propertyPath: m_LocalPosition.x

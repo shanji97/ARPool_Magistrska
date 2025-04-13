@@ -13,13 +13,23 @@ public class TableManager : MonoBehaviour
 
     [Header("Settings")]
     public float PocketYOffset = 0.01f;
-    
+
     public bool ArePocketsComputed { get; private set; } = false;
     public Vector3[] PocketPositions { get; private set; } = new Vector3[6];
-
     private MRUKRoom _room;
     private List<MRUKAnchor> _tableAnchors = new();
     private Transform spawnedMarkerParent;
+    public TableManager Instance { get; private set; }
+
+    private readonly List<string> _spawnedMarkerNames = new();
+
+    private void Awake()
+    {
+        if(Instance == null)
+            Instance = this;
+        else
+            Destroy(this);
+    }
 
     private void Start()
     {
@@ -66,6 +76,7 @@ public class TableManager : MonoBehaviour
             marker.transform.SetParent(spawnedMarkerParent, true);
 
             anchorNumber++;
+            _spawnedMarkerNames.Add(marker.name);
         }
     }
 
@@ -86,12 +97,34 @@ public class TableManager : MonoBehaviour
             markerTransform.rotation;
     }
 
-    private void SetupTableVisuals(Transform tableTransform, float length, float width)
+    public void SetupTableVisuals(Transform markerTransform)
     {
         ArePocketsComputed = true;
 
-        float halfWidth = width / 2f;
+        var indexOfTable = _spawnedMarkerNames.IndexOf(markerTransform.name);
+        if (indexOfTable == -1)
+        {
+            Debug.LogWarning($"Table with name {markerTransform.name} not found in spawned markers.");
+            return;
+        }
+
+        var anchor = _tableAnchors[indexOfTable];
+        if (anchor == null)
+        {
+            Debug.LogWarning($"Anchor for table {markerTransform.name} not found.");
+            return;
+        }
+
+
+        // Detect table dismensions. 
+        Vector3 boundSize = anchor.VolumeBounds.Value.size;
+        (float length, float width) = boundSize.x > boundSize.z ? (boundSize.x, boundSize.z) : (boundSize.z, boundSize.x);
+        var poolTable = new PoolTable(length, width);
+
         float halfLength = length / 2f;
+        float halfWidth = width / 2f;
+
+        // Get the values for the pocket locations.
 
         Vector3[] localPockets = new Vector3[6]
         {
@@ -107,14 +140,14 @@ public class TableManager : MonoBehaviour
 
         for (int i = 0; i < 6; i++)
         {
-            Vector3 worldPocket = tableTransform.TransformPoint(localPockets[i] + Vector3.up * PocketYOffset);
+            Vector3 worldPocket = markerTransform.TransformPoint(localPockets[i] + Vector3.up * PocketYOffset);
             PocketPositions[i] = worldPocket;
             Instantiate(PocketMarkerPrefab, worldPocket, Quaternion.identity, this.transform);
         }
 
         float offsetZ = -halfLength + (length / 3f);
-        Vector3 lineLeft = tableTransform.TransformPoint(new Vector3(-halfWidth, PocketYOffset, offsetZ));
-        Vector3 lineRight = tableTransform.TransformPoint(new Vector3(halfWidth, PocketYOffset, offsetZ));
+        Vector3 lineLeft = markerTransform.TransformPoint(new Vector3(-halfWidth, PocketYOffset, offsetZ));
+        Vector3 lineRight = markerTransform.TransformPoint(new Vector3(halfWidth, PocketYOffset, offsetZ));
 
         GameObject line = Instantiate(PlayableLineMarkerPrefab, this.transform);
         if (line.TryGetComponent<LineRenderer>(out var lr))
