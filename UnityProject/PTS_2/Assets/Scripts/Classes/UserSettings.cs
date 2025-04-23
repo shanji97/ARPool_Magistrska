@@ -1,5 +1,3 @@
-using UnityEngine.UI;
-
 public class UserSettings
 {
     public string SelectedLabel { get; set; } = SemanticLabel.OTHER;
@@ -10,10 +8,6 @@ public class UserSettings
 
     public PoolTable DefaultTable { get; set; } = new PoolTable(TableType.Small);
 
-}
+    public SaveTableData LastSavedTableData { get; set; } = new();
 
-public enum ScanControl
-{
-    ReScanScene = 0,
-    NoAction = 1
 }

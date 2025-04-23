@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.VisualScripting;
 using UnityEngine;
 
 [Serializable]
@@ -44,28 +45,29 @@ public class PoolTable
         }
         else
         {
-            Name = "Unknown";
+            Name = Guid.NewGuid().ToString();
             Type = TableType.Custom;
             StandardTable = false;
         }
     }
 
-    public PoolTable(float length, float width, string name = "")
+    public PoolTable(float length, float width, string name)
     {
+        name = string.IsNullOrEmpty(name) ? Guid.NewGuid().ToString() : name;
+
         if(width > length)
             (length, width) = (width, length);
-
 
         TrySetStandardTable(length, width);
         if (!StandardTable)
             AssignCustomTable(length, width, name);
     }
 
-    private void AssignCustomTable(float length, float width, string name = "")
+    private void AssignCustomTable(float length, float width, string name)
     {
         Length = length;
         Width = width;
-        Name = string.IsNullOrWhiteSpace(name) ? "Custom Table added on" + DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss") : name;
+        Name = string.IsNullOrWhiteSpace(name) ? Guid.NewGuid().ToString() : name;
         Type = TableType.Custom;
         StandardTable = false;
     }
@@ -80,7 +82,7 @@ public class PoolTable
         {
             Length = match.Length;
             Width = match.Width;
-            Name = match.Name + " (Auto)";
+            Name = match.Name + $"{match.Type}_{Guid.NewGuid()}";
             Type = match.Type;
             StandardTable = true;
         }

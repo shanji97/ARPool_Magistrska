@@ -10,7 +10,7 @@ public class MenuFunctionsTableManager : MonoBehaviour
     public void IgnoreTable()
     {
         // Destroy the grandparent gameobject of the table
-        Destroy(transform.parent.parent.gameObject);
+        Destroy(transform.parent.gameObject);
     }
 
     public void SetUpTableScene()

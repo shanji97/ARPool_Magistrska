@@ -2,7 +2,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Meta.XR.MRUtilityKit;
+using Unity.VisualScripting;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 public class TableManager : MonoBehaviour
 {
@@ -13,11 +15,26 @@ public class TableManager : MonoBehaviour
 
     [Header("Settings")]
     public float PocketYOffset = 0.01f;
-
-    public bool ArePocketsComputed { get; private set; } = false;
     public Vector3[] PocketPositions { get; private set; } = new Vector3[6];
+
+    [Header("Variables")]
+    public readonly string[] PocketNames = { "FL", "FR", "BL", "BR", "ML", "MR" };
+
     private MRUKRoom _room;
+
     private List<MRUKAnchor> _tableAnchors = new();
+    private List<Vector3> _initialMarkerPositions = new();
+    private List<bool> _arePocketsComputedForTable = new();
+
+    public List<bool> AreAllPocketsComputedForTables()
+    {
+        if (!_arePocketsComputedForTable.Any())
+            return default;
+        else
+            return _arePocketsComputedForTable;
+    }
+
+
     private Transform spawnedMarkerParent;
     public TableManager Instance { get; private set; }
 
@@ -25,7 +42,7 @@ public class TableManager : MonoBehaviour
 
     private void Awake()
     {
-        if(Instance == null)
+        if (Instance == null)
             Instance = this;
         else
             Destroy(this);
@@ -33,7 +50,6 @@ public class TableManager : MonoBehaviour
 
     private void Start()
     {
-        // "SpawnedMarkers" hardcoded?
         spawnedMarkerParent = new GameObject("SpawnedMarkers").transform;
         StartCoroutine(WaitForRoomCreation());
     }
@@ -51,6 +67,8 @@ public class TableManager : MonoBehaviour
 
     private void DetectAndMarkTables()
     {
+        _arePocketsComputedForTable = new();
+
         _tableAnchors = _room.Anchors
             .Where(a => a.AnchorLabels.Contains(SemanticLabel.TABLE))
             .ToList();
@@ -72,11 +90,14 @@ public class TableManager : MonoBehaviour
             GameObject marker = Instantiate(TableSelectionMarkerPrefab, topOfTable, Quaternion.identity);
             marker.name = $"SelectTable_{anchorNumber}";
 
+            _initialMarkerPositions.Add(marker.transform.position);
+            _spawnedMarkerNames.Add(marker.name);
+            _arePocketsComputedForTable.Add(false);
+
             FaceMarkerTowaardsCamera(marker.transform);
             marker.transform.SetParent(spawnedMarkerParent, true);
 
             anchorNumber++;
-            _spawnedMarkerNames.Add(marker.name);
         }
     }
 
@@ -99,12 +120,16 @@ public class TableManager : MonoBehaviour
 
     public void SetupTableVisuals(Transform markerTransform)
     {
-        ArePocketsComputed = true;
-
         var indexOfTable = _spawnedMarkerNames.IndexOf(markerTransform.name);
         if (indexOfTable == -1)
         {
             Debug.LogWarning($"Table with name {markerTransform.name} not found in spawned markers.");
+            return;
+        }
+
+        if (_arePocketsComputedForTable[indexOfTable])
+        {
+            Debug.LogWarning($"Pockets for table {markerTransform.name} have already been computed.");
             return;
         }
 
@@ -115,50 +140,82 @@ public class TableManager : MonoBehaviour
             return;
         }
 
-
-        // Detect table dismensions. 
-        Vector3 boundSize = anchor.VolumeBounds.Value.size;
-        (float length, float width) = boundSize.x > boundSize.z ? (boundSize.x, boundSize.z) : (boundSize.z, boundSize.x);
-        var poolTable = new PoolTable(length, width);
-
-        float halfLength = length / 2f;
-        float halfWidth = width / 2f;
-
-        // Get the values for the pocket locations.
-
-        Vector3[] localPockets = new Vector3[6]
+        var originalMarkerPosition = _initialMarkerPositions[indexOfTable];
+        if (originalMarkerPosition == null || originalMarkerPosition == Vector3.zero)
         {
-            new(-halfWidth, 0, -halfLength), // Bottom Left
-            new( halfWidth, 0, -halfLength), // Bottom Right
-            new(-halfWidth, 0,  halfLength), // Top Left
-            new( halfWidth, 0,  halfLength), // Top Right
-            new(-halfWidth, 0,  0),          // Middle Left
-            new( halfWidth, 0,  0),          // Middle Right
-        };
-
-        PocketPositions = new Vector3[6];
-
-        for (int i = 0; i < 6; i++)
-        {
-            Vector3 worldPocket = markerTransform.TransformPoint(localPockets[i] + Vector3.up * PocketYOffset);
-            PocketPositions[i] = worldPocket;
-            Instantiate(PocketMarkerPrefab, worldPocket, Quaternion.identity, this.transform);
+            Debug.LogWarning($"Original marker position for table {markerTransform.name} is not set or zero.");
+            return;
         }
 
-        float offsetZ = -halfLength + (length / 3f);
-        Vector3 lineLeft = markerTransform.TransformPoint(new Vector3(-halfWidth, PocketYOffset, offsetZ));
-        Vector3 lineRight = markerTransform.TransformPoint(new Vector3(halfWidth, PocketYOffset, offsetZ));
+        _arePocketsComputedForTable[indexOfTable] = true;
 
-        GameObject line = Instantiate(PlayableLineMarkerPrefab, this.transform);
-        if (line.TryGetComponent<LineRenderer>(out var lr))
+        Transform anchorTransform = anchor.transform;
+
+        Vector3 tableRight = anchorTransform.right.normalized;
+        Vector3 tableUp = anchorTransform.up.normalized;
+        Vector3 tableForward = Vector3.Cross(tableRight, tableUp).normalized;
+
+        Bounds bounds = anchor.VolumeBounds.Value;
+
+        // Get half dimensions
+        float halfLength = bounds.extents.z;
+        float halfWidth = bounds.extents.x;
+
+        // Adjust if table is rotated (longer side might not always be length)
+        if (bounds.size.z > bounds.size.x)
         {
-            lr.positionCount = 2;
-            lr.SetPosition(0, lineLeft);
-            lr.SetPosition(1, lineRight);
+            halfLength = bounds.extents.z;
+            halfWidth = bounds.extents.x;
         }
         else
         {
-            Debug.LogWarning("PlayableLineMarkerPrefab requires LineRenderer component.");
+            halfLength = bounds.extents.x;
+            halfWidth = bounds.extents.z;
+        }
+
+        float y = originalMarkerPosition.y + PocketYOffset;
+        Vector3 tableCenter = anchorTransform.position;
+
+        // Calculate all pocket positions
+        // Middle pockets
+        Vector3 midLeft = tableCenter - tableRight * halfWidth;
+        midLeft.y = y;
+        Vector3 midRight = tableCenter + tableRight * halfWidth;
+        midRight.y = y;
+
+        // Front and back positions (along the length)
+        Vector3 frontCenter = tableCenter + tableForward * halfLength;
+        Vector3 backCenter = tableCenter - tableForward * halfLength;
+
+        // Corner pockets
+        Vector3 frontLeft = frontCenter - tableRight * halfWidth;
+        frontLeft.y = y;
+        Vector3 frontRight = frontCenter + tableRight * halfWidth;
+        frontRight.y = y;
+        Vector3 backLeft = backCenter - tableRight * halfWidth;
+        backLeft.y = y;
+        Vector3 backRight = backCenter + tableRight * halfWidth;
+        backRight.y = y;
+
+        // Instantiate and store all pocket positions
+        GameObject[] pockets = new GameObject[6];
+        for (int i = 0; i < 6; i++)
+        {
+            Vector3 position = i switch
+            {
+                0 => frontLeft,    // FL
+                1 => frontRight,   // FR
+                2 => backLeft,     // BL
+                3 => backRight,    // BR
+                4 => midLeft,      // ML
+                5 => midRight,     // MR
+                _ => Vector3.zero
+            };
+
+            pockets[i] = Instantiate(PocketMarkerPrefab, position, Quaternion.identity);
+            pockets[i].name = $"Pocket_{PocketNames[i]}_{indexOfTable}";
+            PocketPositions[i] = position;
+            pockets[i].transform.SetParent(spawnedMarkerParent, true);
         }
     }
 }
