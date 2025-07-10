@@ -10,4 +10,5 @@ public class UserSettings
 
     public SaveTableData LastSavedTableData { get; set; } = new();
 
+    public bool AllowControllerFallBack { get; set;} = false;
 }

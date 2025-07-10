@@ -13,7 +13,7 @@ OcclusionCullingSettings:
 --- !u!104 &2
 RenderSettings:
   m_ObjectHideFlags: 0
-  serializedVersion: 9
+  serializedVersion: 10
   m_Fog: 0
   m_FogColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
   m_FogMode: 3
@@ -42,8 +42,8 @@ RenderSettings:
 --- !u!157 &3
 LightmapSettings:
   m_ObjectHideFlags: 0
-  serializedVersion: 12
-  m_GIWorkflowMode: 1
+  serializedVersion: 13
+  m_BakeOnSceneLoad: 0
   m_GISettings:
     serializedVersion: 2
     m_BounceScale: 1
@@ -66,9 +66,6 @@ LightmapSettings:
     m_LightmapParameters: {fileID: 0}
     m_LightmapsBakeMode: 1
     m_TextureCompression: 1
-    m_FinalGather: 0
-    m_FinalGatherFiltering: 1
-    m_FinalGatherRayCount: 256
     m_ReflectionCompression: 2
     m_MixedBakeMode: 2
     m_BakeBackend: 1
@@ -96,7 +93,7 @@ LightmapSettings:
     m_ExportTrainingData: 0
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
-  m_LightingDataAsset: {fileID: 0}
+  m_LightingDataAsset: {fileID: 20201, guid: 0000000000000000f000000000000000, type: 0}
   m_LightingSettings: {fileID: 0}
 --- !u!196 &4
 NavMeshSettings:
@@ -258,9 +255,8 @@ Light:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 410087039}
   m_Enabled: 1
-  serializedVersion: 10
+  serializedVersion: 11
   m_Type: 1
-  m_Shape: 0
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_Intensity: 2
   m_Range: 10
@@ -310,8 +306,12 @@ Light:
   m_BoundingSphereOverride: {x: 0, y: 0, z: 0, w: 0}
   m_UseBoundingSphereOverride: 0
   m_UseViewFrustumForShadowCasterCull: 1
+  m_ForceVisible: 0
   m_ShadowRadius: 0
   m_ShadowAngle: 0
+  m_LightUnit: 1
+  m_LuxAtDistance: 1
+  m_EnableSpotReflector: 1
 --- !u!4 &410087041
 Transform:
   m_ObjectHideFlags: 0
@@ -481,32 +481,32 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4599834945461705146, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
-      propertyPath: UiElements.Array.data[0]
+      propertyPath: 'UiElements.Array.data[0]'
       value: 
       objectReference: {fileID: 558177728}
     - target: {fileID: 4599834945461705146, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
-      propertyPath: UiElements.Array.data[1]
+      propertyPath: 'UiElements.Array.data[1]'
       value: 
       objectReference: {fileID: 558177727}
     - target: {fileID: 4599834945461705146, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
-      propertyPath: UiElements.Array.data[2]
+      propertyPath: 'UiElements.Array.data[2]'
       value: 
       objectReference: {fileID: 558177726}
     - target: {fileID: 4599834945461705146, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
-      propertyPath: UiElements.Array.data[3]
+      propertyPath: 'UiElements.Array.data[3]'
       value: 
       objectReference: {fileID: 558177725}
     - target: {fileID: 4599834945461705146, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
-      propertyPath: UiElements.Array.data[4]
+      propertyPath: 'UiElements.Array.data[4]'
       value: 
       objectReference: {fileID: 558177724}
     - target: {fileID: 4599834945461705146, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
-      propertyPath: UiElements.Array.data[5]
+      propertyPath: 'UiElements.Array.data[5]'
       value: 
       objectReference: {fileID: 558177723}
     - target: {fileID: 5441250509894838210, guid: 97b478e9786fe1640acdba0f0d5380c3,
@@ -1565,22 +1565,22 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4972652289655400526, guid: f1744ae176dec5c49874f6b210a676b7,
         type: 3}
-      propertyPath: UiElements.Array.data[0]
+      propertyPath: 'UiElements.Array.data[0]'
       value: 
       objectReference: {fileID: 1375689139}
     - target: {fileID: 4972652289655400526, guid: f1744ae176dec5c49874f6b210a676b7,
         type: 3}
-      propertyPath: UiElements.Array.data[1]
+      propertyPath: 'UiElements.Array.data[1]'
       value: 
       objectReference: {fileID: 1449997499}
     - target: {fileID: 4972652289655400526, guid: f1744ae176dec5c49874f6b210a676b7,
         type: 3}
-      propertyPath: UiElements.Array.data[2]
+      propertyPath: 'UiElements.Array.data[2]'
       value: 
       objectReference: {fileID: 1152289293}
     - target: {fileID: 4972652289655400526, guid: f1744ae176dec5c49874f6b210a676b7,
         type: 3}
-      propertyPath: UiElements.Array.data[3]
+      propertyPath: 'UiElements.Array.data[3]'
       value: 
       objectReference: {fileID: 1179773957}
     - target: {fileID: 5073789688448329210, guid: f1744ae176dec5c49874f6b210a676b7,

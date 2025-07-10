@@ -11,7 +11,7 @@ public class MenuFunctions : MonoBehaviour
         {
 
             ApiMode.PassThroughCameraAPI => "PassThroughCameraScene",
-            ApiMode.SemanticLabeling => "SemanticLabelingScene",
+            ApiMode.SemanticLabeling => "PoolSetup",
             _ => null
         };
 
