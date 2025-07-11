@@ -1,9 +1,9 @@
-public enum PocketName
+public enum PocketName : byte
 {
-    BottomLeftCorner,   //  DL
-    BottomRightCorner,  //  DR
-    LeftMiddle,         //  LM
-    TopLeftCorner,      //  UL
-    TopRightCorner,     //  UR
-    RightMiddle         //  RM
+    BottomLeftCorner = 0,
+    MiddleLeftCorner = 1,
+    BottomRightCorner = 2,
+    TopLeftCorner = 3,
+    MiddleRightCorner = 4,
+    TopRightCorner = 5,
 }

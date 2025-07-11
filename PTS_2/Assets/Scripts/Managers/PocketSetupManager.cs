@@ -20,8 +20,8 @@ public class PocketSetupManager : MonoBehaviour
     public OVRMicrogestureEventSource RightHandEventSource;
 
     [Tooltip("Reference to the hand visual components.")]
-    public Oculus.Interaction.HandVisual leftHandVisual;
-    public Oculus.Interaction.HandVisual rightHandVisual;
+    public HandVisual leftHandVisual;
+    public HandVisual rightHandVisual;
 
     [Tooltip("Controller button to place a marker (fallback). e.g., Button.One = A (Right) or X (Left).")]
     public OVRInput.Button placeMarkerButton = OVRInput.Button.One;
@@ -44,11 +44,11 @@ public class PocketSetupManager : MonoBehaviour
     private readonly string[] _pocketNames =
     {
         PocketName.BottomLeftCorner.ToString(),
+        PocketName.MiddleLeftCorner.ToString(),
         PocketName.BottomRightCorner.ToString(),
-        PocketName.RightMiddle.ToString(),
         PocketName.TopLeftCorner.ToString(),
+        PocketName.MiddleRightCorner.ToString(),
         PocketName.TopRightCorner.ToString(),
-        PocketName.LeftMiddle.ToString(),
     };
 
     private List<GameObject> _placedMarkers = new(6);
@@ -87,7 +87,7 @@ public class PocketSetupManager : MonoBehaviour
     void Update()
     {
         if (_groupModeActivate) return;
-        //TODO
+        
     }
 
     void OnApplicationQuit()
@@ -106,20 +106,26 @@ public class PocketSetupManager : MonoBehaviour
     {
         Debug.Log($"Microgesture event: {gestureType} from hand {hand.name}.");
 
-        switch (gestureType)
+        //Right hand -> HandType is marked as internal.
+        var isRightHand = hand.name.ToLower().Contains("right");
+
+        if (isRightHand)
         {
-            case OVRHand.MicrogestureType.ThumbTap:
-                PlacePocketMarker(hand);
-                break;
-            case OVRHand.MicrogestureType.SwipeRight:
-                FinalizePlacements();
-                break;
-            case OVRHand.MicrogestureType.SwipeLeft:
-            case OVRHand.MicrogestureType.SwipeForward:
-            case OVRHand.MicrogestureType.SwipeBackward:
-            default:
-                Debug.Log("Gesture currently not supported.");
-                break;
+            switch (gestureType)
+            {
+                case OVRHand.MicrogestureType.ThumbTap:
+                    PlacePocketMarker(hand);
+                    break;
+                case OVRHand.MicrogestureType.SwipeRight:
+                    FinalizePlacements();
+                    break;
+                case OVRHand.MicrogestureType.SwipeLeft:
+                case OVRHand.MicrogestureType.SwipeForward:
+                case OVRHand.MicrogestureType.SwipeBackward:
+                default:
+                    Debug.Log("Gesture currently not supported.");
+                    break;
+            }
         }
 
         UpdateInstructionUI();
@@ -142,9 +148,9 @@ public class PocketSetupManager : MonoBehaviour
             return;
         }
 
-        Vector3 bottomLeft = _placedMarkers[0].transform.position;
-        Vector3 middleLeft = _placedMarkers[1].transform.position;
-        Vector3 bottomRight = _placedMarkers[2].transform.position;
+        Vector3 bottomLeft = _placedMarkers[(byte)PocketName.BottomLeftCorner].transform.position;
+        Vector3 middleLeft = _placedMarkers[(byte)PocketName.MiddleLeftCorner].transform.position;
+        Vector3 bottomRight = _placedMarkers[(byte)PocketName.BottomRightCorner].transform.position;
 
         //Top left
         Vector3 bottomLeftToLeftMiddle = middleLeft - bottomLeft;
@@ -162,11 +168,11 @@ public class PocketSetupManager : MonoBehaviour
         topRight.y = _yCoordinateValueForMarkers;
 
         GameObject topLeftMarker = Instantiate(markerPrefab, topLeft, Quaternion.identity);
-        topLeftMarker.name = _pocketNames[3];
+        topLeftMarker.name = _pocketNames[(byte)PocketName.TopLeftCorner];
         GameObject middleRightMarker = Instantiate(markerPrefab, middleRight, Quaternion.identity);
-        middleRightMarker.name = _pocketNames[4];
+        middleRightMarker.name = _pocketNames[(byte)PocketName.MiddleRightCorner];
         GameObject topRightMarker = Instantiate(markerPrefab, topRight, Quaternion.identity);
-        topRightMarker.name = _pocketNames[5];
+        topRightMarker.name = _pocketNames[(byte)PocketName.TopRightCorner];
 
         if (pocketMarkerRoot != null)
         {
@@ -175,7 +181,11 @@ public class PocketSetupManager : MonoBehaviour
             topRightMarker.transform.SetParent(pocketMarkerRoot.transform, true);
         }
 
-        _markersPlacedCount += 3;
+        _placedMarkers[(byte)PocketName.TopLeftCorner] = topLeftMarker;
+        _placedMarkers[(byte)PocketName.MiddleRightCorner] = middleRightMarker;
+        _placedMarkers[(byte)PocketName.TopRightCorner] = topRightMarker;
+
+        _markersPlacedCount = 6;
 
 
         _instructionText = "All 6 pockets positioned!";
@@ -199,9 +209,6 @@ public class PocketSetupManager : MonoBehaviour
             Debug.LogError("No pocket marker root has been instantiated or has been deleted in runtime, so no (furher) pockets can be placed.");
             return;
         }
-
-        //if (_markersPlacedCount >= _totalPockedNeeded || _groupModeActivate || pocketMarkerRoot == null)
-        //return;
 
         var palmPosition = GetPalmWorldPosition(hand);
 
@@ -258,7 +265,7 @@ public class PocketSetupManager : MonoBehaviour
             Debug.LogWarning("Instruction text UI not assigned.");
         }
     }
-
+    
     public void UndoLastMarker()
     {
         if (_markersPlacedCount == 0) return;

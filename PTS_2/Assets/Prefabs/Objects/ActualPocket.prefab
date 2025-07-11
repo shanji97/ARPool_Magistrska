@@ -76,7 +76,7 @@ PrefabInstance:
     - target: {fileID: 1243805213019753163, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
       propertyPath: m_Enabled
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 2069430518348557387, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
@@ -106,7 +106,7 @@ PrefabInstance:
     - target: {fileID: 4377371660129041788, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
       propertyPath: m_Name
-      value: PrefabForPocket
+      value: "ActualPocket\u0111"
       objectReference: {fileID: 0}
     - target: {fileID: 4377371660129041788, guid: 97b478e9786fe1640acdba0f0d5380c3,
         type: 3}
@@ -268,7 +268,8 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
-    m_RemovedComponents: []
+    m_RemovedComponents:
+    - {fileID: 1243805213019753163, guid: 97b478e9786fe1640acdba0f0d5380c3, type: 3}
     m_RemovedGameObjects:
     - {fileID: 1044562523048605526, guid: 97b478e9786fe1640acdba0f0d5380c3, type: 3}
     - {fileID: 7541720128676473186, guid: 97b478e9786fe1640acdba0f0d5380c3, type: 3}
@@ -297,3 +298,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 71c3317d53e437b49a4626d974cb4531, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  GrabbableEnabled: 1
