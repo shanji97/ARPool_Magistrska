@@ -348,10 +348,20 @@ PrefabInstance:
       propertyPath: _centerEyeCamera
       value: 
       objectReference: {fileID: 954641061}
+    - target: {fileID: 3903482226883268838, guid: 0a7d2469f24041c4284c66706f84c45e,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 4148778239110795873, guid: 0a7d2469f24041c4284c66706f84c45e,
         type: 3}
       propertyPath: m_Name
       value: '[BuildingBlock] OVRInteractionComprehensive'
+      objectReference: {fileID: 0}
+    - target: {fileID: 4148778239110795873, guid: 0a7d2469f24041c4284c66706f84c45e,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4397664628265918113, guid: 0a7d2469f24041c4284c66706f84c45e,
         type: 3}
@@ -993,7 +1003,7 @@ GameObject:
   - component: {fileID: 815794563}
   - component: {fileID: 815794562}
   m_Layer: 3
-  m_Name: Text (TMP)
+  m_Name: INSTRUCTION_TEXT
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1700,11 +1710,9 @@ MonoBehaviour:
   RightHandEventSource: {fileID: 1873398254}
   leftHandVisual: {fileID: 504748505}
   rightHandVisual: {fileID: 211205938}
-  placeMarkerButton: 1
-  undoMarkerButton: 2
   instructionTextUI: {fileID: 815794562}
   _instructionText: 
-  _totalPockedNeeded: 3
+  _totalPockedNeeded: 2
 --- !u!4 &1163538904
 Transform:
   m_ObjectHideFlags: 0
