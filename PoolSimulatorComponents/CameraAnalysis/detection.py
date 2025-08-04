@@ -1,14 +1,26 @@
 import cv2
 import numpy as np
 import time
-import socket
+import datetime
+import csv
+from enum import Enum
+
+#Custom imports
+from .droid_cam_controller import DroidCamController
+
+
+class DetectionMode(Enum):
+    TRESHOLDING = 1
+    YOLO = 2
+    BOTH = 3
 
 # Globals
-CAPTURING_DEVICE_IP = "10.15.28.224"
+CAPTURING_DEVICE_IP = "10.15.12.7"
 PORT = "4747"
+controller = DroidCamController(CAPTURING_DEVICE_IP, PORT)
 # Max resolution
 RESOLUTION = "1920x1080"
-# Buy full version of DroidCam and or use 720p or watch ads every 1 hour.
+# Buy full version of DroidCam and or use 720p or watch ads every 1 hour. PUT requests (at least for iPhone 16 Pro Max) are locked behind the PRO app version.
 # Future work (another thesis): write a free/opensource software for iOS/Android
 # that uses an USB connection to avoid slow/congested WiFi connection
 # or weak signal strenght. Also DroidCam uses TCP, I think a few
@@ -17,6 +29,7 @@ RESOLUTION = "1920x1080"
 # hardware (like LiDAR) also the data from this could be inferred.
 
 MAIN_CAMERA_FOCAL_LENGTH_MILIMETERS = 24
+# MAINCAMERA_HEIGHT_IN_MILIMETERS =? 
 
 TABLE_WIDTH_MILIMETERS = 1000 # Set for the specific table.
 TABLE_LENGTH_MILIMETERS = 2000
@@ -24,7 +37,6 @@ RATIO = 2.0 # Always constant.
 #STANDARD_TABLE_DIMENSIONS_MILIMETERS = [(2438, 1219),
 #                                        (2743, 1372),
 #                                        (3048, 1524)]
-#CAMERA_HEIGHT_IN_MILIMETERS =? 
 
 
 # Future work: Since the table size are standard a size detection algorithm (Painters?) should
@@ -32,7 +44,6 @@ RATIO = 2.0 # Always constant.
 # height and the distance from the camera to the table.
 
 POCKET_RADIUS_PX = 30
-
 BALL_RADIUS_MILIMETERS = 28.6
 BALL_RADIUS_RANGE_PX = (10, 30)
 
@@ -49,10 +60,16 @@ STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
 
 MAX_RETRY_COUNT = 300 # 300 frames worth of hickups consecutively means there is a problem.
 
-DEBUG_DRAW = True
+DEBUG_LOGGING = True
+LOG_FILE_NAME = f"debug_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+PERFORMANCE_MODE = True
+DETECTION_MODE = DetectionMode.BOTH
 
-# Input from user via server or quest
-user_confirmed_pocket_positions = False # Semaphore/Flag?
+# Connectivity / camera control flags (for AR user adjustments).
+user_confirmed_pocket_positions = False
+
+# Semaphore/Flag indicating pockets locked by user.
+# Flags for user adjusting pockets (e.g., via AR interface like Quest 3)
 # Top left
 user_is_holding_top_left = False
 user_adjusted_top_left = False
@@ -60,20 +77,14 @@ user_adjusted_top_left = False
 user_is_holding_bottom_right = False
 user_adjusted_bottom_right = False
 
-def is_host_reachable(timeout = 2):
-    try:
-        with socket.create_connection((CAPTURING_DEVICE_IP, int(PORT)), timeout):
-            return True
-    except(socket.timeout, socket.error):
-        return False
-
+#Camera and stream
 def open_stream():
-    
     #Check if device is on same network.
-    if not is_host_reachable(2):
+    if not controller.is_host_reachable(2):
         print(f"Device at {CAPTURING_DEVICE_IP}:{PORT} is not reachable. Check network settings. Exiting.")
-        return None
-    
+        return None  
+    if PERFORMANCE_MODE is True:
+        RESOLUTION="1280x720"
     url = f'http://{CAPTURING_DEVICE_IP}:{PORT}/video?{RESOLUTION}'
     capture = cv2.VideoCapture(url)
     
@@ -89,9 +100,38 @@ def open_stream():
         print(f"Could not connect to DroidCam server. Check IP and PORT.")
         capture.release()
         return None
-        
+    
     return capture
 
+# Camera control part
+def send_camera_command(command: str, *args):
+    if command == "toggle_torch":
+        controller.toggle_torch()
+    elif command == "reset_torch":
+        controller.reset_all_torch_states()
+    elif command == "set_focus_mode":
+        if args:
+            controller.set_focus_mode(args[0])
+    elif command == "set_manual_focus_value":
+        if args:
+            controller.set_manual_focus_value(args[0])
+    elif command == "set_zoom":
+        if args:
+            controller.set_zoom(args[0])
+    elif command == "set_exposure":
+        if args:
+            controller.set_exposure(args[0])
+    elif command == "set_white_balance":
+        if args:
+            controller.set_white_balance(args[0])
+    elif command == "sync_all_locks":
+        controller.sync_all_locks()
+    elif command == "apply_defaults":
+        controller.apply_default_settings()
+    else:
+        print(f"Unknown command: {command}")
+
+# Table detection
 def detect_table(frame):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, TABLE_LOWER_HSV, TABLE_UPPER_HSV)
@@ -147,21 +187,118 @@ def classify_balls(frame, circle):
 def classify_balls_yolo():
     pass
     
+
+def get_resolution_string(capture):
+    width = capture.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = capture.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    return f'{int(width)}x{int(height)}'
+
+def prepare_log_file():
+    filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    file = open(filename, 'w', newline='')
+    writer = csv.writer(file)
     
+    cuda_available, cuda_version, vram = False, "N/A", 0
+    try:
+        import torch # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 - use nvidia-smi to find out you version of CUDA pytorch. Amend cu128 with your version. Using Python 3.12
+        cuda_available = torch.cuda.is_available()
+        if cuda_available:
+            device = torch.device('cuda:0')
+            vram = int((torch.cuda.get_device_properties(device).total_memory) / (1024*1024))
+            if hasattr(torch.version,"cuda") and torch.version.cuda:
+                cuda_version = str(torch.version.cuda)
+    except ImportError:
+        pass
+    
+    header = [
+        "timestamp", "cloth_H", "cloth_S", "cloth_V",
+        "table_width_px", "table_height_px", "table_width_mm", "table_length_mm",
+        "pocket1_x", "pocket1_y", "pocket2_x", "pocket2_y"
+    ]
+
+    if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
+        for i in range(1, 17):
+            header.extend([f"ball{i}_x", f"ball{i}_y", f"ball{i}_type"])
+
+    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.BOTH):
+        for i in range(1, 17):
+            header.extend([f"yolo_ball{i}_x", f"yolo_ball{i}_y", f"yolo_ball{i}_type"])
+
+    header.extend([
+        "resolution", "performance_mode", "detection_mode",
+        "cuda_available", "cuda_version", "vram_MB", "proc_time_ms"
+    ])
+    
+    writer.writerow(header)
+    return file, writer, cuda_available, cuda_version, vram
+
+def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
+                table_bbox, classical_results, yolo_results,
+                cuda_available, cuda_version, vram_mb):
+    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mean_h, mean_s, mean_v, _ = cv2.mean(hsv_frame, mask=table_mask)
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+    row = [
+        now,
+        int(mean_h), int(mean_s), int(mean_v)
+    ]
+
+    if table_bbox:
+        _, _, w, h = table_bbox
+        row += [w, h, TABLE_WIDTH_MILIMETERS, TABLE_LENGTH_MILIMETERS]
+    else:
+        row += [None, None, TABLE_WIDTH_MILIMETERS, TABLE_LENGTH_MILIMETERS]
+
+    for pt in pockets:
+        if pt is None or pt == (None, None):
+            row += [None, None]
+        else:
+            row += [pt[0], pt[1]]
+            
+    def append_ball_results(results):
+        for i in range(16):
+            if i < len(results):
+                x, y, label = results[i]
+                row.extend([x, y, label])
+            else:
+                row.extend([None, None, None])
+
+    if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
+        append_ball_results(classical_results)
+    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.BOTH):
+        append_ball_results(yolo_results)
+
+    elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+    row += [
+        resolution_str, PERFORMANCE_MODE, DETECTION_MODE.name,
+        cuda_available, cuda_version, vram_mb, elapsed_ms
+    ]
+
+    writer.writerow(row)
 
 def main():
-    
     capture = open_stream()
     if capture is None:
         print("Could not open stream.")
         return
     
+    send_camera_command("apply_defaults")
+    
+    #Debug 
+    resolution_str = get_resolution_string(capture)
+    log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file()
+    results_tresholding = []
+    results_yolo = []
+        
     ret, frame = capture.read()
     
     pockets = [(0,0),(0,0)]
     retry_count = 0
     while True:
         start_time = time.perf_counter()
+        results_tresholding = []
+        results_yolo = []
         ret, frame = capture.read()
         if not ret:
             print("Frame capture failed.")
@@ -192,24 +329,55 @@ def main():
             pockets = [(None,None)] 
         
         
-        balls = detect_balls(frame, table_mask)
-        for circle in balls:
-            label = classify_balls(frame, circle)
-            if DEBUG_DRAW:
-                x,y,r = circle
-                cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
-                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # balls = detect_balls(frame, table_mask)
+        # for circle in balls:
+        #     label = classify_balls(frame, circle)
+        #     if DEBUG:
+        #         x,y,r = circle
+        #         cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
+        #         cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        #         cv2.imshow("Detection Debug", frame)
+        if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
+            balls = detect_balls(frame, table_mask)
+
+            for circle in balls:
+                label = classify_balls(frame, circle)
+                results_tresholding.append((circle[0], circle[1], label))
+                if DEBUG_LOGGING:
+                    cv2.circle(frame, (circle[0], circle[1]), circle[2], (0, 255, 0), 2)
+                    cv2.putText(frame, label, (circle[0], circle[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            if DEBUG_LOGGING:
+                log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
+                            table_bbox, results_tresholding, results_yolo,
+                            cuda_available, cuda_version, vram_mb)
+
                 cv2.imshow("Detection Debug", frame)
             
         #Process data s json
             
-        elapsed = time.perf_counter() - start_time
-        print(f'Processing time: {elapsed * 1000:.2f} ms')
-        if cv2.waitKey(1) == ord('q'):
-            break  
-      
+        
+       
+        key = cv2.waitKey(1)
+        if key == ord('q'):
+            break
+        elif key == ord('t'):
+            send_camera_command("toggle_torch")
+        elif key == ord('f'):
+            send_camera_command("set_focus_mode", 2)  # Manual focus mode
+            send_camera_command("set_manual_focus_value", 0.5)
+        elif key == ord('z'):
+            send_camera_command("set_zoom", 2.0)
+        elif key == ord('e'):
+            send_camera_command("set_exposure", 1.0)
+    
+    if DEBUG_LOGGING:
+        log_file.close()
+        cv2.destroyAllWindows()
     capture.release()
     
 if __name__ == "__main__":
     main()
     
+    
+#Remarks: run "python -m pip cache purge" to purge GiB worth of cached packets.
