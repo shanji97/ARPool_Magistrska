@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import time
-import datetime
+from datetime import datetime
 import csv
 from enum import Enum
 
@@ -61,7 +61,6 @@ STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
 MAX_RETRY_COUNT = 300 # 300 frames worth of hickups consecutively means there is a problem.
 
 DEBUG_LOGGING = True
-LOG_FILE_NAME = f"debug_{time.strftime('%Y%m%d_%H%M%S')}.csv"
 PERFORMANCE_MODE = True
 DETECTION_MODE = DetectionMode.BOTH
 
@@ -128,8 +127,40 @@ def send_camera_command(command: str, *args):
         controller.sync_all_locks()
     elif command == "apply_defaults":
         controller.apply_default_settings()
+    elif command == "select_camera":
+        if args:
+            controller.select_camera(args[0])
+            controller._sync_torch_state()  # Always sync torch after camera switch    
+        
     else:
         print(f"Unknown command: {command}")
+        
+def check_keys():
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        return False
+    elif key == ord('t'):
+        send_camera_command("toggle_torch")
+    elif key == ord('f'):
+        send_camera_command("set_focus_mode", 2)  # Manual focus mode
+        send_camera_command("set_manual_focus_value", 0.5)
+    elif key == ord('z'):
+        send_camera_command("set_zoom", 2.0)
+    elif key == ord('e'):
+        send_camera_command("set_exposure", 1.0)
+    elif key == ord('c'):
+        # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
+        next_cam = (controller.current_camera + 1) % 4
+        send_camera_command("select_camera", next_cam)
+    elif key == ord('0'):
+        send_camera_command("select_camera", 0)  # Front
+    elif key == ord('1'):
+        send_camera_command("select_camera", 1)  # Main
+    elif key == ord('2'):
+        send_camera_command("select_camera", 2)  # Telephoto
+    elif key == ord('3'):
+        send_camera_command("select_camera", 3)  # Ultrawide
+    return True
 
 # Table detection
 def detect_table(frame):
@@ -166,7 +197,7 @@ def detect_balls(frame, table_mask, gaussian_kernel = (9,9)):
     return []
 
 def classify_balls(frame, circle):
-    x,y,r = circle
+    x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
     roi = frame[y - r:y + r, x - r:x + r]
     if roi.size == 0:
         return "unknown"
@@ -237,7 +268,7 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
                 cuda_available, cuda_version, vram_mb):
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mean_h, mean_s, mean_v, _ = cv2.mean(hsv_frame, mask=table_mask)
-    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
     row = [
         now,
@@ -296,12 +327,19 @@ def main():
     pockets = [(0,0),(0,0)]
     retry_count = 0
     while True:
+        
+        if not check_keys():
+            break
+        
+        
         start_time = time.perf_counter()
         results_tresholding = []
         results_yolo = []
         ret, frame = capture.read()
         if not ret:
             print("Frame capture failed.")
+            capture.release()
+            capture = open_stream()
             retry_count+=1
             if retry_count >= MAX_RETRY_COUNT:
                 print("Frame capture failed. Too many times.")
@@ -341,11 +379,12 @@ def main():
             balls = detect_balls(frame, table_mask)
 
             for circle in balls:
-                label = classify_balls(frame, circle)
-                results_tresholding.append((circle[0], circle[1], label))
+                x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
+                label = classify_balls(frame, (x, y, r))
+                results_tresholding.append((x, y, label))
                 if DEBUG_LOGGING:
-                    cv2.circle(frame, (circle[0], circle[1]), circle[2], (0, 255, 0), 2)
-                    cv2.putText(frame, label, (circle[0], circle[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
+                    cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             if DEBUG_LOGGING:
                 log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
@@ -358,19 +397,8 @@ def main():
             
         
        
-        key = cv2.waitKey(1)
-        if key == ord('q'):
-            break
-        elif key == ord('t'):
-            send_camera_command("toggle_torch")
-        elif key == ord('f'):
-            send_camera_command("set_focus_mode", 2)  # Manual focus mode
-            send_camera_command("set_manual_focus_value", 0.5)
-        elif key == ord('z'):
-            send_camera_command("set_zoom", 2.0)
-        elif key == ord('e'):
-            send_camera_command("set_exposure", 1.0)
-    
+       
+            
     if DEBUG_LOGGING:
         log_file.close()
         cv2.destroyAllWindows()
@@ -378,6 +406,4 @@ def main():
     
 if __name__ == "__main__":
     main()
-    
-    
 #Remarks: run "python -m pip cache purge" to purge GiB worth of cached packets.

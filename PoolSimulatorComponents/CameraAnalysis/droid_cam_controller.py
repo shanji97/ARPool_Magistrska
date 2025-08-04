@@ -23,7 +23,6 @@ class DroidCamController:
     WB_RANGE = (2000, 8000)
     MF_RANGE = (0.0, 1.0)
 
-    
     def __init__(self, ip: str, port: str = 4747):
         self.ip = ip
         self.port = port
@@ -32,14 +31,25 @@ class DroidCamController:
         self.info = None
         self.manual_focus_value = 0.5 
         self.torch_state = False
-        self._load_torch_state(self)
+        self._load_torch_state()
         
     def _load_torch_state(self):
         if os.path.exists(self.TORCH_STATE_CONF):
             with open(self.TORCH_STATE_CONF, "r") as file:
-                self.torch_state = json.load(file).get("torch_state", False)
+                try:
+                    data = json.load(file)
+                    if isinstance(data, dict):
+                        self.torch_state = data.get("torch_state", {"1": False, "2": False, "3": False})
+                        if isinstance(self.torch_state, bool):
+                            # Fallback fix if stored as bool by mistake
+                            self.torch_state = {"1": False, "2": False, "3": False}
+                    else:
+                        self.torch_state = {"1": False, "2": False, "3": False}
+                except Exception as e:
+                    print(f"Failed to load torch state config: {e}")
+                    self.torch_state = {"1": False, "2": False, "3": False}
         else:
-            self.torch_state = { "1": False, "2": False, "3": False}
+            self.torch_state = {"1": False, "2": False, "3": False}
             
     def _save_torch_state(self):
         os.makedirs(self.CONF_PATH, exist_ok=True)
