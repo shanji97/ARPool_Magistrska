@@ -2,6 +2,24 @@ import requests
 import os
 import json
 import socket
+from enum import Enum
+
+class FocusMode(Enum):
+    Auto = 0
+    Continous = 1
+    Manual = 2
+    
+class Camera(Enum):
+    Front = 0
+    Main = 1
+    Telephoto = 2
+    UltraWide = 3
+    
+class WhiteBallance(Enum):
+    DayLight = 6000
+    
+    
+
 
 class DroidCamController:
     
@@ -27,11 +45,14 @@ class DroidCamController:
         self.ip = ip
         self.port = port
         self.base_url = f'http://{ip}:{port}'
-        self.current_camera = 1
+        self.current_camera = Camera.Main
         self.info = None
         self.manual_focus_value = 0.5 
         self.torch_state = False
         self._load_torch_state()
+        
+    def get_stream_url(self, resolution: str):
+        return f'{self.base_url}/video?{resolution}'   
         
     def _load_torch_state(self):
         if os.path.exists(self.TORCH_STATE_CONF):
@@ -41,7 +62,7 @@ class DroidCamController:
                     if isinstance(data, dict):
                         self.torch_state = data.get("torch_state", {"1": False, "2": False, "3": False})
                         if isinstance(self.torch_state, bool):
-                            # Fallback fix if stored as bool by mistake
+                           
                             self.torch_state = {"1": False, "2": False, "3": False}
                     else:
                         self.torch_state = {"1": False, "2": False, "3": False}
@@ -64,7 +85,7 @@ class DroidCamController:
         except Exception as e:
             print(f"Failed PUT {url}: {e}")
     
-    def _get_camera_info(self):
+    def get_camera_info(self):
         url = f"{self.base_url}/v1/camera/info"
         try:
             r = requests.get(url, timeout = 2)
@@ -82,18 +103,17 @@ class DroidCamController:
         if self.current_camera != camera_id:
             self.current_camera = camera_id
             print(f"Switched to {self.CAMERA_MAP[camera_id]['name']}")
-            self._save_torch_state()
+            self._sync_torch_state() 
     
     def _sync_torch_state(self):
         cam_id = str(self.current_camera)
         if self.CAMERA_MAP[self.current_camera]['torch_supported']:
             desired_state = self.torch_state.get(cam_id, False)
-            info = self._get_camera_info()
+            info = self.get_camera_info()
             actual_state = info.get("led_on", 0) == 1
             print(f"Torch Sync for Camera {cam_id}: Desired={'ON' if desired_state else 'OFF'} | Actual={'ON' if actual_state else 'OFF'}")
             if desired_state != actual_state:
                 self._put("/v1/camera/torch_toggle")
-                # Save updated actual state
                 self.torch_state[cam_id] = actual_state
                 self._save_torch_state()
         else:
@@ -134,24 +154,24 @@ class DroidCamController:
     def set_manual_focus_value(self, value):
         value = max(self.MF_RANGE[0], min(self.MF_RANGE[1], value))
         self.manual_focus_value = value  # Save for future sync
-        info = self._get_camera_info()
-        if info.get("focusMode") == 3:
+        info = self.get_camera_info()
+        if info.get("focusMode") == FocusMode.Manual:
             actual_focus = info.get("mfValue", 0)
             if abs(value - actual_focus) > 0.01:
                 print(f"Setting Manual Focus to {value}")
                 self.set_manual_focus(value)
     
     def set_focus_mode(self, mode: int):
-        if mode not in (0, 1, 2):
+        if mode not in (FocusMode.Auto, FocusMode.Continous, FocusMode.Manual):
             print(f"Invalid focus mode: {mode}")
             return
-        current_info = self._get_camera_info()
+        current_info = self.get_camera_info()
         current_mode = current_info.get("focusMode", -1)
 
         if mode != current_mode:
             print(f"Switching focus mode to {mode}")
             self._put(f"/v1/camera/autofocus_mode/{mode}")
-        if mode == 2: # Manual mode is always 2
+        if mode == FocusMode.Manual:
              actual_focus = current_info.get("mfValue", -1)
              if abs(self.manual_focus_value - actual_focus) > 0.01:
                 print(f"Syncing Manual Focus to {self.manual_focus_value}")
@@ -161,7 +181,7 @@ class DroidCamController:
         self._put(f"/v1/camera/wb_mode/{mode}")
 
     def sync_all_locks(self, exposure_lock = True, wb_lock = True):
-        info = self._get_camera_info()
+        info = self.get_camera_info()
         current_exposure_lock = info.get("exposure_lock", 0) == 1
         current_wb_lock = current_wb_lock = info.get("wbLock", 0) == 1
         
@@ -174,14 +194,11 @@ class DroidCamController:
             self._put("/v1/camera/wbl_toggle")
 
     def apply_default_settings(self):
-        """
-        Applies hardcoded defaults. Configurations can later be added in /Configurations.
-        """
-        self.select_camera(1)  # Main Camera
+        self.select_camera(Camera.Main)
         self.set_zoom(1.5)
         self.set_exposure(0)
-        self.set_white_balance(6000)
-        self.set_focus_mode(0)
+        self.set_white_balance(WhiteBallance.DayLight)
+        self.set_focus_mode(FocusMode.Auto)
         print("Default settings applied.")
             
     def is_host_reachable(self, timeout = 2):

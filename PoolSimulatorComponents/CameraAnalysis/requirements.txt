@@ -5,6 +5,7 @@ PyYAML
 imageio
 ffmpeg-python
 requests
+sort-tracker
 
 # Pytorch 
 --extra-index-url https://download.pytorch.org/whl/cu128
