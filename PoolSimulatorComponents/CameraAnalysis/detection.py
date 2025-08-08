@@ -173,56 +173,6 @@ def check_keys():
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
     return (True, camera_info)
 
-# Table detection
-def detect_table(frame):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, TABLE_LOWER_HSV, TABLE_UPPER_HSV)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None, None
-    table_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(table_contour)
-    return (x, y, w, h), mask
-
-def detect_balls(frame, table_mask, gaussian_kernel = (9,9)):
-    masked = cv2.bitwise_and(frame, frame, mask=table_mask)
-    gray = cv2.cvtColor(masked, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, gaussian_kernel, 2)
-    circles = cv2.HoughCircles(blurred, 
-                               cv2.HOUGH_GRADIENT,
-                               dp = 1.2,
-                               minDist=20,
-                               param1= 50,
-                               param2=30,
-                               minRadius= BALL_RADIUS_RANGE_PX[0],
-                               maxRadius= BALL_RADIUS_RANGE_PX[1])
-    if circles is not None:
-        return np.uint16(np.around(circles[0]))
-    return []
-
-def classify_balls(frame, circle):
-    x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
-    roi = frame[y - r:y + r, x - r:x + r]
-    if roi.size == 0:
-        return "unknown"
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    white_pixels = np.sum(gray > WHITE_TRESHOLD)
-    black_pixels = np.sum(gray < EIGHTBALL_TRESHOLD)
-    total_pixels = roi.shape[0] * roi.shape[1]
-    white_ratio = white_pixels / total_pixels
-    if black_pixels / total_pixels > 0.5:
-        return "8-ball"
-    if white_ratio > 0.8:
-        return "cue"
-    if white_ratio > STRIPE_WHITE_RATIO:
-        return "striped"
-    return "solid"
-    
-
-def classify_balls_yolo():
-    pass
-    
-
 def get_resolution_string(capture):
     width = capture.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = capture.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -314,8 +264,6 @@ def main():
     ball_detector = ObjectDetector()
     log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
     
-    
-    
     results_tresholding = []
     results_yolo = []
     pockets = [(0,0),(0,0)]
@@ -334,11 +282,12 @@ def main():
         start_time = time.perf_counter()
         results_tresholding = []
         results_yolo = []
-        ret, frame = capture.read()
+        
         if not ret:
             print("Frame capture failed.")
             capture.release()
             capture = open_stream()
+            ret, frame = capture.read()
             retry_count+=1
             if retry_count >= MAX_RETRY_COUNT:
                 print("Frame capture failed. Too many times.")
@@ -347,7 +296,7 @@ def main():
         else:
             retry_count = 0
             
-        table_bbox, table_mask = detect_table(frame)
+        table_bbox, table_mask = ball_detector.detect_table(frame, TABLE_LOWER_HSV, TABLE_UPPER_HSV)
         if table_bbox is None:
             print("No table detected")
             continue
@@ -378,11 +327,11 @@ def main():
         #         cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         #         cv2.imshow("Detection Debug", frame)
         if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
-            balls = detect_balls(frame, table_mask)
+            balls = ball_detector.detect_balls(frame, table_mask, BALL_RADIUS_RANGE_PX[0],BALL_RADIUS_RANGE_PX[1])
 
             for circle in balls:
                 x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
-                label = classify_balls(frame, (x, y, r))
+                label = ball_detector.classify_balls(frame, (x, y, r), WHITE_TRESHOLD, EIGHTBALL_TRESHOLD, STRIPE_WHITE_RATIO)
                 results_tresholding.append((x, y, label))
                 if DEBUG_LOGGING:
                     cv2.circle(frame, (x, y), r, (0, 255, 0), 2)

@@ -8,6 +8,18 @@ class FocusMode(Enum):
     Auto = 0
     Continous = 1
     Manual = 2
+    
+class Camera(Enum):
+    Front = 0
+    Main = 1
+    Telephoto = 2
+    UltraWide = 3
+    
+class WhiteBallance(Enum):
+    DayLight = 6000
+    
+    
+
 
 class DroidCamController:
     
@@ -33,7 +45,7 @@ class DroidCamController:
         self.ip = ip
         self.port = port
         self.base_url = f'http://{ip}:{port}'
-        self.current_camera = 1
+        self.current_camera = Camera.Main
         self.info = None
         self.manual_focus_value = 0.5 
         self.torch_state = False
@@ -143,7 +155,7 @@ class DroidCamController:
         value = max(self.MF_RANGE[0], min(self.MF_RANGE[1], value))
         self.manual_focus_value = value  # Save for future sync
         info = self.get_camera_info()
-        if info.get("focusMode") == 3:
+        if info.get("focusMode") == FocusMode.Manual:
             actual_focus = info.get("mfValue", 0)
             if abs(value - actual_focus) > 0.01:
                 print(f"Setting Manual Focus to {value}")
@@ -182,11 +194,11 @@ class DroidCamController:
             self._put("/v1/camera/wbl_toggle")
 
     def apply_default_settings(self):
-        self.select_camera(1)  # Main Camera
+        self.select_camera(Camera.Main)
         self.set_zoom(1.5)
         self.set_exposure(0)
-        self.set_white_balance(6000)
-        self.set_focus_mode(0)
+        self.set_white_balance(WhiteBallance.DayLight)
+        self.set_focus_mode(FocusMode.Auto)
         print("Default settings applied.")
             
     def is_host_reachable(self, timeout = 2):
