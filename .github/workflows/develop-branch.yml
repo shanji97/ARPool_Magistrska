@@ -1,0 +1,54 @@
+
+# name: Developer CI/CD for testing purposes
+
+# on:
+#     push:
+#         branches-ignore:
+#             - main
+# jobs:
+#     build:
+#         name: Build AR_Pool_Application
+#         runs-on: ubuntu-latest
+#         steps:
+#             # Checkout
+#             - name: Checkout repository
+#               uses: actions/checkout@v4
+#               with:
+#                 lfs: true
+
+#             # Create Library and Build folder automatically, since they are excluded in the .gitignore
+#             - name: Create Library folder
+#               run: mkdir -p UnityProject/AR_Pool/Library
+            
+#             # Build folder
+#             - name: Create Build folder
+#               run: mkdir -p UnityProject/AR_Pool/Build
+
+#             # Cache
+#             - uses: actions/cache@v3
+#               with:
+#                 path: UnityProject/AR_Pool/Library
+#                 key: Library-${{ hashFiles('UnityProject/AR_Pool/Assets/**', 'UnityProject/AR_Pool/Packages/**', 'UnityProject/AR_Pool/ProjectSettings/**') }}
+#                 restore-keys: |
+#                     Library-
+                      
+#             # Build
+#             - name: Build project
+#               uses: game-ci/unity-builder@v4
+#               env:
+#                 UNITY_LICENSE: ${{secrets.UNITY_LICENSE}}
+#                 UNITY_EMAIL: ${{secrets.UNITY_EMAIL}}
+#                 UNITY_PASSWORD: ${{secrets.UNITY_PASSWORD}}
+#               with:
+#                 projectPath: UnityProject/AR_Pool
+#                 targetPlatform: Android
+
+#             # Remove Unnecessary Video Files
+#             - name: Remove Unnecessary Video Files
+#               run: find UnityProject/AR_Pool/Library/PackageCache -type f -name "*.mp4" -delete || true
+
+#             # Output
+#             - uses: actions/upload-artifact@v4
+#               with :
+#                 name: Build
+#                 path: UnityProject/AR_Pool/Build
