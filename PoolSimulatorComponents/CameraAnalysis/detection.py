@@ -4,10 +4,11 @@ import time
 from datetime import datetime
 import csv
 from enum import Enum
+import json
 
 #Custom imports
 from .droid_cam_controller import DroidCamController
-
+from .object_detector import ObjectDetector
 
 class DetectionMode(Enum):
     TRESHOLDING = 1
@@ -20,13 +21,15 @@ PORT = "4747"
 controller = DroidCamController(CAPTURING_DEVICE_IP, PORT)
 # Max resolution
 RESOLUTION = "1920x1080"
+NUMBER_OF_CAMERAS  = 4
 # Buy full version of DroidCam and or use 720p or watch ads every 1 hour. PUT requests (at least for iPhone 16 Pro Max) are locked behind the PRO app version.
-# Future work (another thesis): write a free/opensource software for iOS/Android
-# that uses an USB connection to avoid slow/congested WiFi connection
+# Future work (another thesis): write a free/opensource software for iOS (and Android)
+# that uses an USB connection to avoid slow/congested/not reliable/f'd up by admins/ WiFi connection 
 # or weak signal strenght. Also DroidCam uses TCP, I think a few
-# dropped frames could work, so UDP or maybe even QUIC. Alternatively everything
+# dropped frames could work, so UDP or maybe even QUIC could work. Alternatively everything
 # could be offloaded to be computed on the phone. If the phone has a special 
-# hardware (like LiDAR) also the data from this could be inferred.
+# hardware (like LiDAR) take also the data from other sensors to get more accurate representation of the state on the table. Also position of the sticks
+# could be inferred this way.
 
 MAIN_CAMERA_FOCAL_LENGTH_MILIMETERS = 24
 # MAINCAMERA_HEIGHT_IN_MILIMETERS =? 
@@ -43,7 +46,6 @@ RATIO = 2.0 # Always constant.
 # be used to manually compute the table dimensions along with the
 # height and the distance from the camera to the table.
 
-POCKET_RADIUS_PX = 30
 BALL_RADIUS_MILIMETERS = 28.6
 BALL_RADIUS_RANGE_PX = (10, 30)
 
@@ -80,17 +82,15 @@ user_adjusted_bottom_right = False
 def open_stream():
     #Check if device is on same network.
     if not controller.is_host_reachable(2):
-        print(f"Device at {CAPTURING_DEVICE_IP}:{PORT} is not reachable. Check network settings. Exiting.")
+        print(f"Device at {CAPTURING_DEVICE_IP}:{PORT} is not reachable. Check network settings. Exiting.") 
         return None  
     if PERFORMANCE_MODE is True:
         RESOLUTION="1280x720"
-    url = f'http://{CAPTURING_DEVICE_IP}:{PORT}/video?{RESOLUTION}'
-    capture = cv2.VideoCapture(url)
+    capture = cv2.VideoCapture(send_camera_command("get_stream_url", RESOLUTION))
     
     if not capture.isOpened():
         print("Failed to open stream with custom resolution, trying with 720p...")
-        url = f'http://{CAPTURING_DEVICE_IP}:{PORT}/video?1280x720'
-        capture = cv2.VideoCapture(url)
+        capture = cv2.VideoCapture(send_camera_command("get_stream_url", "1280x720"))
         if not capture.isOpened():
             print("Failed to open stream with 720p resolution.")
             return None
@@ -129,16 +129,25 @@ def send_camera_command(command: str, *args):
         controller.apply_default_settings()
     elif command == "select_camera":
         if args:
-            controller.select_camera(args[0])
-            controller._sync_torch_state()  # Always sync torch after camera switch    
-        
+            controller.select_camera(args[0])   
+    elif command == "get_stream_url":
+            return controller.get_stream_url(args[0])
+    elif command == "dump_camera_info":
+            info = controller.get_camera_info()
+            if info:
+                print(json.dumps(info, indent=2))
+                return info
+            else:
+                print("Failed to get camera info.")
+                return None
     else:
         print(f"Unknown command: {command}")
         
 def check_keys():
+    camera_info = None
     key = cv2.waitKey(1)
     if key == ord('q'):
-        return False
+        return (False, camera_info)
     elif key == ord('t'):
         send_camera_command("toggle_torch")
     elif key == ord('f'):
@@ -150,7 +159,7 @@ def check_keys():
         send_camera_command("set_exposure", 1.0)
     elif key == ord('c'):
         # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
-        next_cam = (controller.current_camera + 1) % 4
+        next_cam = (controller.current_camera + 1) % len(controller.CAMERA_MAP)
         send_camera_command("select_camera", next_cam)
     elif key == ord('0'):
         send_camera_command("select_camera", 0)  # Front
@@ -160,7 +169,9 @@ def check_keys():
         send_camera_command("select_camera", 2)  # Telephoto
     elif key == ord('3'):
         send_camera_command("select_camera", 3)  # Ultrawide
-    return True
+    elif key == ord('i'):
+       camera_info = send_camera_command("dump_camera_info")  # Camera info.
+    return (True, camera_info)
 
 # Table detection
 def detect_table(frame):
@@ -173,13 +184,6 @@ def detect_table(frame):
     x, y, w, h = cv2.boundingRect(table_contour)
     return (x, y, w, h), mask
 
-def detect_pockets(table_bbox):
-    x,y,w,h = table_bbox
-    top_left = (x,y)
-    bottom_right = (x + w, y + h)
-    return [top_left, bottom_right]
-    # Future work: Add some offset to match the center as closely as possible.
-    
 def detect_balls(frame, table_mask, gaussian_kernel = (9,9)):
     masked = cv2.bitwise_and(frame, frame, mask=table_mask)
     gray = cv2.cvtColor(masked, cv2.COLOR_BGR2GRAY)
@@ -224,27 +228,16 @@ def get_resolution_string(capture):
     height = capture.get(cv2.CAP_PROP_FRAME_HEIGHT)
     return f'{int(width)}x{int(height)}'
 
-def prepare_log_file():
+def prepare_log_file(ball_detector: ObjectDetector):
     filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     file = open(filename, 'w', newline='')
     writer = csv.writer(file)
-    
-    cuda_available, cuda_version, vram = False, "N/A", 0
-    try:
-        import torch # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 - use nvidia-smi to find out you version of CUDA pytorch. Amend cu128 with your version. Using Python 3.12
-        cuda_available = torch.cuda.is_available()
-        if cuda_available:
-            device = torch.device('cuda:0')
-            vram = int((torch.cuda.get_device_properties(device).total_memory) / (1024*1024))
-            if hasattr(torch.version,"cuda") and torch.version.cuda:
-                cuda_version = str(torch.version.cuda)
-    except ImportError:
-        pass
+    cuda_available, cuda_version, vram  = ball_detector.get_gpu_info()
     
     header = [
         "timestamp", "cloth_H", "cloth_S", "cloth_V",
         "table_width_px", "table_height_px", "table_width_mm", "table_length_mm",
-        "pocket1_x", "pocket1_y", "pocket2_x", "pocket2_y"
+        "pocket1_x", "pocket1_y", "pocket2_x", "pocket2_y",
     ]
 
     if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
@@ -316,21 +309,27 @@ def main():
     
     send_camera_command("apply_defaults")
     
-    #Debug 
     resolution_str = get_resolution_string(capture)
-    log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file()
+    initial_camera_info = send_camera_command("dump_camera_info")
+    ball_detector = ObjectDetector()
+    log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
+    
+    
+    
     results_tresholding = []
     results_yolo = []
-        
-    ret, frame = capture.read()
-    
     pockets = [(0,0),(0,0)]
     retry_count = 0
+        
+    ret, frame = capture.read()
     while True:
         
-        if not check_keys():
+        should_break, camera_info = check_keys()
+        if not should_break:
             break
         
+        if camera_info is None:
+            camera_info  = initial_camera_info
         
         start_time = time.perf_counter()
         results_tresholding = []
@@ -355,10 +354,13 @@ def main():
         
         # When the pocket is confirmed by user stop calculating pockets.
         if user_confirmed_pocket_positions is False:
-            pockets = detect_pockets(table_bbox)
+            pockets = ObjectDetector.detect_pockets(table_bbox)            
             # Future work: Also handle the repositioning so that the 
             # user won't be interuppted and pocket positions reset to the detected ones instead of the
-            # user corrected ones. Add some interception system (that runs in parrallel)
+            # user corrected ones. Add some interception system (that runs in parrallel?). Lock at Unity level, once the Quest 3 user moved them. Get
+            # the info which quest moved them (neccessary?) and which pocket was moved. Lock the computation here. Async communication.
+            
+            # Also if the movement of pocket detectiong is sufficient small ()
             if user_is_holding_top_left is True or user_adjusted_top_left is True:
                 pockets = [None, pockets[1]]
             if user_is_holding_bottom_right is True or user_adjusted_bottom_right is True:
