@@ -33,9 +33,7 @@ class DroidCamController:
         2: {"name": "Telephoto", "torch_supported": True},
         3: {"name": "Ultrawide", "torch_supported": True}
     } 
-    # Assume iPhone 16 Pro Max is the only device in the world.
-    # Future work: Add a more refined mapping for different devices.
-    
+
     ZOOM_RANGE = (1.0, 6.0)
     EV_RANGE = (-8.0, 8.0)
     WB_RANGE = (2000, 8000)

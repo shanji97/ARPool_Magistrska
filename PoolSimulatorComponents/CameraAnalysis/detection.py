@@ -16,44 +16,25 @@ class DetectionMode(Enum):
     BOTH = 3
 
 # Globals
-CAPTURING_DEVICE_IP = "10.15.12.7"
+CAPTURING_DEVICE_IP = "192.168.0.40"
 PORT = "4747"
 controller = DroidCamController(CAPTURING_DEVICE_IP, PORT)
 # Max resolution
 RESOLUTION = "1920x1080"
-NUMBER_OF_CAMERAS  = 4
-# Buy full version of DroidCam and or use 720p or watch ads every 1 hour. PUT requests (at least for iPhone 16 Pro Max) are locked behind the PRO app version.
-# Future work (another thesis): write a free/opensource software for iOS (and Android)
-# that uses an USB connection to avoid slow/congested/not reliable/f'd up by admins/ WiFi connection 
-# or weak signal strenght. Also DroidCam uses TCP, I think a few
-# dropped frames could work, so UDP or maybe even QUIC could work. Alternatively everything
-# could be offloaded to be computed on the phone. If the phone has a special 
-# hardware (like LiDAR) take also the data from other sensors to get more accurate representation of the state on the table. Also position of the sticks
-# could be inferred this way.
-
-MAIN_CAMERA_FOCAL_LENGTH_MILIMETERS = 24
-# MAINCAMERA_HEIGHT_IN_MILIMETERS =? 
+PERFORMANCE_RESOLUTION = "1280x720"
+FALLBACK_RESOLUTION = "1280x720"
 
 TABLE_WIDTH_MILIMETERS = 1000 # Set for the specific table.
 TABLE_LENGTH_MILIMETERS = 2000
-RATIO = 2.0 # Always constant.
 #STANDARD_TABLE_DIMENSIONS_MILIMETERS = [(2438, 1219),
 #                                        (2743, 1372),
 #                                        (3048, 1524)]
-
-
-# Future work: Since the table size are standard a size detection algorithm (Painters?) should
-# be used to manually compute the table dimensions along with the
-# height and the distance from the camera to the table.
-
-BALL_RADIUS_MILIMETERS = 28.6
 BALL_RADIUS_RANGE_PX = (10, 30)
 
 # Table colors
-TABLE_LOWER_HSV = (35, 30, 40)  # green-ish
+TABLE_LOWER_HSV = (35, 30, 40)
 TABLE_UPPER_HSV = (85, 255, 255)
-# Future work: Instead of the trasholds there should be some sort of
-# values for different ambient conditions.
+
 
 # Grayscale tresholds
 WHITE_TRESHOLD = 200 # For cue ball and striped balls.
@@ -80,23 +61,27 @@ user_adjusted_bottom_right = False
 
 #Camera and stream
 def open_stream():
-    #Check if device is on same network.
+
     if not controller.is_host_reachable(2):
         print(f"Device at {CAPTURING_DEVICE_IP}:{PORT} is not reachable. Check network settings. Exiting.") 
         return None  
+    
+    resolution = RESOLUTION
+    
     if PERFORMANCE_MODE is True:
-        RESOLUTION="1280x720"
-    capture = cv2.VideoCapture(send_camera_command("get_stream_url", RESOLUTION))
+        resolution = PERFORMANCE_RESOLUTION
+        
+    capture = cv2.VideoCapture(send_camera_command("get_stream_url", resolution ))
     
     if not capture.isOpened():
-        print("Failed to open stream with custom resolution, trying with 720p...")
-        capture = cv2.VideoCapture(send_camera_command("get_stream_url", "1280x720"))
+        print(f"Failed to open stream with {resolution} resolution, trying with {FALLBACK_RESOLUTION}...")
+        capture = cv2.VideoCapture(send_camera_command("get_stream_url", FALLBACK_RESOLUTION))
         if not capture.isOpened():
-            print("Failed to open stream with 720p resolution.")
+            print(f"Failed to open stream with {FALLBACK_RESOLUTION} resolution.")
             return None
     ret, _ = capture.read()
     if not ret:
-        print(f"Could not connect to DroidCam server. Check IP and PORT.")
+        print(f"Could not connect to DroidCam server. Check IP {CAPTURING_DEVICE_IP} and PORT {PORT}.")
         capture.release()
         return None
     
@@ -258,7 +243,7 @@ def main():
         return
     
     send_camera_command("apply_defaults")
-    
+
     resolution_str = get_resolution_string(capture)
     initial_camera_info = send_camera_command("dump_camera_info")
     ball_detector = ObjectDetector()
@@ -304,12 +289,7 @@ def main():
         # When the pocket is confirmed by user stop calculating pockets.
         if user_confirmed_pocket_positions is False:
             pockets = ObjectDetector.detect_pockets(table_bbox)            
-            # Future work: Also handle the repositioning so that the 
-            # user won't be interuppted and pocket positions reset to the detected ones instead of the
-            # user corrected ones. Add some interception system (that runs in parrallel?). Lock at Unity level, once the Quest 3 user moved them. Get
-            # the info which quest moved them (neccessary?) and which pocket was moved. Lock the computation here. Async communication.
-            
-            # Also if the movement of pocket detectiong is sufficient small ()
+
             if user_is_holding_top_left is True or user_adjusted_top_left is True:
                 pockets = [None, pockets[1]]
             if user_is_holding_bottom_right is True or user_adjusted_bottom_right is True:
@@ -343,13 +323,7 @@ def main():
                             cuda_available, cuda_version, vram_mb)
 
                 cv2.imshow("Detection Debug", frame)
-            
-        #Process data s json
-            
-        
        
-       
-            
     if DEBUG_LOGGING:
         log_file.close()
         cv2.destroyAllWindows()
