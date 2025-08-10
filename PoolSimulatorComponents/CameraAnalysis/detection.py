@@ -11,9 +11,9 @@ from .droid_cam_controller import DroidCamController
 from .object_detector import ObjectDetector
 
 class DetectionMode(Enum):
-    TRESHOLDING = 1
+    Tresholding = 1
     YOLO = 2
-    BOTH = 3
+    Both = 3
 
 # Globals
 CAPTURING_DEVICE_IP = "192.168.0.40"
@@ -45,7 +45,7 @@ MAX_RETRY_COUNT = 300 # 300 frames worth of hickups consecutively means there is
 
 DEBUG_LOGGING = True
 PERFORMANCE_MODE = True
-DETECTION_MODE = DetectionMode.BOTH
+DETECTION_MODE = DetectionMode.Both
 
 # Connectivity / camera control flags (for AR user adjustments).
 user_confirmed_pocket_positions = False
@@ -146,14 +146,19 @@ def check_keys():
         # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
         next_cam = (controller.current_camera + 1) % len(controller.CAMERA_MAP)
         send_camera_command("select_camera", next_cam)
+        camera_info = send_camera_command("dump_camera_info")
     elif key == ord('0'):
         send_camera_command("select_camera", 0)  # Front
+        camera_info = send_camera_command("dump_camera_info")
     elif key == ord('1'):
         send_camera_command("select_camera", 1)  # Main
+        camera_info = send_camera_command("dump_camera_info")
     elif key == ord('2'):
         send_camera_command("select_camera", 2)  # Telephoto
+        camera_info = send_camera_command("dump_camera_info")
     elif key == ord('3'):
         send_camera_command("select_camera", 3)  # Ultrawide
+        camera_info = send_camera_command("dump_camera_info")
     elif key == ord('i'):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
     return (True, camera_info)
@@ -175,11 +180,11 @@ def prepare_log_file(ball_detector: ObjectDetector):
         "pocket1_x", "pocket1_y", "pocket2_x", "pocket2_y",
     ]
 
-    if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
+    if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
         for i in range(1, 17):
             header.extend([f"ball{i}_x", f"ball{i}_y", f"ball{i}_type"])
 
-    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.BOTH):
+    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.Both):
         for i in range(1, 17):
             header.extend([f"yolo_ball{i}_x", f"yolo_ball{i}_y", f"yolo_ball{i}_type"])
 
@@ -223,9 +228,9 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
             else:
                 row.extend([None, None, None])
 
-    if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
+    if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
         append_ball_results(classical_results)
-    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.BOTH):
+    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.Both):
         append_ball_results(yolo_results)
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
@@ -306,7 +311,7 @@ def main():
         #         cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
         #         cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         #         cv2.imshow("Detection Debug", frame)
-        if DETECTION_MODE in (DetectionMode.TRESHOLDING, DetectionMode.BOTH):
+        if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
             balls = ball_detector.detect_balls(frame, table_mask, BALL_RADIUS_RANGE_PX[0],BALL_RADIUS_RANGE_PX[1])
 
             for circle in balls:
