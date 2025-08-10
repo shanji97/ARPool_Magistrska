@@ -1,4 +1,4 @@
-from ultralytics import yolo
+# from ultralytics import yolo
 import cv2
 import numpy as np
 import torch
@@ -6,7 +6,7 @@ import torch
 
 class ObjectDetector:
    
-    def __init__(self, weights_path:str):
+    def __init__(self):
         self.cuda_available, self.cuda_version, self.vram = ObjectDetector.get_gpu_info()
         if not self.cuda_available:
             self.device = "cpu"
