@@ -9,6 +9,7 @@ import json
 #Custom imports
 from .droid_cam_controller import DroidCamController
 from .object_detector import ObjectDetector
+from .calibration import Calibrator
 
 class DetectionMode(Enum):
     Tresholding = 1
@@ -85,7 +86,7 @@ def open_stream():
         capture.release()
         return None
     
-    return capture
+    return (capture, resolution)
 
 # Camera control part
 def send_camera_command(command: str, *args):
@@ -163,11 +164,6 @@ def check_keys():
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
     return (True, camera_info)
 
-def get_resolution_string(capture):
-    width = capture.get(cv2.CAP_PROP_FRAME_WIDTH)
-    height = capture.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    return f'{int(width)}x{int(height)}'
-
 def prepare_log_file(ball_detector: ObjectDetector):
     filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     file = open(filename, 'w', newline='')
@@ -242,15 +238,20 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
     writer.writerow(row)
 
 def main():
-    capture = open_stream()
+    capture, dimensions = open_stream()
     if capture is None:
         print("Could not open stream.")
         return
     
+    # Calibration
+    
+    # Camera init
     send_camera_command("apply_defaults")
-
-    resolution_str = get_resolution_string(capture)
+    calibrator = Calibrator(dimensions)
     initial_camera_info = send_camera_command("dump_camera_info")
+    
+    
+    #Object detection
     ball_detector = ObjectDetector()
     log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
     
@@ -276,9 +277,9 @@ def main():
         if not ret:
             print("Frame capture failed.")
             capture.release()
-            capture = open_stream()
+            capture, _ = open_stream()
             ret, frame = capture.read()
-            retry_count+=1
+            retry_count += 1
             if retry_count >= MAX_RETRY_COUNT:
                 print("Frame capture failed. Too many times.")
                 break
