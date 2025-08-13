@@ -36,7 +36,6 @@ BALL_RADIUS_RANGE_PX = (10, 30)
 TABLE_LOWER_HSV = (35, 30, 40)
 TABLE_UPPER_HSV = (85, 255, 255)
 
-
 # Grayscale tresholds
 WHITE_TRESHOLD = 200 # For cue ball and striped balls.
 EIGHTBALL_TRESHOLD = 50
@@ -237,20 +236,57 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
 
     writer.writerow(row)
 
+def get_intrinsics_for_all_cameras(camera_info: str,
+                                   dimensions: str, 
+                                   sq_size_meters: float = 0.025,
+                                   inner_corners: tuple = (10, 7),
+                                   device_model: str = "i16pm", 
+                                   force_recalib: bool = False,
+                                   use_rational_model: bool = False,
+                                   base_path_for_images: str = "CameraAnalysis/Images/Calibration/in_ex"):
+    intrinsics = []
+    send_camera_command("apply_defaults")
+    
+    calibrator = Calibrator(dimensions,
+                        sq_size_meters,
+                        inner_corners,
+                        force_recalib,
+                        False,
+                        device_model,
+                        use_rational_model,
+                        base_path_for_images)
+    intrinsics_main = calibrator.get_intrinsics("main", dimensions)
+    
+    #Telephoto
+    send_camera_command("select_camera", 2)
+    calibrator.set_custom_inner_corners((6, 4))
+    intrinsics_tp = calibrator.get_intrinsics("tp", dimensions)
+    
+    #Ultrawide
+    send_camera_command("select_camera", 3)  # Ultrawide camera
+    calibrator.set_custom_sq_size(0.1)
+    calibrator.set_custom_inner_corners((6, 4))
+    intrinsics_uw_uw_wth_lens_dist = calibrator.get_intrinsics("uw_wth_lens_dist", dimensions)
+
+
+
 def main():
+    
     capture, dimensions = open_stream()
     if capture is None:
         print("Could not open stream.")
         return
     
-    # Calibration
-    
-    # Camera init
-    send_camera_command("apply_defaults")
-    calibrator = Calibrator(dimensions)
     initial_camera_info = send_camera_command("dump_camera_info")
+    intrinsics = get_intrinsics_for_all_cameras(initial_camera_info,
+                                                    dimensions)
+    # Main camera is set by default.
+   
     
     
+    
+    
+
     #Object detection
     ball_detector = ObjectDetector()
     log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
@@ -324,7 +360,7 @@ def main():
                     cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             if DEBUG_LOGGING:
-                log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
+                log_csv_row(writer, frame, table_mask, pockets, dimensions, start_time,
                             table_bbox, results_tresholding, results_yolo,
                             cuda_available, cuda_version, vram_mb)
 
