@@ -2,7 +2,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, asdict, field
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import time
 
@@ -66,23 +65,18 @@ class Calibrator:
         image = cv2.imread(image_path)
         if image is None:
             raise FileNotFoundError(f"Image not found: {image_path}.")
-        if desired_resolution is not None:
+        try:
             w, h = self._parse_resolution(desired_resolution)
-            if w is None or h is None or w <= 0 or h <= 0:
-                 w = self.width
-                 h = self.height
-                 print(f"Invalid resolution {desired_resolution} for image {image_path}. Using default {self.width}x{self.height}.")
-            image_resized = cv2.resize(image, (w, h), interpolation=cv2.INTER_LANCZOS4)
-        else:
-            print(f"No desired resolution provided for image {image_path}. Using default {self.width}x{self.height}.")
-            image_resized = cv2.resize(image, (self.width, self.height), interpolation=cv2.INTER_LANCZOS4)
-        
-        if desired_resolution is None or self._parse_resolution(desired_resolution) != (self.width, self.height):
+        except Exception:
+            w, h = self.width, self.height
             desired_resolution = f"{self.width}x{self.height}"
-        
+            
+        image_resized = cv2.resize(image, (w, h), interpolation=cv2.INTER_LANCZOS4)
         ext = os.path.splitext(image_path)[1]
-        output_path = f"{os.path.splitext(image_path)[0]}_{desired_resolution}{ext}"
+        output_path = f"{os.path.splitext(image_path)[0]}_{w}x{h}{ext}"
         cv2.imwrite(output_path, image_resized)
+        
+        return output_path
         
     def toggle_center_crop(self, allow: bool):
         if not isinstance(allow, bool):
@@ -185,7 +179,7 @@ class Calibrator:
                         continue
                     image = self._center_crop(image, target_aspect_ratio)
                     
-                iw, ih = image.shape[:2]
+                ih, iw = image.shape[:2]
                 if (iw, ih) != (tw, th):
                     image = cv2.resize(image, (tw, th), interpolation=cv2.INTER_LANCZOS4)
                 cv2.imwrite(output_path, image)
@@ -290,7 +284,6 @@ class Calibrator:
         out_dir = os.path.join(self.base_directory, folder_name)
         os.makedirs(out_dir, exist_ok=True)
         return os.path.join(out_dir, f"intrinsics_{cam_key}_{res}.json")
-
     
     def _save_json(self, cam_key: str, intrinsics: Intrinsics):
         p = self._json_path(cam_key, intrinsics.resolution)

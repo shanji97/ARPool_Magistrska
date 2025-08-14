@@ -278,10 +278,7 @@ def main():
         return
     
     initial_camera_info = send_camera_command("dump_camera_info")
-    intrinsics = get_intrinsics_for_all_cameras(initial_camera_info,
-                                                    dimensions)
-    # Main camera is set by default.
-   
+    intrinsics = get_intrinsics_for_all_cameras(dimensions=dimensions,
     
     
     
