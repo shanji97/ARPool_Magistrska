@@ -38,6 +38,12 @@ class Intrinsics:
     
 class Calibrator:
     
+    DEFAULT_PATTERN_BY_CAM = {
+    "main": "25mm_10x7",
+    "tp": "35mm_7x4",
+    "uw_wth_lens_dist": "20mm_13x9",
+    }
+    
     def __init__(self, 
                  work_resolution = "1920x1080",
                  sq_size_meters = 0.020,
@@ -102,27 +108,96 @@ class Calibrator:
         if not isinstance(use_rational_model, bool):
             raise ValueError("Use rational model must be a boolean value.")
         self.use_rational_model = use_rational_model
+        
+    def available_patterns(self, cam_key: str) -> List[str]:
+        camera_directory = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
+        if not os.path.exists(camera_directory):
+            return []
+        extensions = {".jpg", ".jpeg", ".png"}
+        found_directories = []
+        for name in sorted(os.listdir(camera_directory)):
+            path = os.path.join(camera_directory, name)
+            if not os.path.isdir(path):
+                continue
+            if any(
+                os.path.splitext(file)[1].lower() in extensions
+                for file in os.listdir(path)
+                if os.path.isfile(os.path.join(path, file))):
+                
+                found_directories.append(name)
+        return found_directories
     
-    def get_intrinsics(self, camera: str, target_resolution = "1920x1080") -> Intrinsics:
+    def pick_pattern(self, cam_key: str, candidates: Optional[List[str]] = None) -> Optional[str]:
+        available_patterns = self.available_patterns(cam_key)
+        aset = set(available_patterns)
+        
+        if candidates:
+            for candidate in candidates:
+                if candidate in aset:
+                    return candidate
+                
+        default_pattern = self.DEFAULT_PATTERN_BY_CAM.get(cam_key)
+        if default_pattern in aset:
+            return default_pattern
+        return available_patterns[0] if available_patterns else None
+    
+    def precompute_all(self, target_resolution: str, force: bool = False) -> Dict[str, List[Tuple[str, float]]]:
+        report: Dict[str, List[Tuple[str, float]]] = {}
+        old_force = self.force_recalib
+        try:
+            self.force_recalib = force
+            for cam_key in CAMERA_FOLDERS.keys():
+                patterns = self.available_patterns(cam_key)
+                if not patterns:
+                    patterns = [""] #camera root
+                rep: List[Tuple[str, float]] = []
+                for pattern in patterns:
+                    intr = self.get_intrinsics(cam_key, target_resolution, pattern=pattern)
+                    rep.append((pattern or "<root>", intr.rms))
+                report[cam_key] = rep
+        finally:
+            self.force_recalib = old_force
+        return report
+    
+    def get_intrinsics_auto(self, cam_key: str, target_resolution: str, candidates: Optional[List[str]] = None) -> Intrinsics:
+        pattern = self.pick_pattern(cam_key, candidates)
+        if pattern is None:
+            return self.get_intrinsics(cam_key, target_resolution)
+        return self.get_intrinsics(cam_key, target_resolution, pattern)
+            
+    
+    def get_intrinsics(self, camera: str, target_resolution = "1920x1080", pattern: str = "") -> Intrinsics:
         cam_key = self._normalize_camera(camera)
         target_res = target_resolution or f"{self.width}x{self.height}"
         
-        intrinsics = self._load_json(cam_key, target_res)
-        if intrinsics and self.force_recalib is False:
-            self._cache[cam_key] = intrinsics
-            return intrinsics
-        
-        if target_res == f"{self.width}x{self.height}" or self.force_recalib:
-            cache_directory = self._prepare_image_set(cam_key, target_res)
-            intrinsics = self._compute_from_folder(cam_key, cache_directory)
-            self._save_json(cam_key, intrinsics)
-            self._cache[cam_key] = intrinsics
-            return intrinsics
-  
-        base_intrinsics = self.get_intrinsics(cam_key, f"{self.width}x{self.height}")
-        scaled_intrinsics = self._scale_intrinsics(base_intrinsics, target_res)
-        self._save_json(cam_key, scaled_intrinsics)
-        return scaled_intrinsics
+        sq_size_m, cols, rows = self._resolve_pattern(cam_key, pattern)
+        prev_sq_size_m = self.sq_size_meters
+        prev_inner_corners = self.inner_corners
+        self.sq_size_meters = sq_size_m
+        self.inner_corners = (cols, rows)
+        try:
+            intrinsics = self._load_json(cam_key, target_res, pattern)
+            if intrinsics and self.force_recalib is False:
+                self._cache[cam_key] = intrinsics
+                return intrinsics
+            
+            if target_res == f"{self.width}x{self.height}" or self.force_recalib:
+                cache_directory = self._prepare_image_set(cam_key, target_res, pattern)
+                
+                intrinsics = self._compute_from_folder(cam_key, cache_directory)
+                
+                self._save_json(cam_key, intrinsics, pattern)
+                self._cache[cam_key] = intrinsics
+                return intrinsics
+
+            base_intrinsics = self.get_intrinsics(cam_key, f"{self.width}x{self.height}", pattern)
+            scaled_intrinsics = self._scale_intrinsics(base_intrinsics, target_res)
+            
+            self._save_json(cam_key, scaled_intrinsics, pattern)
+            return scaled_intrinsics
+        finally:
+            self.sq_size_meters = prev_sq_size_m
+            self.inner_corners = prev_inner_corners
     
     def undistort(self, img: np.ndarray, camera: str, target_resolution = None) -> np.ndarray:
         intrinsics = self.get_intrinsics(camera, target_resolution)
@@ -135,10 +210,10 @@ class Calibrator:
                                                  (intrinsics.width, intrinsics.height)) 
         return cv2.undistort(img, K, dist, None, new_K)      
             
-    def _prepare_image_set(self, cam_key: str, target_resolution: str):
+    def _prepare_image_set(self, cam_key: str, target_resolution: str, pattern: str = "") -> str:
         tw, th = self._parse_resolution(target_resolution)
         target_aspect_ratio = self._aspect_ratio(tw, th)
-        original_directory = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
+        original_directory = self._pattern_join(cam_key, pattern)
         if not os.path.exists(original_directory):
             raise FileNotFoundError(f"Calibration folder not found: {original_directory}.")
         
@@ -278,25 +353,66 @@ class Calibrator:
             raise KeyError(f"Unknown camera key '{cam}'. Expected one of {list(CAMERA_FOLDERS)}")
         return key
     
-    def _json_path(self, cam_key: str, resolution: Optional[str] = None) -> str:
-        res = resolution or f"{self.width}x{self.height}"
-        folder_name = CAMERA_FOLDERS[cam_key][1]
-        out_dir = os.path.join(self.base_directory, folder_name)
-        os.makedirs(out_dir, exist_ok=True)
-        return os.path.join(out_dir, f"intrinsics_{cam_key}_{res}.json")
+    def _parse_pattern_name(self, pattern_name: str):
+        try:
+            s = pattern_name.lower().replace("-","_")
+            parts = s.split("_")
+            mm = next((p for p in parts if p.endswith("mm")), None)
+            grid = next((p for p in parts if "x" in p), None)
+            if not mm or not grid:
+                return None
+            sq_m = float(mm[:-2]) / 1000.0
+            c, r = grid.split("x")
+            return (sq_m, int(c), int(r))
+        except Exception as e:
+            print(f"Failed to parse pattern name '{pattern_name}': {e}")
+            return None
+             
+    def _pattern_join(self, cam_key: str, *parts: str, cam_key_index = 0) -> str:
+        base_camera_directory = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
+        return os.path.join(base_camera_directory, *[p for p in parts if p])
     
-    def _save_json(self, cam_key: str, intrinsics: Intrinsics):
-        p = self._json_path(cam_key, intrinsics.resolution)
+    def _json_path(self, cam_key: str, resolution: Optional[str] = None, pattern: str = "") -> str:
+        dimensions = resolution or f"{self.width}x{self.height}"
+        intr_dir = self._pattern_join(cam_key, pattern, "_intrinsics", cam_key_index = 1)
+        os.makedirs(intr_dir, exist_ok=True)
+        return os.path.join(intr_dir, f"intrinsics_{cam_key}_{dimensions}.json")
+    
+    def _save_json(self, cam_key: str, intrinsics: Intrinsics, pattern: str = ""):
+        p = self._json_path(cam_key, intrinsics.resolution, pattern)
         with open(p, 'w', encoding='utf-8') as f:
             json.dump(asdict(intrinsics), f, indent=2)
                 
-    def _load_json(self, cam_key: str, resolution: str = None):
-        p = self._json_path(cam_key, resolution)
+    def _load_json(self, cam_key: str, resolution: str = None, pattern: str = "") -> Optional[Intrinsics]:
+        p = self._json_path(cam_key, resolution, pattern)
         if not os.path.exists(p):
             return None
         with open(p, "r", encoding="utf-8") as file:
             data = json.load(file)
         return Intrinsics(**data)
+    
+    def _load_pattern_json(self, cam_key: str, pattern: str = ""):
+        config = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0], pattern, "pattern.json")
+        if not os.path.isfile(config):
+            return None
+        try:
+            with open(config, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            sq_m = float(data.get("sq_size_mm", 0)) / 1000.0
+            columns, rows = data.get("inner_corners", (0, 0))
+            if sq_m > 0 and columns > 0 and rows > 0:
+                return (sq_m, int(columns), int(rows))
+        except Exception as e:
+            print(f"Failed to load pattern config {config}: {e}")
+        return None
+    
+    def _resolve_pattern(self, cam_key: str, pattern: str):
+        if pattern:
+            json_data = self._load_pattern_json(cam_key, pattern)
+            if json_data: return json_data
+            parsed_pattern = self._parse_pattern_name(pattern)
+            if parsed_pattern: return parsed_pattern
+        return (self.sq_size_meters, *self.inner_corners)
     
     @staticmethod
     def _center_crop(image: np.ndarray, target_aspect: float) -> np.ndarray:

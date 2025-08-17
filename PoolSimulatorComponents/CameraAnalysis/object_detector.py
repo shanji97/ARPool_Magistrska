@@ -50,7 +50,7 @@ class ObjectDetector:
         return (x, y, w, h), mask
         
     @staticmethod
-    def detect_balls(frame, table_mask, min_ball_radius, max_ball_radius,gaussian_kernel = (9,9),):
+    def detect_balls(frame, table_mask, min_ball_radius, max_ball_radius,gaussian_kernel = (9,9)):
         masked = cv2.bitwise_and(frame, frame, mask=table_mask)
         gray = cv2.cvtColor(masked, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, gaussian_kernel, 2)

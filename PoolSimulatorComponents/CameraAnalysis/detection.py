@@ -25,6 +25,13 @@ RESOLUTION = "1920x1080"
 PERFORMANCE_RESOLUTION = "1280x720"
 FALLBACK_RESOLUTION = "1280x720"
 
+PATTERN = [
+    "20mm_13x9",
+    "25mm_10x7",
+    "30mm_6x8",
+    "35mm_7x4",
+    ]
+
 TABLE_WIDTH_MILIMETERS = 1000 # Set for the specific table.
 TABLE_LENGTH_MILIMETERS = 2000
 #STANDARD_TABLE_DIMENSIONS_MILIMETERS = [(2438, 1219),
@@ -43,9 +50,19 @@ STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
 
 MAX_RETRY_COUNT = 300 # 300 frames worth of hickups consecutively means there is a problem.
 
-DEBUG_LOGGING = True
+DEBUG = True
 PERFORMANCE_MODE = True
 DETECTION_MODE = DetectionMode.Both
+
+USE_UNDISTORTED_VIEW = True
+
+# Runtime state
+_calib = None
+_K = None
+_Knew = None
+_dist = None
+_map1 = None
+_map2 = None
 
 # Connectivity / camera control flags (for AR user adjustments).
 user_confirmed_pocket_positions = False
@@ -87,6 +104,58 @@ def open_stream():
     
     return (capture, resolution)
 
+# Calibration part
+def _calibration_init(dimensions: str, 
+                        sq_size_meters: float = 0.025,
+                        inner_corners: tuple = (10, 7),
+                        device: str = "i16pm", 
+                        force_recalib: bool = False,
+                        use_rational_model: bool = False,
+                        base_path_for_images: str = "CameraAnalysis/Images/Calibration/in_ex") -> Calibrator:
+    global _calib
+    _calib = Calibrator(dimensions,
+                        sq_size_meters,
+                        inner_corners,
+                        force_recalib,
+                        False,
+                        device,
+                        use_rational_model,
+                        base_path_for_images)
+    
+def _load_intrinsics_for_camera(controller: DroidCamController, dimensions: str):
+    """Load intrinsics for the active lens and precompute rectification maps.
+    Call once at startup and whenever the camera changes."""
+    global _K, _Knew, _dist, _map1, _map2
+    meta = controller.CAMERA_MAP[controller.current_camera]
+    cam_key = (meta or {}).get("folder_alias", "main")
+    
+    if not cam_key:
+        _K = _Knew = _dist = _map1 = _map2 = None
+        return
+    intr = _calib.get_intrinsics_auto(cam_key, dimensions, candidates=PATTERN)
+    _K = intr.K(); 
+    _dist = np.array(intr.dist, np.float64)
+    w, h = map(int, dimensions.split('x'))
+    
+    _Knew, _ = cv2.getOptimalNewCameraMatrix(_K, _dist, (w, h), 1, (w, h))
+    _map1, _map2 = cv2.initUndistortRectifyMap(_K, _dist, None, _Knew, (w, h), cv2.CV_16SC2)
+    if DEBUG and _K is not None:
+        print("[K (distorted)]\n", _K)
+        print("[dist] ", _dist.ravel())
+        print("[K_new (undistorted)]\n", _Knew)
+    
+def undistort_frame_if_needed(frame):
+    if USE_UNDISTORTED_VIEW and _map1 is not None:
+        return cv2.remap(frame, _map1, _map2, cv2.INTER_LINEAR)
+    return frame
+
+def undistort_points(points_xy):
+    if _K is None:
+        return points_xy
+    points = np.asarray(points_xy, dtype=np.float32).reshape(-1, 1, 2)
+    undistorted_points = cv2.undistortPoints(points, _K, _dist, P=_Knew)
+    return undistorted_points.reshape(-1, 2)
+
 # Camera control part
 def send_camera_command(command: str, *args):
     if command == "toggle_torch":
@@ -115,6 +184,7 @@ def send_camera_command(command: str, *args):
     elif command == "select_camera":
         if args:
             controller.select_camera(args[0])   
+            _load_intrinsics_for_camera(controller, args[1])
     elif command == "get_stream_url":
             return controller.get_stream_url(args[0])
     elif command == "dump_camera_info":
@@ -128,7 +198,7 @@ def send_camera_command(command: str, *args):
     else:
         print(f"Unknown command: {command}")
         
-def check_keys():
+def check_keys(dimensions: str = "1920x1080"):
     camera_info = None
     key = cv2.waitKey(1)
     if key == ord('q'):
@@ -145,19 +215,20 @@ def check_keys():
     elif key == ord('c'):
         # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
         next_cam = (controller.current_camera + 1) % len(controller.CAMERA_MAP)
-        send_camera_command("select_camera", next_cam)
+        send_camera_command("select_camera", next_cam, dimensions)
         camera_info = send_camera_command("dump_camera_info")
+        
     elif key == ord('0'):
-        send_camera_command("select_camera", 0)  # Front
+        send_camera_command("select_camera", 0, dimensions)  # Front
         camera_info = send_camera_command("dump_camera_info")
     elif key == ord('1'):
-        send_camera_command("select_camera", 1)  # Main
+        send_camera_command("select_camera", 1, dimensions)  # Main
         camera_info = send_camera_command("dump_camera_info")
     elif key == ord('2'):
-        send_camera_command("select_camera", 2)  # Telephoto
+        send_camera_command("select_camera", 2, dimensions)  # Telephoto
         camera_info = send_camera_command("dump_camera_info")
     elif key == ord('3'):
-        send_camera_command("select_camera", 3)  # Ultrawide
+        send_camera_command("select_camera", 3, dimensions)  # Ultrawide
         camera_info = send_camera_command("dump_camera_info")
     elif key == ord('i'):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
@@ -236,106 +307,84 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
 
     writer.writerow(row)
 
-def get_intrinsics_for_all_cameras(camera_info: str,
-                                   dimensions: str, 
-                                   sq_size_meters: float = 0.025,
-                                   inner_corners: tuple = (10, 7),
-                                   device_model: str = "i16pm", 
-                                   force_recalib: bool = False,
-                                   use_rational_model: bool = False,
-                                   base_path_for_images: str = "CameraAnalysis/Images/Calibration/in_ex"):
-    intrinsics = []
-    send_camera_command("apply_defaults")
-    
-    calibrator = Calibrator(dimensions,
-                        sq_size_meters,
-                        inner_corners,
-                        force_recalib,
-                        False,
-                        device_model,
-                        use_rational_model,
-                        base_path_for_images)
-    intrinsics_main = calibrator.get_intrinsics("main", dimensions)
-    
-    #Telephoto
-    send_camera_command("select_camera", 2)
-    calibrator.set_custom_inner_corners((6, 4))
-    intrinsics_tp = calibrator.get_intrinsics("tp", dimensions)
-    
-    #Ultrawide
-    send_camera_command("select_camera", 3)  # Ultrawide camera
-    calibrator.set_custom_sq_size(0.1)
-    calibrator.set_custom_inner_corners((6, 4))
-    intrinsics_uw_uw_wth_lens_dist = calibrator.get_intrinsics("uw_wth_lens_dist", dimensions)
 
 
 
 def main():
-    
     capture, dimensions = open_stream()
     if capture is None:
         print("Could not open stream.")
         return
     
-    initial_camera_info = send_camera_command("dump_camera_info")
-    intrinsics = get_intrinsics_for_all_cameras(dimensions=dimensions,
-    
-    
-    
-    
+    calib = Calibrator(work_resolution=dimensions, device="i16pm", allow_center_crop=True)
+    # First run: compute everything it finds under each camera (all pattern subfolders)
+    # Set force=True only the very first time to overwrite
+    try:
+        pre = calib.precompute_all(dimensions, force=False)
+        _load_intrinsics_for_camera(controller, dimensions)
+        if DEBUG:
+            print("[precompute]", pre)
+    except Exception as e:
+            print("Precompute failed:", e)
 
+            #Calirate on all patterns.
+    
+    
+    
+    
+    # JUST CALIBRATION
     #Object detection
-    ball_detector = ObjectDetector()
-    log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
+    # ball_detector = ObjectDetector()
+    # log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
     
-    results_tresholding = []
-    results_yolo = []
-    pockets = [(0,0),(0,0)]
-    retry_count = 0
+    # results_tresholding = []
+    # results_yolo = []
+    # pockets = [(0,0),(0,0)]
+    # retry_count = 0
         
-    ret, frame = capture.read()
-    while True:
+    # ret, frame = capture.read()
+    # while True:
         
-        should_break, camera_info = check_keys()
-        if not should_break:
-            break
+    #     should_break, camera_info = check_keys()
+    #     if not should_break:
+    #         break
         
-        if camera_info is None:
-            camera_info  = initial_camera_info
+    #     if camera_info is None:
+    #         camera_info  = initial_camera_info
         
-        start_time = time.perf_counter()
-        results_tresholding = []
-        results_yolo = []
+    #     start_time = time.perf_counter()
+    #     results_tresholding = []
+    #     results_yolo = []
         
-        if not ret:
-            print("Frame capture failed.")
-            capture.release()
-            capture, _ = open_stream()
-            ret, frame = capture.read()
-            retry_count += 1
-            if retry_count >= MAX_RETRY_COUNT:
-                print("Frame capture failed. Too many times.")
-                break
-            continue
-        else:
-            retry_count = 0
+    #     if not ret:
+    #         print("Frame capture failed.")
+    #         capture.release()
+    #         capture, _ = open_stream()
+    #         ret, frame = capture.read()
+    #         retry_count += 1
+    #         if retry_count >= MAX_RETRY_COUNT:
+    #             print("Frame capture failed. Too many times.")
+    #             break
+    #         continue
+    #     else:
+    #         retry_count = 0
             
-        table_bbox, table_mask = ball_detector.detect_table(frame, TABLE_LOWER_HSV, TABLE_UPPER_HSV)
-        if table_bbox is None:
-            print("No table detected")
-            continue
+    #     table_bbox, table_mask = ball_detector.detect_table(frame, TABLE_LOWER_HSV, TABLE_UPPER_HSV)
+    #     if table_bbox is None:
+    #         print("No table detected")
+    #         continue
         
-        # When the pocket is confirmed by user stop calculating pockets.
-        if user_confirmed_pocket_positions is False:
-            pockets = ObjectDetector.detect_pockets(table_bbox)            
+    #     # When the pocket is confirmed by user stop calculating pockets.
+    #     if user_confirmed_pocket_positions is False:
+    #         pockets = ObjectDetector.detect_pockets(table_bbox)            
 
-            if user_is_holding_top_left is True or user_adjusted_top_left is True:
-                pockets = [None, pockets[1]]
-            if user_is_holding_bottom_right is True or user_adjusted_bottom_right is True:
-                pockets = [pockets[0], None]      
-        else:
-            pockets = [(None,None)] 
-        
+    #         if user_is_holding_top_left is True or user_adjusted_top_left is True:
+    #             pockets = [None, pockets[1]]
+    #         if user_is_holding_bottom_right is True or user_adjusted_bottom_right is True:
+    #             pockets = [pockets[0], None]      
+    #     else:
+    #         pockets = [(None,None)] 
+        # END PRECALIBRATION
         
         # balls = detect_balls(frame, table_mask)
         # for circle in balls:
@@ -345,26 +394,30 @@ def main():
         #         cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
         #         cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         #         cv2.imshow("Detection Debug", frame)
-        if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
-            balls = ball_detector.detect_balls(frame, table_mask, BALL_RADIUS_RANGE_PX[0],BALL_RADIUS_RANGE_PX[1])
+        
+        
+        
+        
+        # if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
+        #     balls = ball_detector.detect_balls(frame, table_mask, BALL_RADIUS_RANGE_PX[0],BALL_RADIUS_RANGE_PX[1])
 
-            for circle in balls:
-                x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
-                label = ball_detector.classify_balls(frame, (x, y, r), WHITE_TRESHOLD, EIGHTBALL_TRESHOLD, STRIPE_WHITE_RATIO)
-                results_tresholding.append((x, y, label))
-                if DEBUG_LOGGING:
-                    cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
-                    cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        #     for circle in balls:
+        #         x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
+        #         label = ball_detector.classify_balls(frame, (x, y, r), WHITE_TRESHOLD, EIGHTBALL_TRESHOLD, STRIPE_WHITE_RATIO)
+        #         results_tresholding.append((x, y, label))
+        #         if DEBUG:
+        #             cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
+        #             cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            if DEBUG_LOGGING:
-                log_csv_row(writer, frame, table_mask, pockets, dimensions, start_time,
-                            table_bbox, results_tresholding, results_yolo,
-                            cuda_available, cuda_version, vram_mb)
+        #     if DEBUG:
+        #         log_csv_row(writer, frame, table_mask, pockets, dimensions, start_time,
+        #                     table_bbox, results_tresholding, results_yolo,
+        #                     cuda_available, cuda_version, vram_mb)
 
-                cv2.imshow("Detection Debug", frame)
+        #         cv2.imshow("Detection Debug", frame)
        
-    if DEBUG_LOGGING:
-        log_file.close()
+    if DEBUG:
+        # log_file.close()
         cv2.destroyAllWindows()
     capture.release()
     
