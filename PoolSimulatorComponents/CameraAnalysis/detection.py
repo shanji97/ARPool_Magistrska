@@ -105,23 +105,7 @@ def open_stream():
     return (capture, resolution)
 
 # Calibration part
-def _calibration_init(dimensions: str, 
-                        sq_size_meters: float = 0.025,
-                        inner_corners: tuple = (10, 7),
-                        device: str = "i16pm", 
-                        force_recalib: bool = False,
-                        use_rational_model: bool = False,
-                        base_path_for_images: str = "CameraAnalysis/Images/Calibration/in_ex") -> Calibrator:
-    global _calib
-    _calib = Calibrator(dimensions,
-                        sq_size_meters,
-                        inner_corners,
-                        force_recalib,
-                        False,
-                        device,
-                        use_rational_model,
-                        base_path_for_images)
-    
+ 
 def _load_intrinsics_for_camera(controller: DroidCamController, dimensions: str):
     """Load intrinsics for the active lens and precompute rectification maps.
     Call once at startup and whenever the camera changes."""
@@ -234,6 +218,16 @@ def check_keys(dimensions: str = "1920x1080"):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
     return (True, camera_info)
 
+
+def print_precompute_results(precompute_results: dict):
+    print("\n=== Calibration summary (per camera · per pattern) ===")
+    for cam in sorted(precompute_results.keys()):
+        print(f"\n[{cam}]")
+        rows = sorted(precompute_results[cam], key=lambda x: x[0].lower())  # (pattern, rms)
+        for pattern, rms in rows:
+            print(f"  - {pattern:<14}  RMS={rms:.4f}")
+    print("\nDone.\n")
+
 def prepare_log_file(ball_detector: ObjectDetector):
     filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     file = open(filename, 'w', newline='')
@@ -312,20 +306,24 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
 
 def main():
     capture, dimensions = open_stream()
+    
+    if dimensions is not None:
+        # First run: compute everything it finds under each camera (all pattern subfolders)
+        # Set force=True only the very first time to overwrite
+        _calib = Calibrator(work_resolution=dimensions, device="i16pm", allow_center_crop=True, force_recalib=True)
+        try:
+            pre = _calib.precompute_all(dimensions, force=False)
+            _load_intrinsics_for_camera(controller, dimensions)
+            if DEBUG:
+                print_precompute_results(pre)
+        except Exception as e:
+                print("Precompute failed:", e)
+    
     if capture is None:
         print("Could not open stream.")
         return
     
-    calib = Calibrator(work_resolution=dimensions, device="i16pm", allow_center_crop=True)
-    # First run: compute everything it finds under each camera (all pattern subfolders)
-    # Set force=True only the very first time to overwrite
-    try:
-        pre = calib.precompute_all(dimensions, force=False)
-        _load_intrinsics_for_camera(controller, dimensions)
-        if DEBUG:
-            print("[precompute]", pre)
-    except Exception as e:
-            print("Precompute failed:", e)
+
 
             #Calirate on all patterns.
     
