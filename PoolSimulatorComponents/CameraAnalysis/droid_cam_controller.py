@@ -31,10 +31,10 @@ class DroidCamController:
     TORCH_STATE_CONF = f"{CONF_PATH}/{TORCH_STATE_JSON}"
     
     CAMERA_MAP = {
-        0: {"name": "Front", "torch_supported": False},
-        1: {"name": "Main", "torch_supported": True},
-        2: {"name": "Telephoto", "torch_supported": True},
-        3: {"name": "Ultrawide", "torch_supported": True}
+        0: {"name": "Front", "torch_supported": False, "folder_alias": "front"},
+        1: {"name": "Main", "torch_supported": True, "folder_alias": "main"},
+        2: {"name": "Telephoto", "torch_supported": True, "folder_alias": "tp"},
+        3: {"name": "Ultrawide", "torch_supported": True, "folder_alias": "uw_wth_lens_dist"}
     } 
 
     ZOOM_RANGE = (1.0, 6.0)
