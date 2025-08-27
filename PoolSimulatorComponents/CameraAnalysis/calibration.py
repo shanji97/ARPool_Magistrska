@@ -19,7 +19,7 @@ CAMERA_FOLDERS = {
 }
 
 MANIFEST_PREFIX = "calibcache_"
-CACHE_PREFIX = "downscaled_"
+CACHE_PREFIX = "_downscaled_"
 
 @dataclass
 class Intrinsics:
@@ -56,10 +56,15 @@ class Calibrator:
                  fish_eye_for_uw =  False,
                  device = "i16pm",
                  use_rational_model = False,
-                 base_directory = "Images\Calibration\in_ex",
+                 base_directory_parts = ["Images","Calibration","in_ex"],
                  allow_center_crop = True):
         self.width, self.height = self._parse_resolution(work_resolution)
-        self.base_directory = os.path.join(base_directory, device, f"{self.height}p")
+        self.base_directory =  os.path.join(os.path.dirname(__file__), 
+                                            base_directory_parts[0],
+                                            base_directory_parts[1], 
+                                            base_directory_parts[2],
+                                            device, 
+                                            f"{self.height}p")     
         self.inner_corners = checkerboard_inner_corners
         self.sq_size_meters = sq_size_meters
         self.use_fisheye_uw =  fish_eye_for_uw
@@ -67,13 +72,16 @@ class Calibrator:
         self.use_rational_model = use_rational_model
         self.allow_center_crop = allow_center_crop
         self.statsLogger = StatsLogger(
-            base_directory,
+            os.path.join(os.path.dirname(__file__), 
+                         base_directory_parts[0],
+                         base_directory_parts[1], 
+                         base_directory_parts[2]), 
             f"{self.height}p",
             device,
             True,
             True)
         self._cache: Dict[str, Intrinsics] = {}
-        
+    
     def change_base_directory(self, new_base_directory: str):
         self.base_directory = new_base_directory
         
@@ -212,7 +220,7 @@ class Calibrator:
     def undistort(self, img: np.ndarray, camera: str, target_resolution = None) -> np.ndarray:
         intrinsics = self.get_intrinsics(camera, target_resolution)
         K = intrinsics.K()
-        dist = np.array(intrinsics.dist, dtype=np.float64)
+        dist = np.array(intrinsics.dist, dtype=np.float32)
         new_K, _ = cv2.getOptimalNewCameraMatrix(K,
                                                  dist,
                                                  (intrinsics.width, intrinsics.height),
@@ -224,14 +232,12 @@ class Calibrator:
         tw, th = self._parse_resolution(target_resolution)
         exts = {".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"}
         
-        
         target_aspect_ratio = self._aspect_ratio(tw, th)
         original_directory = self._pattern_join(cam_key, pattern)
         if not os.path.exists(original_directory):
             raise FileNotFoundError(f"Calibration folder not found: {original_directory}.")
         
         cache_directory = os.path.join(original_directory, f"{CACHE_PREFIX}{tw}x{th}") 
-        print(cache_directory)
         os.makedirs(cache_directory, exist_ok=True)
         
         manifest_path = os.path.join(original_directory, f"{MANIFEST_PREFIX}{tw}x{th}.json")
@@ -282,7 +288,7 @@ class Calibrator:
             
         return cache_directory
                 
-    def _compute_from_folder(self, cam_key: str, pattern: str, folder: Optional[str] = None, stats_logger: Optional[StatsLogger] = None) -> Intrinsics:
+    def _compute_from_folder(self, cam_key: str, pattern: str, folder: Optional[str] = None, stats_logger: Optional[StatsLogger] = None, object_points_number_for_valid_detection = 10) -> Intrinsics:
         if folder is None:
             folder = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
         if not os.path.exists(folder):
@@ -297,9 +303,9 @@ class Calibrator:
             raise FileNotFoundError(f"No calibration images in {folder}.")
         
         cols, rows = self.inner_corners
-        object_points = np.zeros((rows*cols,3), np.float64)
-        object_points[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1,2)
-        object_points *= float(self.sq_size_meters)
+        object_points = np.zeros((rows*cols, 3), np.float32)
+        object_points[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2).astype(np.float32)
+        object_points *= np.float32(self.sq_size_meters)
         
         objpoints: List[np.ndarray] = []
         image_points: List[np.ndarray] = []
@@ -319,17 +325,19 @@ class Calibrator:
             )
             if not found:
                 continue
-
-            # refine to subpixel (cornerSubPix expects float32)
+            # refine (expects float32), then FLATTEN to (N, 2)
             corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-            # store as float64 for calibrateCamera (it accepts both; we keep consistency)
             objpoints.append(object_points.copy())
-            image_points.append(np.asarray(corners, dtype=np.float64))
+            image_points.append(corners.astype(np.float32))
 
-        if len(objpoints) < 10:
-            raise RuntimeError(f"Only {len(objpoints)} valid detections found in {folder}; need >= 10.")
+        if len(objpoints) < object_points_number_for_valid_detection:
+            raise RuntimeError(f"Only {len(objpoints)} valid detections found in {folder}; need >= {object_points_number_for_valid_detection}.")
 
-        image_size = (self.width, self.height)
+        image_size = (gray.shape[1], gray.shape[0])
+        
+        print("obj/img counts:", len(objpoints), len(image_points))
+        print("shapes/dtypes:", objpoints[0].shape, image_points[0].shape, objpoints[0].dtype, image_points[0].dtype)
+        
         flags = 0
         if self.use_rational_model:
             flags |= cv2.CALIB_RATIONAL_MODEL
@@ -557,10 +565,10 @@ if __name__ == "__main__":
         print(f"[main] RMS={intr.rms:.4f}, K={intr.K().tolist()}, dist={intr.dist}")
         
         intr2 = calib.get_intrinsics("tp", args.res, pattern=args.pattern)
-        print(f"[main] RMS={intr2.rms:.4f}, K={intr2.K().tolist()}, dist={intr2.dist}")
+        print(f"[telephoto] RMS={intr2.rms:.4f}, K={intr2.K().tolist()}, dist={intr2.dist}")
         
         intr3 = calib.get_intrinsics("uw_wth_lens_dist", args.res, pattern=args.pattern)
-        print(f"[main] RMS={intr3.rms:.4f}, K={intr3.K().tolist()}, dist={intr3.dist}")
+        print(f"[uw_wth_lens_dist] RMS={intr3.rms:.4f}, K={intr3.K().tolist()}, dist={intr3.dist}")
     else:
         report = calib.precompute_all(args.res, force=args.force)
         print("Calibration report:")
