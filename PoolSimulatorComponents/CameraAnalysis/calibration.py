@@ -4,9 +4,13 @@ import os
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional, Tuple
 import time
+from datetime import datetime
 
 import cv2
 import numpy as np
+
+from metrics import compute_blur_laplacian, compute_coverage_fraction, classify_quality
+from stats_logger import StatsLogger
 
 CAMERA_FOLDERS = {
     "main": ("main", "main_intrinsics"),
@@ -14,8 +18,8 @@ CAMERA_FOLDERS = {
     "uw_wth_lens_dist": ("uw_wth_lens_dist","uw_wth_lens_dist_intrinsics"),
 }
 
-MANIFEST_PREFIX = ".calibcache_"
-CACHE_PREFIX = "_downscaled_"
+MANIFEST_PREFIX = "calibcache_"
+CACHE_PREFIX = "downscaled_"
 
 @dataclass
 class Intrinsics:
@@ -52,7 +56,7 @@ class Calibrator:
                  fish_eye_for_uw =  False,
                  device = "i16pm",
                  use_rational_model = False,
-                 base_directory = "CameraAnalysis/Images/Calibration/in_ex",
+                 base_directory = "Images\Calibration\in_ex",
                  allow_center_crop = True):
         self.width, self.height = self._parse_resolution(work_resolution)
         self.base_directory = os.path.join(base_directory, device, f"{self.height}p")
@@ -62,6 +66,12 @@ class Calibrator:
         self.force_recalib = force_recalib
         self.use_rational_model = use_rational_model
         self.allow_center_crop = allow_center_crop
+        self.statsLogger = StatsLogger(
+            base_directory,
+            f"{self.height}p",
+            device,
+            True,
+            True)
         self._cache: Dict[str, Intrinsics] = {}
         
     def change_base_directory(self, new_base_directory: str):
@@ -183,11 +193,11 @@ class Calibrator:
             
             if target_res == f"{self.width}x{self.height}" or self.force_recalib:
                 cache_directory = self._prepare_image_set(cam_key, target_res, pattern)
-                
-                intrinsics = self._compute_from_folder(cam_key, cache_directory)
+                intrinsics = self._compute_from_folder(cam_key, pattern, cache_directory, self.statsLogger)
                 
                 self._save_json(cam_key, intrinsics, pattern)
                 self._cache[cam_key] = intrinsics
+                
                 return intrinsics
 
             base_intrinsics = self.get_intrinsics(cam_key, f"{self.width}x{self.height}", pattern)
@@ -212,13 +222,18 @@ class Calibrator:
             
     def _prepare_image_set(self, cam_key: str, target_resolution: str, pattern: str = "") -> str:
         tw, th = self._parse_resolution(target_resolution)
+        exts = {".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"}
+        
+        
         target_aspect_ratio = self._aspect_ratio(tw, th)
         original_directory = self._pattern_join(cam_key, pattern)
         if not os.path.exists(original_directory):
             raise FileNotFoundError(f"Calibration folder not found: {original_directory}.")
         
         cache_directory = os.path.join(original_directory, f"{CACHE_PREFIX}{tw}x{th}") 
+        print(cache_directory)
         os.makedirs(cache_directory, exist_ok=True)
+        
         manifest_path = os.path.join(original_directory, f"{MANIFEST_PREFIX}{tw}x{th}.json")
         
         manifest: Dict[str, float] = {}
@@ -229,8 +244,7 @@ class Calibrator:
             except Exception as e:
                 print(f"Failed to load manifest {manifest_path}: {e}")
                 manifest = {}
-        exts = {".jpg", ".jpeg", ".png"}
-        
+      
         original_images = sorted([os.path.join(original_directory, f) for f in os.listdir(original_directory)
                             if os.path.splitext(f)[1].lower() in exts])
         updated: Dict[str, float] = {}
@@ -268,7 +282,7 @@ class Calibrator:
             
         return cache_directory
                 
-    def _compute_from_folder(self, cam_key: str, folder: Optional[str] = None) -> Intrinsics:
+    def _compute_from_folder(self, cam_key: str, pattern: str, folder: Optional[str] = None, stats_logger: Optional[StatsLogger] = None) -> Intrinsics:
         if folder is None:
             folder = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
         if not os.path.exists(folder):
@@ -288,7 +302,7 @@ class Calibrator:
         object_points *= float(self.sq_size_meters)
         
         objpoints: List[np.ndarray] = []
-        imgpoints: List[np.ndarray] = []
+        image_points: List[np.ndarray] = []
         
         # Criteria for corner sub-pixel refinement
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-3)
@@ -310,7 +324,7 @@ class Calibrator:
             corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
             # store as float64 for calibrateCamera (it accepts both; we keep consistency)
             objpoints.append(object_points.copy())
-            imgpoints.append(np.asarray(corners, dtype=np.float64))
+            image_points.append(np.asarray(corners, dtype=np.float64))
 
         if len(objpoints) < 10:
             raise RuntimeError(f"Only {len(objpoints)} valid detections found in {folder}; need >= 10.")
@@ -320,10 +334,13 @@ class Calibrator:
         if self.use_rational_model:
             flags |= cv2.CALIB_RATIONAL_MODEL
 
-        rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, image_size, None, None, flags=flags)
+        rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, image_points, image_size, None, None, flags=flags)
         print(f"[calib] {cam_key} used {len(objpoints)} imgs, RMS={rms:.4f}")
 
-        intrinsics = Intrinsics(
+        if stats_logger is not None and stats_logger.debug:
+            self._log_stats(cam_key, pattern, image_paths, image_points, image_size, object_points, rvecs, tvecs, K, dist, stats_logger)
+            
+        return Intrinsics(
             fx=float(K[0, 0]), fy=float(K[1, 1]),
             cx=float(K[0, 2]), cy=float(K[1, 2]),
             dist=dist.ravel().astype(float).tolist(),
@@ -331,7 +348,32 @@ class Calibrator:
             rms=float(rms), resolution=f"{self.width}x{self.height}",
             created_at=time.time(),
         )
-        return intrinsics
+    
+    def _log_stats(self, cam_key: str, pattern: str, image_paths, image_points, image_size, object_points, rvecs, tvecs, K, dist, stats_logger: StatsLogger):
+        stats_logger.begin(cam_key, pattern)
+        for i, image_path in enumerate(image_paths[:len(image_points)]):
+           projection, _ = cv2.projectPoints(object_points, rvecs[i], tvecs[i], K, dist)
+           projection = projection.reshape(-1, 2)
+           points = image_points[i].reshape(-1,2)
+           error = np.linalg.norm(points - projection, axis=1)
+           rms_per_image = float(np.sqrt(np.mean(error**2))) # Positive errors
+           
+           image = cv2.imread(image_path)
+           corners_px = points.astype(np.float32)
+           self._analyze_and_log_image(
+               image,
+               image_path,
+               cam_key,
+               pattern,
+               K,
+               dist,
+               rms_per_image,
+               corners_px,
+               {"rvec": rvecs[i].ravel().tolist(), "tvec": tvecs[i].ravel().tolist()}, # Checkerboard pose
+               stats_logger
+           )
+        stats_logger.mark_for_end()
+        stats_logger.end()
     
     def _scale_intrinsics(self, intr: Intrinsics, target_res: str) -> Intrinsics:
         tw, th = self._parse_resolution(target_res)
@@ -440,3 +482,88 @@ class Calibrator:
             return int(w), int(h)
         except Exception:
             raise ValueError(f"Invalid resolution string: {resolution}.")
+        
+        
+    def _analyze_and_log_image(self, image, image_path:str, cam_key: str, pattern: str, K, distorsions, rms_per_image, corners_px, board_pose, statistics: StatsLogger):
+        
+        if statistics is None or not statistics.debug:
+            return
+        h, w = image.shape[:2]
+        blur = compute_blur_laplacian(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
+        coverage_percent = compute_coverage_fraction(corners_px, w,h) if corners_px is not None else 0.0
+        found_ok = corners_px is not None
+        rms_px = float(rms_per_image) if rms_per_image is not None else float("nan")
+        tilt_deg = float("nan")
+        quality = classify_quality(rms_px if not np.isnan(rms_px) else 9e9, coverage_percent, blur)
+        
+        row = dict(
+            image_filename=os.path.basename(image_path),
+            pattern=pattern,
+            camera=cam_key,
+            width=w, height=h,
+            corners_expected=int(self.inner_corners[0] * self.inner_corners[1]),
+            corners_found=int(corners_px.shape[0]) if corners_px is not None else 0,
+            found_ok=bool(found_ok),
+            rms_px=rms_px,
+            blur_lapl_var=float(blur),
+            coverage_frac=float(coverage_percent),
+            tilt_deg=tilt_deg,
+            quality_class=quality,
+            notes=""
+        )
+        statistics.log_row(row)
+
+    # NDJSON heavy payload for deferred visualization
+        nd = dict(
+            image_filename=row["image_filename"],
+            pattern=pattern,
+            camera=cam_key,
+            size=[w,h],
+            K=K.tolist() if K is not None else None,
+            dist=distorsions.tolist() if distorsions is not None else None,
+            per_image_rms=rms_px,
+            detected_corners_px=corners_px.tolist() if corners_px is not None else None,
+            board_pose=board_pose,  # ensure it’s JSON safe (convert np arrays)
+            timestamp=datetime.fromtimestamp(os.path.getmtime(image_path)).isoformat()
+        )
+        statistics.append_ndjson(nd)
+        
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Offline camera calibration tool"
+    )
+    parser.add_argument("--device", type=str, default="i16pm",
+                        help="Device alias (default: i16pm)")
+    parser.add_argument("--res", type=str, default="1920x1080",
+                        help="Target resolution, e.g. 1920x1080 or 1080p")
+    parser.add_argument("--pattern", type=str, default="",
+                        help="Optional pattern folder (e.g., 20mm_13x9). If empty, compute all.")
+    parser.add_argument("--force", action="store_true",
+                        help="Force recalibration even if cache exists.")
+
+    args = parser.parse_args()
+
+    calib = Calibrator(
+        work_resolution=args.res,
+        device=args.device,
+        allow_center_crop=True,
+        force_recalib=args.force,
+    )
+
+    if args.pattern:
+        intr = calib.get_intrinsics("main", args.res, pattern=args.pattern)
+        print(f"[main] RMS={intr.rms:.4f}, K={intr.K().tolist()}, dist={intr.dist}")
+        
+        intr2 = calib.get_intrinsics("tp", args.res, pattern=args.pattern)
+        print(f"[main] RMS={intr2.rms:.4f}, K={intr2.K().tolist()}, dist={intr2.dist}")
+        
+        intr3 = calib.get_intrinsics("uw_wth_lens_dist", args.res, pattern=args.pattern)
+        print(f"[main] RMS={intr3.rms:.4f}, K={intr3.K().tolist()}, dist={intr3.dist}")
+    else:
+        report = calib.precompute_all(args.res, force=args.force)
+        print("Calibration report:")
+        for cam, results in report.items():
+            for pattern, rms in results:
+                print(f"  {cam}/{pattern}: RMS={rms:.4f}")
