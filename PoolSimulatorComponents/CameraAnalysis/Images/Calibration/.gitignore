@@ -2,3 +2,7 @@
 *.jpg
 *.png
 *.jpeg
+*json
+
+# Meshroom caches
+**/MeshroomCache

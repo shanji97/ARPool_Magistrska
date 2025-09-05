@@ -7,9 +7,9 @@ from enum import Enum
 import json
 
 #Custom imports
-from .droid_cam_controller import DroidCamController
-from .object_detector import ObjectDetector
-from .calibration import Calibrator
+from droid_cam_controller import DroidCamController
+from object_detector import ObjectDetector
+from calibration import Calibrator
 
 class DetectionMode(Enum):
     Tresholding = 1
@@ -78,10 +78,8 @@ user_adjusted_bottom_right = False
 
 #Camera and stream
 def open_stream():
-
     if not controller.is_host_reachable(2):
         print(f"Device at {CAPTURING_DEVICE_IP}:{PORT} is not reachable. Check network settings. Exiting.") 
-        return None  
     
     resolution = RESOLUTION
     
@@ -95,20 +93,18 @@ def open_stream():
         capture = cv2.VideoCapture(send_camera_command("get_stream_url", FALLBACK_RESOLUTION))
         if not capture.isOpened():
             print(f"Failed to open stream with {FALLBACK_RESOLUTION} resolution.")
-            return None
+            return (None, None)
     ret, _ = capture.read()
     if not ret:
         print(f"Could not connect to DroidCam server. Check IP {CAPTURING_DEVICE_IP} and PORT {PORT}.")
         capture.release()
-        return None
+        return (None, None)
     
     return (capture, resolution)
 
 # Calibration part
  
 def _load_intrinsics_for_camera(controller: DroidCamController, dimensions: str):
-    """Load intrinsics for the active lens and precompute rectification maps.
-    Call once at startup and whenever the camera changes."""
     global _K, _Knew, _dist, _map1, _map2
     meta = controller.CAMERA_MAP[controller.current_camera]
     cam_key = (meta or {}).get("folder_alias", "main")
@@ -116,17 +112,25 @@ def _load_intrinsics_for_camera(controller: DroidCamController, dimensions: str)
     if not cam_key:
         _K = _Knew = _dist = _map1 = _map2 = None
         return
+        
     intr = _calib.get_intrinsics_auto(cam_key, dimensions, candidates=PATTERN)
     _K = intr.K(); 
     _dist = np.array(intr.dist, np.float64)
     w, h = map(int, dimensions.split('x'))
     
-    _Knew, _ = cv2.getOptimalNewCameraMatrix(_K, _dist, (w, h), 1, (w, h))
-    _map1, _map2 = cv2.initUndistortRectifyMap(_K, _dist, None, _Knew, (w, h), cv2.CV_16SC2)
-    if DEBUG and _K is not None:
-        print("[K (distorted)]\n", _K)
-        print("[dist] ", _dist.ravel())
-        print("[K_new (undistorted)]\n", _Knew)
+    if USE_UNDISTORTED_VIEW:
+        if _Knew is None or _map1 is None or _map2 is None:
+            print(f"[calib] Building undistortion maps for {cam_key} at {dimensions}")
+            _Knew, _ = cv2.getOptimalNewCameraMatrix(_K, _dist, (w, h), 1.0, (w, h))
+            _map1, _map2 = cv2.initUndistortRectifyMap(
+                _K, _dist, None, _Knew, (w, h), cv2.CV_16SC2
+            )
+    else:
+        _Knew = None
+        _map1 = _map2 = None
+        if DEBUG and _K is not None:
+            print("[K (distorted)]\n", _K)
+            print("[dist] ", _dist.ravel())
     
 def undistort_frame_if_needed(frame):
     if USE_UNDISTORTED_VIEW and _map1 is not None:
@@ -310,6 +314,7 @@ def main():
     if dimensions is not None:
         # First run: compute everything it finds under each camera (all pattern subfolders)
         # Set force=True only the very first time to overwrite
+        global _calib
         _calib = Calibrator(work_resolution=dimensions, device="i16pm", allow_center_crop=True, force_recalib=True)
         try:
             pre = _calib.precompute_all(dimensions, force=False)
