@@ -59,7 +59,6 @@ _Knew = None
 _dist = None
 _map1 = None
 _map2 = None
-
 _env = None
 
 # Connectivity / camera control flags (for AR user adjustments).
@@ -267,10 +266,9 @@ def log_csv_row(writer,
                 yolo_results,
                 resolution_str: str = "1920x1080",
                 cuda_available = "True",
-                cuda_version = "12.8", 
+                cuda_version = "12.8",
                 vram_mb_int =  0,
-                table_width_mm = 0,
-                table_length_mm = 0 # dummy placeholder
+                enviromentInfo: EnvironmentConfig = None
                 ):
     vram_mb = str(vram_mb_int)
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -282,12 +280,12 @@ def log_csv_row(writer,
         int(mean_h), int(mean_s), int(mean_v)
     ]
 
-    
+    (length, width) = enviromentInfo.table.playfield_mm
     if table_bbox:
         _, _, w, h = table_bbox
-        row += [w, h, table_width_mm, table_length_mm]
+        row += [w, h, width, length]
     else:
-        row += [None, None, table_length_mm, table_length_mm]
+        row += [None, None, width, length]
 
     for pt in pockets:
         if pt is None or pt == (None, None):

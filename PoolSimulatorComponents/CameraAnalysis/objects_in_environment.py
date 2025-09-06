@@ -14,8 +14,8 @@ class TableSpec:
 class PocketSpec:
     corner_pocket_mm: int
     side_pocket_mm: int     # Side pockets are typically wider than corne ones
-    corner_jaw_radius: Optional[int] = None 
-    side_jaw_radius: Optional[int] = None 
+    corner_jaw_radius_mm: Optional[int] = None 
+    side_jaw_radius_mm: Optional[int] = None 
     # Meaning: Radius of curvature of the jaws (the cushion cut-outs that form the pocket).
     # Why it matters: A larger radius makes the pocket “accept” more angled shots, while a sharper (small radius) cut is unforgiving.
     # Kept optional so you can later refine geometry if you want to model rebounds realistically.
@@ -85,12 +85,12 @@ PRESET_TABLES: List[TableSpec] = [
 ]
 
 PRESET_POCKETS = [
-    ("Pool (typical relaxed)", PocketSpec(120, 135)),
-    ("Pool (tighter)",         PocketSpec(110, 125)),
-    ("Chinese 8-ball (tight)", PocketSpec(105, 120)),
+    ("Pool (typical relaxed)", PocketSpec(120, 135, corner_jaw_radius_mm=18, side_jaw_radius_mm=20)),
+    ("Pool (tighter)",         PocketSpec(110, 125, corner_jaw_radius_mm=12, side_jaw_radius_mm=14)),
+    ("Chinese 8-ball (tight)", PocketSpec(105, 120, corner_jaw_radius_mm=10, side_jaw_radius_mm=12)),
 ]
 
-ENVIRONMENT_JSON = "./Configuration/last_environment.json"
+ENVIRONMENT_JSON = "../Configuration/last_environment.json"
 
 DEFAULT_BALLS = BallSpec(diameter_mm=57.15)
 
@@ -115,13 +115,13 @@ def load_last_environment(path: str) -> Optional[EnvironmentConfig]:
     if not os.path.exists(path):
         return None
 
+    data = None
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    table = TableSpec(**data["table"])
-    pockets = PocketSpec(**data["pockets"])
-    balls = BallSpec(**data["ball_spec"])
-    camera = CameraSpec(**data["camera"])
-    return EnvironmentConfig(table, pockets, balls, camera)
+    return EnvironmentConfig(TableSpec(**data["table"]),
+                             PocketSpec(**data["pockets"]),
+                             BallSpec(**data["ball_spec"]),
+                             CameraSpec(**data["camera"]))
 
 def _print_table_menu():
     print("\n Select TABLE size:")
@@ -134,7 +134,10 @@ def _print_table_menu():
 def _print_pocket_menu():
     print("\nSelect POCKET profile:")
     for idx, (name, p) in enumerate(PRESET_POCKETS, start=1):
-        print(f"  {idx}. {name} — corner {p.corner_pocket_mm} mm / side {p.side_pocket_mm} mm")
+        cj = f"{p.corner_jaw_radius_mm} mm" if p.corner_jaw_radius_mm is not None else "—"
+        sj = f"{p.side_jaw_radius_mm} mm" if p.side_jaw_radius_mm is not None else "—"
+        print(f"  {idx}. {name} — mouth: corner {p.corner_pocket_mm} mm / side {p.side_pocket_mm} mm; "
+              f"jaw radius: corner {cj} / side {sj}")
     print("  c. Custom (enter manually)")
 
 def _read_choice(valid_choices: List[str]) -> str:
@@ -156,6 +159,27 @@ def _read_int(prompt: str, min_v: int, max_v: int, default: Optional[int]=None) 
         except ValueError:
             pass
         print("Invalid value")
+        
+def _read_optional_int(prompt: str, min_v: int, max_v: int, default: Optional[int] = None) -> Optional[int]:
+    """
+    Like _read_int but allows empty input to keep 'None' (no jaw radius modeled).
+    If a default is provided, hitting Enter returns that default instead of None.
+    """
+    while True:
+        raw = input(
+            f"{prompt} [{min_v}..{max_v}]"
+            + (f" (default {default})" if default is not None else " (Enter for none)")
+            + ": "
+        ).strip()
+        if raw == "":
+            return default  # may be None
+        try:
+            val = int(float(raw))
+            if min_v <= val <= max_v:
+                return val
+        except ValueError:
+            pass
+        print("Invalid value.")
 
 def _read_float(prompt: str, min_v: float, max_v: float, default: Optional[float]=None) -> float:
     while True:
@@ -174,6 +198,7 @@ def set_up_table():
     _print_table_menu()
     choice = _read_choice([str(i) for i in range(1, len(PRESET_TABLES)+1)] + ["c"])
     if choice == "c":
+        user_defined_str = "User-defined"
         Lpf = _read_int("Playfield length (mm)", 1500, 3200, 2540)
         Wpf = _read_int("Playfield width (mm)", 700, 1800, 1270)
         use_overall = input("Do you know overall cabinet size? (y/n): ").strip().lower()
@@ -183,19 +208,46 @@ def set_up_table():
             Lov = _read_int("Overall length (mm)", 2000, 3300, None)
             Wov = _read_int("Overall width (mm)", 1000, 1800, None)
             overall = (Lov, Wov)
-            return TableSpec("Custom", (Lpf, Wpf), overall, "User-defined")
+            return TableSpec("Custom", (Lpf, Wpf), overall, user_defined_str)
+        return TableSpec("Custom", (Lpf, Wpf), overall, user_defined_str)
     else:
         return PRESET_TABLES[int(choice) - 1]
 
 def set_up_pockets():
     _print_pocket_menu()
     choice = _read_choice([str(i) for i in range(1, len(PRESET_POCKETS)+1)] + ["c"])
+    
     if choice == "c":
         corner = _read_int("Corner pocket mouth (mm)", 95, 160, 120)
-        side   = _read_int("Side pocket mouth (mm)", 105, 180, 135)
-        return PocketSpec(corner_pocket_mm=corner, side_pocket_mm=side)
-    else:
-        return PRESET_POCKETS[int(choice)-1][1]
+        side   = _read_int("Side pocket mouth (mm)",   105, 180, 135)
+        corner_jaw = _read_optional_int("Corner jaw radius (mm)", 5, 40, 18)
+        side_jaw   = _read_optional_int("Side jaw radius (mm)",   5, 40, 20)
+        return PocketSpec(
+            corner_pocket_mm=corner,
+            side_pocket_mm=side,
+            corner_jaw_radius_mm=corner_jaw,
+            side_jaw_radius_mm=side_jaw,
+        )
+    _, preset = PRESET_POCKETS[int(choice) - 1]
+    
+    override = input("Override jaw radii? (y/N): ").strip().lower() == "y"
+    if override:
+        return PocketSpec(
+            corner_pocket_mm = preset.corner_pocket_mm,
+            side_pocket_mm = preset.side_pocket_mm,
+            corner_jaw_radius_mm = _read_optional_int(
+                "Corner jaw radius (mm)",
+                5, 40,
+                default=preset.corner_jaw_radius_mm
+            ),
+            side_jaw_radius_mm = _read_optional_int(
+                "Side jaw radius (mm)",
+                5, 40,
+                default=preset.side_jaw_radius_mm
+            ),
+        )
+    
+    return preset
     
 def set_up_camera_height_mm():
     print("\nEnter camera height from FLOOR (m), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
@@ -221,10 +273,10 @@ def get_environment_config(interactive: bool = True,
         table = PRESET_TABLES[3] # 9ft Tournament table
         pockets =  PRESET_POCKETS[0][1]
         camera_height_mm = 2500 # 2.5m
-    env = EnvironmentConfig(   table,
-                                pockets,
-                                DEFAULT_BALLS,
-                                CameraSpec(camera_height_mm))
+    env = EnvironmentConfig(table,
+                            pockets,
+                            DEFAULT_BALLS,
+                            CameraSpec(camera_height_mm))
     save_environment(env, cache_path)
     
     return env
