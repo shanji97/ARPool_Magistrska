@@ -10,6 +10,7 @@ import json
 from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator
+from objects_in_environment import get_environment_config, EnvironmentConfig
 
 class DetectionMode(Enum):
     Tresholding = 1
@@ -32,11 +33,6 @@ PATTERN = [
     "35mm_7x4",
     ]
 
-TABLE_WIDTH_MILIMETERS = 1000 # Set for the specific table.
-TABLE_LENGTH_MILIMETERS = 2000
-#STANDARD_TABLE_DIMENSIONS_MILIMETERS = [(2438, 1219),
-#                                        (2743, 1372),
-#                                        (3048, 1524)]
 BALL_RADIUS_RANGE_PX = (10, 30)
 
 # Table colors
@@ -63,6 +59,7 @@ _Knew = None
 _dist = None
 _map1 = None
 _map2 = None
+_env = None
 
 # Connectivity / camera control flags (for AR user adjustments).
 user_confirmed_pocket_positions = False
@@ -144,6 +141,15 @@ def undistort_points(points_xy):
     undistorted_points = cv2.undistortPoints(points, _K, _dist, P=_Knew)
     return undistorted_points.reshape(-1, 2)
 
+def print_precompute_results(precompute_results: dict):
+    print("\n=== Calibration summary (per camera · per pattern) ===")
+    for cam in sorted(precompute_results.keys()):
+        print(f"\n[{cam}]")
+        rows = sorted(precompute_results[cam], key=lambda x: x[0].lower())  # (pattern, rms)
+        for pattern, rms in rows:
+            print(f"  - {pattern:<14}  RMS={rms:.4f}")
+    print("\nDone.\n")
+
 # Camera control part
 def send_camera_command(command: str, *args):
     if command == "toggle_torch":
@@ -222,16 +228,6 @@ def check_keys(dimensions: str = "1920x1080"):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
     return (True, camera_info)
 
-
-def print_precompute_results(precompute_results: dict):
-    print("\n=== Calibration summary (per camera · per pattern) ===")
-    for cam in sorted(precompute_results.keys()):
-        print(f"\n[{cam}]")
-        rows = sorted(precompute_results[cam], key=lambda x: x[0].lower())  # (pattern, rms)
-        for pattern, rms in rows:
-            print(f"  - {pattern:<14}  RMS={rms:.4f}")
-    print("\nDone.\n")
-
 def prepare_log_file(ball_detector: ObjectDetector):
     filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     file = open(filename, 'w', newline='')
@@ -260,9 +256,21 @@ def prepare_log_file(ball_detector: ObjectDetector):
     writer.writerow(header)
     return file, writer, cuda_available, cuda_version, vram
 
-def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
-                table_bbox, classical_results, yolo_results,
-                cuda_available, cuda_version, vram_mb):
+def log_csv_row(writer, 
+                frame,
+                table_mask,
+                pockets,
+                start_time,
+                table_bbox,
+                classical_results,
+                yolo_results,
+                resolution_str: str = "1920x1080",
+                cuda_available = "True",
+                cuda_version = "12.8",
+                vram_mb_int =  0,
+                enviromentInfo: EnvironmentConfig = None
+                ):
+    vram_mb = str(vram_mb_int)
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mean_h, mean_s, mean_v, _ = cv2.mean(hsv_frame, mask=table_mask)
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -272,11 +280,12 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
         int(mean_h), int(mean_s), int(mean_v)
     ]
 
+    (length, width) = enviromentInfo.table.playfield_mm
     if table_bbox:
         _, _, w, h = table_bbox
-        row += [w, h, TABLE_WIDTH_MILIMETERS, TABLE_LENGTH_MILIMETERS]
+        row += [w, h, width, length]
     else:
-        row += [None, None, TABLE_WIDTH_MILIMETERS, TABLE_LENGTH_MILIMETERS]
+        row += [None, None, width, length]
 
     for pt in pockets:
         if pt is None or pt == (None, None):
@@ -305,10 +314,11 @@ def log_csv_row(writer, frame, table_mask, pockets, resolution_str, start_time,
 
     writer.writerow(row)
 
-
-
-
 def main():
+    
+    global _env
+    _env = get_environment_config( interactive=True, use_last_known=True)        
+    
     capture, dimensions = open_stream()
     
     if dimensions is not None:
