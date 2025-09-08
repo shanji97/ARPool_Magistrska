@@ -5,8 +5,9 @@ from datetime import datetime
 import csv
 from enum import Enum
 import json
+import re
 
-#Custom imports
+# Custom imports
 from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator
@@ -17,10 +18,6 @@ class DetectionMode(Enum):
     YOLO = 2
     Both = 3
 
-# Globals
-CAPTURING_DEVICE_IP = "192.168.0.40"
-PORT = "4747"
-controller = DroidCamController(CAPTURING_DEVICE_IP, PORT)
 # Max resolution
 RESOLUTION = "1920x1080"
 PERFORMANCE_RESOLUTION = "1280x720"
@@ -53,6 +50,7 @@ DETECTION_MODE = DetectionMode.Both
 USE_UNDISTORTED_VIEW = True
 
 # Runtime state
+_controller = None
 _calib = None
 _K = None
 _Knew = None
@@ -73,10 +71,14 @@ user_adjusted_top_left = False
 user_is_holding_bottom_right = False
 user_adjusted_bottom_right = False
 
-#Camera and stream
+# Camera and stream
+def validate_ip(ip:str):
+    pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
+    return re.match(pattern, ip) is not None
+
 def open_stream():
-    if not controller.is_host_reachable(2):
-        print(f"Device at {CAPTURING_DEVICE_IP}:{PORT} is not reachable. Check network settings. Exiting.") 
+    if not _controller or not _controller.is_host_reachable(2):
+        print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.") 
     
     resolution = RESOLUTION
     
@@ -93,7 +95,7 @@ def open_stream():
             return (None, None)
     ret, _ = capture.read()
     if not ret:
-        print(f"Could not connect to DroidCam server. Check IP {CAPTURING_DEVICE_IP} and PORT {PORT}.")
+        print(f"Could not connect to DroidCam server. Check IP {_controller.ip} and PORT {_controller.port}.")
         capture.release()
         return (None, None)
     
@@ -101,9 +103,10 @@ def open_stream():
 
 # Calibration part
  
-def _load_intrinsics_for_camera(controller: DroidCamController, dimensions: str):
-    global _K, _Knew, _dist, _map1, _map2
-    meta = controller.CAMERA_MAP[controller.current_camera]
+def _load_intrinsics_for_camera(dimensions: str):
+    global _K, _Knew, _dist, _map1, _map2, _controller
+    
+    meta = _controller.CAMERA_MAP[_controller.current_camera]
     cam_key = (meta or {}).get("folder_alias", "main")
     
     if not cam_key:
@@ -153,36 +156,36 @@ def print_precompute_results(precompute_results: dict):
 # Camera control part
 def send_camera_command(command: str, *args):
     if command == "toggle_torch":
-        controller.toggle_torch()
+        _controller.toggle_torch()
     elif command == "reset_torch":
-        controller.reset_all_torch_states()
+        _controller.reset_all_torch_states()
     elif command == "set_focus_mode":
         if args:
-            controller.set_focus_mode(args[0])
+            _controller.set_focus_mode(args[0])
     elif command == "set_manual_focus_value":
         if args:
-            controller.set_manual_focus_value(args[0])
+            _controller.set_manual_focus_value(args[0])
     elif command == "set_zoom":
         if args:
-            controller.set_zoom(args[0])
+            _controller.set_zoom(args[0])
     elif command == "set_exposure":
         if args:
-            controller.set_exposure(args[0])
+            _controller.set_exposure(args[0])
     elif command == "set_white_balance":
         if args:
-            controller.set_white_balance(args[0])
+            _controller.set_white_balance(args[0])
     elif command == "sync_all_locks":
-        controller.sync_all_locks()
+        _controller.sync_all_locks()
     elif command == "apply_defaults":
-        controller.apply_default_settings()
+        _controller.apply_default_settings()
     elif command == "select_camera":
         if args:
-            controller.select_camera(args[0])   
-            _load_intrinsics_for_camera(controller, args[1])
+            _controller.select_camera(args[0])   
+            _load_intrinsics_for_camera(args[1])
     elif command == "get_stream_url":
-            return controller.get_stream_url(args[0])
+            return _controller.get_stream_url(args[0])
     elif command == "dump_camera_info":
-            info = controller.get_camera_info()
+            info = _controller.get_camera_info()
             if info:
                 print(json.dumps(info, indent=2))
                 return info
@@ -208,21 +211,12 @@ def check_keys(dimensions: str = "1920x1080"):
         send_camera_command("set_exposure", 1.0)
     elif key == ord('c'):
         # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
-        next_cam = (controller.current_camera + 1) % len(controller.CAMERA_MAP)
+        next_cam = (_controller.current_camera + 1) % len(_controller.CAMERA_MAP)
         send_camera_command("select_camera", next_cam, dimensions)
         camera_info = send_camera_command("dump_camera_info")
-        
-    elif key == ord('0'):
-        send_camera_command("select_camera", 0, dimensions)  # Front
-        camera_info = send_camera_command("dump_camera_info")
-    elif key == ord('1'):
-        send_camera_command("select_camera", 1, dimensions)  # Main
-        camera_info = send_camera_command("dump_camera_info")
-    elif key == ord('2'):
-        send_camera_command("select_camera", 2, dimensions)  # Telephoto
-        camera_info = send_camera_command("dump_camera_info")
-    elif key == ord('3'):
-        send_camera_command("select_camera", 3, dimensions)  # Ultrawide
+    elif key in [ord('0'), ord('1'), ord('2'), ord('3')]:
+        camera_number = int(chr(key))
+        send_camera_command("select_camera", camera_number, dimensions)
         camera_info = send_camera_command("dump_camera_info")
     elif key == ord('i'):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
@@ -311,10 +305,19 @@ def log_csv_row(writer,
         resolution_str, PERFORMANCE_MODE, DETECTION_MODE.name,
         cuda_available, cuda_version, vram_mb, elapsed_ms
     ]
-
     writer.writerow(row)
 
 def main():
+    
+    ip = input("Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
+    while not validate_ip(ip):
+        print("Invalid IP format. Try again.")
+        ip = input("Enter DroidCam IP address: ").strip()
+        
+    port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
+    
+    global _controller
+    _controller = DroidCamController(ip, port)
     
     global _env
     _env = get_environment_config( interactive=True, use_last_known=True)        
@@ -328,7 +331,7 @@ def main():
         _calib = Calibrator(work_resolution=dimensions, device="i16pm", allow_center_crop=True, force_recalib=True)
         try:
             pre = _calib.precompute_all(dimensions, force=False)
-            _load_intrinsics_for_camera(controller, dimensions)
+            _load_intrinsics_for_camera(_controller, dimensions)
             if DEBUG:
                 print_precompute_results(pre)
         except Exception as e:

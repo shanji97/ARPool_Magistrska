@@ -19,6 +19,7 @@ class ObjectDetector:
     def get_gpu_info():
         try:
             cuda_version = "N/A"
+            vram = 0
             cuda_available = torch.cuda.is_available()
             if cuda_available:
                 device = torch.device('cuda:0')
