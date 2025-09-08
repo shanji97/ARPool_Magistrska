@@ -42,7 +42,7 @@ class DroidCamController:
     WB_RANGE = (2000, 8000)
     MF_RANGE = (0.0, 1.0)
 
-    def __init__(self, ip: str, port: str = 4747):
+    def __init__(self, ip: str, port: str = "4747"):
         self.ip = ip
         self.port = port
         self.base_url = f'http://{ip}:{port}'
@@ -91,7 +91,8 @@ class DroidCamController:
         try:
             r = requests.get(url, timeout = 2)
             r.raise_for_status()
-            return r.json()
+            self.info = r.json()
+            return self.info
         except Exception as e:
             print(f"Failed to get camera info: {e}")
             return {}
@@ -156,14 +157,14 @@ class DroidCamController:
         value = max(self.MF_RANGE[0], min(self.MF_RANGE[1], value))
         self.manual_focus_value = value  # Save for future sync
         info = self.get_camera_info()
-        if info.get("focusMode") == int(FocusMode.Manual):
+        if info.get("focusMode") == FocusMode.Manual.value:
             actual_focus = info.get("mfValue", 0)
             if abs(value - actual_focus) > 0.01:
                 print(f"Setting Manual Focus to {value}")
                 self.set_manual_focus(value)
     
     def set_focus_mode(self, mode: int):
-        if mode not in (FocusMode.Auto.value, FocusMode.Continuous, FocusMode.Manual.value):
+        if mode not in (FocusMode.Auto.value, FocusMode.Continuous.value, FocusMode.Manual.value):
             print(f"Invalid focus mode: {mode}")
             return
         current_info = self.get_camera_info()
@@ -172,9 +173,10 @@ class DroidCamController:
         if mode != current_mode:
             print(f"Switching focus mode to {mode}")
             self._put(f"/v1/camera/autofocus_mode/{mode}")
-        if mode == FocusMode.Manual:
+        if mode == FocusMode.Manual.value:
              actual_focus = current_info.get("mfValue", -1)
-             if abs(self.manual_focus_value - actual_focus) > 0.01:
+             minimum_sync_error = 0.01
+             if abs(self.manual_focus_value - actual_focus) > minimum_sync_error:
                 print(f"Syncing Manual Focus to {self.manual_focus_value}")
                 self.set_manual_focus(self.manual_focus_value)
 
