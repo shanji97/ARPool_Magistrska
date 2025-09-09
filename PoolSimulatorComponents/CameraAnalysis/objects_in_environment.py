@@ -9,6 +9,9 @@ class TableSpec:
     playfield_mm: Tuple[int, int]
     overall_mm: Optional[Tuple[int, int]] = None
     notes: str = ""
+    cloth_profile: Optional[str] = None
+    cloth_lower_hsv: Optional[Tuple[int, int, int]] = None
+    cloth_upper_hsv: Optional[Tuple[int, int, int]] = None
     
 @dataclass
 class PocketSpec:
@@ -72,7 +75,7 @@ PRESET_TABLES: List[TableSpec] = [
             notes="Typical 8ft home table"),
     TableSpec("8.5ft (pro-8)",
             playfield_mm=(2340, 1170),
-            overall_mm=None,
+            overall_mm=(2543, 1272),
             notes="Pro-8, no standard cabinet ref"),
     TableSpec("9ft (tournament)",
             playfield_mm=(2540, 1270),
@@ -90,9 +93,44 @@ PRESET_POCKETS = [
     ("Chinese 8-ball (tight)", PocketSpec(105, 120, corner_jaw_radius_mm=10, side_jaw_radius_mm=12)),
 ]
 
+PRESET_CLOTHS = {
+    "Green cloth":        ((35, 40, 40),  (85, 255, 255)),
+    "Blue (tournament)":  ((95, 60, 40),  (135,255,255)),
+    "Snooker green":      ((40, 60, 40),  (80, 255, 255)),
+    "Grey cloth":         ((0,  0, 40),   (180, 60, 220)),  # low saturation greys
+}
+# HSV formats -> OpenCV has hue value from 1° to 180° 
+# https://stackoverflow.com/questions/16685707/why-is-the-range-of-hue-0-180-in-opencv
+# https://docs.wpilib.org/en/stable/docs/software/vision-processing/wpilibpi/image-thresholding.html
+
+
+# Build an ordered list for UI selection
+CLOTH_OPTIONS = [
+    ("Green cloth",       *PRESET_CLOTHS["Green cloth"]),
+    ("Blue (tournament)", *PRESET_CLOTHS["Blue (tournament)"]),
+    ("Snooker green",     *PRESET_CLOTHS["Snooker green"]),
+    ("Grey cloth",        *PRESET_CLOTHS["Grey cloth"]),
+]
+
 ENVIRONMENT_JSON = "../Configuration/last_environment.json"
 
 DEFAULT_BALLS = BallSpec(diameter_mm=57.15)
+
+SCHEMA_VERSION = 2 # Bump every time when a change is made (add/rename/delete).
+
+def _tuple_or_none(x):
+    return tuple(x) if isinstance(x, (list, tuple)) else None
+
+def table_from_json_data(table_data) -> TableSpec:
+    return TableSpec( 
+        name=table_data.get("name", "Custom"),
+        playfield_mm=_tuple_or_none(table_data.get("playfield_mm")),
+        overall_mm=_tuple_or_none(table_data.get("overall_mm")),
+        notes=table_data.get("notes", ""),
+        cloth_profile=table_data.get("cloth_profile", ""),  # Added v2
+        cloth_lower_hsv=_tuple_or_none(table_data.get("cloth_lower_hsv")),  # Added v2
+        cloth_upper_hsv=_tuple_or_none(table_data.get("cloth_upper_hsv"))   # Added v2
+    )
 
 def _ensure_dir(path: str):
     directory = os.path.dirname(path)
@@ -102,6 +140,7 @@ def _ensure_dir(path: str):
 def save_environment(environment: EnvironmentConfig, path: str) -> None:
     _ensure_dir(path)
     payload = {
+        "_schema_version": SCHEMA_VERSION,
         "table": asdict(environment.table),
         "pockets": asdict(environment.pockets),
         "ball_spec": asdict(environment.ball_spec),
@@ -118,10 +157,25 @@ def load_last_environment(path: str) -> Optional[EnvironmentConfig]:
     data = None
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return EnvironmentConfig(TableSpec(**data["table"]),
-                             PocketSpec(**data["pockets"]),
-                             BallSpec(**data["ball_spec"]),
-                             CameraSpec(**data["camera"]))
+   
+    schema = data.get("_schema_version", 1)
+    # Table
+    table = table_from_json_data(data.get("table", {}))
+    
+    # Original environments objects
+    pockets = PocketSpec(**data["pockets"])
+    ball    = BallSpec(**data["ball_spec"])
+    camera  = CameraSpec(**data["camera"])
+    
+    env = EnvironmentConfig(table, pockets, ball, camera)
+    # Auto upgrade schema
+    if schema < SCHEMA_VERSION:
+        try:
+            save_environment(env, path)
+        except Exception:
+            pass
+        
+    return env
 
 def _print_table_menu():
     print("\n Select TABLE size:")
@@ -130,6 +184,12 @@ def _print_table_menu():
         ov = f" / overall {specification.overall_mm[0]}×{specification.overall_mm[1]} mm" if specification.overall_mm else ""
         print(f" {index}. {specification.name} - playfield {play_field}{ov} ({specification.notes})")
     print(" c. Custom (enter manually)")
+
+def _print_cloth_menu():
+    print("\nSelect TABLE CLOTH color profile:")
+    for idx, (name, lower, upper) in enumerate(CLOTH_OPTIONS, start=1):
+        print(f"  {idx}. {name} — lower {lower}, upper {upper}")
+    print("  c. Custom (enter HSV ranges manually)")
 
 def _print_pocket_menu():
     print("\nSelect POCKET profile:")
@@ -194,7 +254,27 @@ def _read_float(prompt: str, min_v: float, max_v: float, default: Optional[float
             pass
         print("Invalid value.")
 
-def set_up_table():
+def set_up_table(
+    preset_index: int | None = None,
+    custom_playfield_mm: tuple[int, int] | None = None,
+    custom_overall_mm: tuple[int, int] | None = None,
+) -> TableSpec:
+    from dataclasses import replace
+
+    # Fast paths (non-interactive)
+    if preset_index is not None:
+        # return a COPY, never mutate the preset entry
+        return replace(PRESET_TABLES[preset_index - 1])
+
+    if custom_playfield_mm is not None:
+        return TableSpec(
+            name="Custom",
+            playfield_mm=custom_playfield_mm,
+            overall_mm=custom_overall_mm,
+            notes="User-defined",
+        )
+        
+    # Interactive way
     _print_table_menu()
     choice = _read_choice([str(i) for i in range(1, len(PRESET_TABLES)+1)] + ["c"])
     if choice == "c":
@@ -211,7 +291,30 @@ def set_up_table():
             return TableSpec("Custom", (Lpf, Wpf), overall, user_defined_str)
         return TableSpec("Custom", (Lpf, Wpf), overall, user_defined_str)
     else:
-        return PRESET_TABLES[int(choice) - 1]
+        return replace(PRESET_TABLES[int(choice) - 1])
+    
+def set_up_hsv(table: TableSpec) -> TableSpec:
+    _print_cloth_menu()
+    choice = _read_choice([str(i) for i in range(1, len(CLOTH_OPTIONS)+1)] + ["c"])
+    if choice == "c":
+        print("Enter custom HSV lower bound (H,S,V):")
+        h_low = _read_int("Hue min", 0, 179)
+        s_low = _read_int("Sat min", 0, 255)
+        v_low = _read_int("Val min", 0, 255)
+        print("Enter custom HSV upper bound (H,S,V):")
+        h_up  = _read_int("Hue max", 0, 179)
+        s_up  = _read_int("Sat max", 0, 255)
+        v_up  = _read_int("Val max", 0, 255)
+        table.cloth_profile   = "Custom"
+        table.cloth_lower_hsv = (h_low, s_low, v_low)
+        table.cloth_upper_hsv = (h_up,  s_up,  v_up)
+        return table
+    
+    name, lower, upper = CLOTH_OPTIONS[int(choice)-1]
+    table.cloth_profile   = name
+    table.cloth_lower_hsv = lower
+    table.cloth_upper_hsv = upper
+    return table
 
 def set_up_pockets():
     _print_pocket_menu()
@@ -258,21 +361,36 @@ def get_environment_config(interactive: bool = True,
                            cache_path: str = ENVIRONMENT_JSON) -> EnvironmentConfig:
     
     if use_last_known:
-        last_known_environment = load_last_environment(cache_path)
-        if last_known_environment is not None:
-            return last_known_environment
+        env = load_last_environment(cache_path)
+        if env is not None:
+            needs_cloth = (
+                env.table.cloth_profile in (None, "") or
+                env.table.cloth_lower_hsv is None or
+                env.table.cloth_upper_hsv is None
+            )
+            if interactive and needs_cloth:
+                env.table = set_up_hsv(env.table)
+                save_environment(env, cache_path)
+            return env
         
     table = None
     pockets = None
     camera_height_mm = None
     if interactive:
        table = set_up_table()
+       table = set_up_hsv(table)
        pockets = set_up_pockets()
        camera_height_mm = set_up_camera_height_mm()
     else:
-        table = PRESET_TABLES[3] # 9ft Tournament table
-        pockets =  PRESET_POCKETS[0][1]
-        camera_height_mm = 2500 # 2.5m
+        # non-interactive sane defaults (COPY preset, don't mutate global list)
+        from dataclasses import replace
+        base = replace(PRESET_TABLES[3])  # 9ft tournament as default size copy
+        low, up = PRESET_CLOTHS["Grey cloth"]  # explicit profile by name
+        base.cloth_profile, base.cloth_lower_hsv, base.cloth_upper_hsv = "Grey cloth", low, up
+        table = base
+        pockets = PRESET_POCKETS[0][1]
+        camera_height_mm = 2500
+        
     env = EnvironmentConfig(table,
                             pockets,
                             DEFAULT_BALLS,

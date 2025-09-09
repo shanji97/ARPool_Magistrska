@@ -32,10 +32,6 @@ PATTERN = [
 
 BALL_RADIUS_RANGE_PX = (10, 30)
 
-# Table colors
-TABLE_LOWER_HSV = (35, 30, 40)
-TABLE_UPPER_HSV = (85, 255, 255)
-
 # Grayscale tresholds
 WHITE_TRESHOLD = 200 # For cue ball and striped balls.
 EIGHTBALL_TRESHOLD = 50
@@ -320,7 +316,7 @@ def main():
     _controller = DroidCamController(ip, port)
     
     global _env
-    _env = get_environment_config( interactive=True, use_last_known=True)        
+    _env = get_environment_config(interactive=True, use_last_known=True)        
     
     capture, dimensions = open_stream()
     
