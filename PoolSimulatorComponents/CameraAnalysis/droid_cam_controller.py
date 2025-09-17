@@ -31,11 +31,15 @@ class DroidCamController:
     TORCH_STATE_CONF = f"{CONF_PATH}/{TORCH_STATE_JSON}"
     
     CAMERA_MAP = {
-        0: {"name": "Front", "torch_supported": False, "folder_alias": "front"},
-        1: {"name": "Main", "torch_supported": True, "folder_alias": "main"},
-        2: {"name": "Telephoto", "torch_supported": True, "folder_alias": "tp"},
-        3: {"name": "Ultrawide", "torch_supported": True, "folder_alias": "uw_wth_lens_dist"}
-    } 
+    0: {"name": "Front", "torch_supported": False, "folder_alias": "front", 
+        "lens_correction_on": False, "lens_correction_manual_control":True, "os": "ios_18.6.2"},  
+    1: {"name": "Main", "torch_supported": True, "folder_alias": "main", 
+        "lens_correction_on": True, "lens_correction_manual_control": False, "os": "ios_18.6.2"},
+    2: {"name": "Telephoto", "torch_supported": True, "folder_alias": "tp", 
+        "lens_correction_on": True, "lens_correction_manual_control":False, "os": "ios_18.6.2"},
+    3: {"name": "Ultrawide", "torch_supported": True, "folder_alias": "uw_wth_lens_dist", 
+        "lens_correction_on": False, "lens_correction_manual_control":True, "os": "ios_18.6.2"},
+    }
 
     ZOOM_RANGE = (1.0, 6.0)
     EV_RANGE = (-8.0, 8.0)
@@ -56,22 +60,23 @@ class DroidCamController:
         return f'{self.base_url}/video?{resolution}'   
         
     def _load_torch_state(self):
+        torch_state_defaults = {"1": False, "2": False, "3": False}
         if os.path.exists(self.TORCH_STATE_CONF):
             with open(self.TORCH_STATE_CONF, "r") as file:
                 try:
                     data = json.load(file)
                     if isinstance(data, dict):
-                        self.torch_state = data.get("torch_state", {"1": False, "2": False, "3": False})
+                        self.torch_state = data.get("torch_state", torch_state_defaults)
                         if isinstance(self.torch_state, bool):
                            
-                            self.torch_state = {"1": False, "2": False, "3": False}
+                            self.torch_state = torch_state_defaults
                     else:
-                        self.torch_state = {"1": False, "2": False, "3": False}
+                        self.torch_state = torch_state_defaults
                 except Exception as e:
                     print(f"Failed to load torch state config: {e}")
-                    self.torch_state = {"1": False, "2": False, "3": False}
+                    self.torch_state = torch_state_defaults
         else:
-            self.torch_state = {"1": False, "2": False, "3": False}
+            self.torch_state = torch_state_defaults
             
     def _save_torch_state(self):
         os.makedirs(self.CONF_PATH, exist_ok=True)
@@ -198,11 +203,13 @@ class DroidCamController:
 
     def apply_default_settings(self):
         self.select_camera(Camera.Main.value)
-        self.set_zoom(1.5)
+        self.set_zoom(1.0)
         self.set_exposure(0)
         self.set_white_balance(WhiteBalance.Custom_1.value)
         self.set_focus_mode(FocusMode.Auto.value)
         print("Default settings applied.")
+        self.sync_all_locks()
+        self._sync_torch_state()
             
     def is_host_reachable(self, timeout = 2):
         try:

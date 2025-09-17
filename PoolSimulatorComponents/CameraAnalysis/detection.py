@@ -37,40 +37,43 @@ WHITE_TRESHOLD = 200 # For cue ball and striped balls.
 EIGHTBALL_TRESHOLD = 50
 STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
 
-MAX_RETRY_COUNT = 300 # 300 frames worth of hickups consecutively means there is a problem.
+MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means there is a problem.
+TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
 
 DEBUG = True
 PERFORMANCE_MODE = True
 DETECTION_MODE = DetectionMode.Both
 
-USE_UNDISTORTED_VIEW = True
-
 # Runtime state
 _controller = None
 _calib = None
+_ball_detector = None
 _K = None
 _Knew = None
 _dist = None
 _map1 = None
 _map2 = None
 _env = None
-
-# Connectivity / camera control flags (for AR user adjustments).
-user_confirmed_pocket_positions = False
-
-# Semaphore/Flag indicating pockets locked by user.
-# Flags for user adjusting pockets (e.g., via AR interface like Quest 3)
-# Top left
-user_is_holding_top_left = False
-user_adjusted_top_left = False
-# Bottom right
-user_is_holding_bottom_right = False
-user_adjusted_bottom_right = False
+_use_undistorted_view = False
+_is_changing_camera = False
+_H_cached = None
+_pockets_px_cached = None
+_pockets_ready = False
+_force_rescan = False
 
 # Camera and stream
-def validate_ip(ip:str):
+def _validate_ip(ip:str):
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
     return re.match(pattern, ip) is not None
+
+def setup_connection():
+    ip = input("Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
+    while not _validate_ip(ip):
+        print("Invalid IP format. Try again.")
+        ip = input("Enter DroidCam IP address: ").strip()
+        
+    port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
+    return (ip, port)  
 
 def open_stream():
     if not _controller or not _controller.is_host_reachable(2):
@@ -98,11 +101,11 @@ def open_stream():
     return (capture, resolution)
 
 # Calibration part
- 
 def _load_intrinsics_for_camera(dimensions: str):
-    global _K, _Knew, _dist, _map1, _map2, _controller
+    global _K, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
     
     meta = _controller.CAMERA_MAP[_controller.current_camera]
+    _use_undistorted_view = (meta or {}).get("lens_correction_on", False) # If lens correction is off, then correct it (for UW and front camera).
     cam_key = (meta or {}).get("folder_alias", "main")
     
     if not cam_key:
@@ -114,7 +117,7 @@ def _load_intrinsics_for_camera(dimensions: str):
     _dist = np.array(intr.dist, np.float64)
     w, h = map(int, dimensions.split('x'))
     
-    if USE_UNDISTORTED_VIEW:
+    if _use_undistorted_view:
         if _Knew is None or _map1 is None or _map2 is None:
             print(f"[calib] Building undistortion maps for {cam_key} at {dimensions}")
             _Knew, _ = cv2.getOptimalNewCameraMatrix(_K, _dist, (w, h), 1.0, (w, h))
@@ -129,7 +132,7 @@ def _load_intrinsics_for_camera(dimensions: str):
             print("[dist] ", _dist.ravel())
     
 def undistort_frame_if_needed(frame):
-    if USE_UNDISTORTED_VIEW and _map1 is not None:
+    if _use_undistorted_view and _map1 is not None:
         return cv2.remap(frame, _map1, _map2, cv2.INTER_LINEAR)
     return frame
 
@@ -148,6 +151,21 @@ def print_precompute_results(precompute_results: dict):
         for pattern, rms in rows:
             print(f"  - {pattern:<14}  RMS={rms:.4f}")
     print("\nDone.\n")
+    
+def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
+    global _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
+    _H_cached = homography_new
+    _pockets_px_cached = points_new
+    _pockets_ready = pockets_ready
+    _force_rescan = force_rescan
+
+def reset_pocket_globals():
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _is_changing_camera
+    _is_changing_camera = True
+    _H_cached = None
+    _pockets_px_cached = None
+    _pockets_ready = False
+    return
 
 # Camera control part
 def send_camera_command(command: str, *args):
@@ -176,8 +194,11 @@ def send_camera_command(command: str, *args):
         _controller.apply_default_settings()
     elif command == "select_camera":
         if args:
+            global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready
+            _is_changing_camera = True
             _controller.select_camera(args[0])   
             _load_intrinsics_for_camera(args[1])
+            reset_pocket_globals()
     elif command == "get_stream_url":
             return _controller.get_stream_url(args[0])
     elif command == "dump_camera_info":
@@ -192,7 +213,7 @@ def send_camera_command(command: str, *args):
         print(f"Unknown command: {command}")
         
 def check_keys(dimensions: str = "1920x1080"):
-    camera_info = None
+    camera_info = send_camera_command("dump_camera_info")
     key = cv2.waitKey(1)
     if key == ord('q'):
         return (False, camera_info)
@@ -216,13 +237,22 @@ def check_keys(dimensions: str = "1920x1080"):
         camera_info = send_camera_command("dump_camera_info")
     elif key == ord('i'):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
+    elif key == ord('r'):
+        global _force_rescan
+        _force_rescan = True
+        print("[pockets] Re-scan requested (r)")
     return (True, camera_info)
 
-def prepare_log_file(ball_detector: ObjectDetector):
+def prepare_log_file():
+    global _ball_detector
+    if _ball_detector is None:
+        print("Ball detector not instantiated properly")
+        return
+    
     filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     file = open(filename, 'w', newline='')
     writer = csv.writer(file)
-    cuda_available, cuda_version, vram  = ball_detector.get_gpu_info()
+    cuda_available, cuda_version, vram  = _ball_detector.get_gpu_info()
     
     header = [
         "timestamp", "cloth_H", "cloth_S", "cloth_V",
@@ -305,29 +335,24 @@ def log_csv_row(writer,
 
 def main():
     
-    ip = input("Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
-    while not validate_ip(ip):
-        print("Invalid IP format. Try again.")
-        ip = input("Enter DroidCam IP address: ").strip()
-        
-    port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
+    global _calib
+    _calib = Calibrator(allow_center_crop=True, force_recalib=False)
+    
+    global _env
+    _env = get_environment_config(interactive=True, use_last_known=True) 
+    
+    ip, port = setup_connection()
     
     global _controller
     _controller = DroidCamController(ip, port)
-    
-    global _env
-    _env = get_environment_config(interactive=True, use_last_known=True)        
+    _controller.apply_default_settings()
     
     capture, dimensions = open_stream()
     
     if dimensions is not None:
-        # First run: compute everything it finds under each camera (all pattern subfolders)
-        # Set force=True only the very first time to overwrite
-        global _calib
-        _calib = Calibrator(work_resolution=dimensions, device="i16pm", allow_center_crop=True, force_recalib=True)
         try:
             pre = _calib.precompute_all(dimensions, force=False)
-            _load_intrinsics_for_camera(_controller, dimensions)
+            _load_intrinsics_for_camera(dimensions)
             if DEBUG:
                 print_precompute_results(pre)
         except Exception as e:
@@ -337,24 +362,99 @@ def main():
         print("Could not open stream.")
         return
     
+    global _ball_detector
+    _ball_detector = ObjectDetector()
 
+    retry_count = 0
+    pockets_px_raw = None
+    table_fail_streak = 0
+    
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
+    
+    # Main execution loop
+    while True:
+        # Camera switching lock
+        if _is_changing_camera:
+            print("Changing camera - skipping current frame(s).")
+            retry_count = 0
+            _pockets_ready = False
+            continue
+            
+        ret, frame = capture.read()
+        
+        # Frame error lock
+        if not ret or frame is None:
+            retry_count += 1
+            if retry_count >= MAX_RETRY_COUNT_FRAMES:
+                print(f"Frame capture failed too many times ({MAX_RETRY_COUNT_FRAMES} frames), exiting.")
+                break
+            capture.release()
+            capture, frame = open_stream()
+            if not ret or frame is None:
+                print("Something wrong with open cv initialization - possible networking or device issues. Aborting......")
+                break
+            _is_changing_camera = True
+            continue
+        retry_count = 0
+            
+        frame_u = undistort_frame_if_needed(frame) # Variables change based on camera switching
 
-            #Calirate on all patterns.
+        table_bounding_box, table_mask, corners = _ball_detector.detect_table(
+            frame_u,
+            (_env.table.cloth_lower_hsv, 
+             _env.table.cloth_upper_hsv))
+        
+        if table_bounding_box is None or corners is None:
+            retry_count += 1
+            table_fail_streak += 1
+            if table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
+                _pockets_ready = False
+            continue
+        
+        Lmm, Wmm = _env.table.playfield_mm
+        expected_aspect_ratio = Lmm / Wmm
+        corners = _ball_detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
+        
+        if (not _pockets_ready) or _force_rescan:
+            
+            H_new = _ball_detector.homography_mm_to_px(corners, Lmm, Wmm)
+            corner_inset_mm, side_inset_mm = _env.pockets.derive_insets()
+            
+            pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
+            pockets_px_raw = _ball_detector.warp_mm_points_to_px(H_new, pockets_mm)
+            pockets_px = _ball_detector.smooth_pockets(pockets_px_raw)
+            
+            commit_cache(H_new, pockets_px, True, False)
+        else:
+            pockets_px_raw = _pockets_px_cached
+            
+        # if table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
+        #     new_lo, new_hi = _auto_tune_cloth_hsv(frame_u, table_mask)
+        #     _env.table.cloth_lower_hsv, _env.table.cloth_upper_hsv = new_lo, new_hi
+            
+        #     table_fail_streak = 0  # reset after adaptation
+        
+        
+        if DEBUG:
+            labels = ["TL","TR","ML","MR","BL","BR"]   # matches your pocket_mm_positions order
+            for (x,y), name in zip(pockets_px_raw, labels):
+                cv2.circle(frame_u, (int(x), int(y)), 10, (0,255,255), 2)
+                cv2.putText(frame_u, name, (int(x)+6, int(y)-6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
+    #Calirate on all patterns.
+    
     
     
     
     
     # JUST CALIBRATION
     #Object detection
-    # ball_detector = ObjectDetector()
     # log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
     
     # results_tresholding = []
     # results_yolo = []
     # pockets = [(0,0),(0,0)]
-    # retry_count = 0
         
-    # ret, frame = capture.read()
     # while True:
         
     #     should_break, camera_info = check_keys()
@@ -435,4 +535,4 @@ def main():
     
 if __name__ == "__main__":
     main()
-#Remarks: run "python -m pip cache purge" to purge GiB worth of cached packets.
+    print("If this was you first run, you probably can run 'python -m pip cache purge' to remove GiB worth of cached packets.")

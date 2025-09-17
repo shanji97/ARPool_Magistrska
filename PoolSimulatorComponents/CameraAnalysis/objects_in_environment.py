@@ -6,22 +6,49 @@ import json
 @dataclass
 class TableSpec:
     name: str
-    playfield_mm: Tuple[int, int]
+    playfield_mm: Tuple[float, float]
     overall_mm: Optional[Tuple[int, int]] = None
     notes: str = ""
     cloth_profile: Optional[str] = None
     cloth_lower_hsv: Optional[Tuple[int, int, int]] = None
     cloth_upper_hsv: Optional[Tuple[int, int, int]] = None
     
+    def pocket_mm_positions(self, corner_inset_mm: float, side_inset_mm: float):
+        L, W  = self.playfield_mm
+        
+        # Corners in mm (origin BL; +X length, +Y width)
+        TL = (0.0, W)
+        TR = (L, W)
+        BL = (0.0, 0.0)
+        BR = (L, 0.0)
+        # Apply insets along both axes
+        P_TL = (TL[0] + corner_inset_mm, TL[1] - corner_inset_mm)
+        P_TR = (TR[0] - corner_inset_mm, TR[1] - corner_inset_mm)
+        P_BL = (BL[0] + corner_inset_mm, BL[1] + corner_inset_mm)
+        P_BR = (BR[0] - corner_inset_mm, BR[1] + corner_inset_mm)
+        
+        # Side pockets @ 1/2 of the longer rail, inset inward from bottom/top.
+        P_ML = (0.5 * L, side_inset_mm)           # bottom (y≈0) inward +Y
+        P_MR = (0.5 * L, W - side_inset_mm)       # top    (y≈W) inward -Y
+        
+        return [P_TL, P_TR,  
+                P_ML, P_MR,
+                P_BL, P_BR]
+    
 @dataclass
 class PocketSpec:
-    corner_pocket_mm: int
-    side_pocket_mm: int     # Side pockets are typically wider than corne ones
-    corner_jaw_radius_mm: Optional[int] = None 
-    side_jaw_radius_mm: Optional[int] = None 
+    corner_pocket_diameter_mm: int   # Corner pocket inset is basically radius - so diameter / 2
+    side_pocket_diameter_mm: int     # Side pockets are typically wider than corne ones
+    corner_jaw_diameter_mm: Optional[int] = None 
+    side_jaw_diameters_mm: Optional[int] = None 
     # Meaning: Radius of curvature of the jaws (the cushion cut-outs that form the pocket).
     # Why it matters: A larger radius makes the pocket “accept” more angled shots, while a sharper (small radius) cut is unforgiving.
     # Kept optional so you can later refine geometry if you want to model rebounds realistically.
+
+    def derive_insets(self):
+        corner_inset = self.corner_pocket_diameter_mm * 0.5
+        side_inset = self.side_pocket_diameter_mm * 0.5
+        return float(corner_inset), float(side_inset)
     
 @dataclass
 class BallSpec:
@@ -37,17 +64,6 @@ class EnvironmentConfig:
     pockets: PocketSpec
     ball_spec: BallSpec
     camera: CameraSpec
-    
-    def table_uv_to_mm(self, u: float, v: float) -> Tuple[float, float]:
-        """
-        Convert normalized playfield coordinates (u,v) in [0..1] to mm.
-        Convention:
-          - (0,0) = near-left cushion nose corner
-          - u increases along table length (long rail direction)
-          - v increases along table width (short rail direction)
-        """
-        L, W = self.table.playfield_mm
-        return (u * L, v * W)
     
     def pocket_uv_positions(self) -> Dict[str, Tuple[float, float]]:
         """
@@ -79,7 +95,7 @@ PRESET_TABLES: List[TableSpec] = [
             notes="Pro-8, no standard cabinet ref"),
     TableSpec("9ft (tournament)",
             playfield_mm=(2540, 1270),
-            overall_mm=(2743, 1372),  #  9′×4.5′
+            overall_mm=(2743, 1372),  #  9′×4.5′ # > This is @ Crnuce
             notes="WPA tournament size"),
     TableSpec("10ft (snooker)",
             playfield_mm=(2845, 1422),
@@ -88,9 +104,9 @@ PRESET_TABLES: List[TableSpec] = [
 ]
 
 PRESET_POCKETS = [
-    ("Pool (typical relaxed)", PocketSpec(120, 135, corner_jaw_radius_mm=18, side_jaw_radius_mm=20)),
-    ("Pool (tighter)",         PocketSpec(110, 125, corner_jaw_radius_mm=12, side_jaw_radius_mm=14)),
-    ("Chinese 8-ball (tight)", PocketSpec(105, 120, corner_jaw_radius_mm=10, side_jaw_radius_mm=12)),
+    ("Pool (typical relaxed)", PocketSpec(120, 135, corner_jaw_diameter_mm=36, side_jaw_diameters_mm=40)),
+    ("Pool (tighter)",         PocketSpec(110, 125, corner_jaw_diameter_mm=24, side_jaw_diameters_mm=28)),
+    ("Chinese 8-ball (tight)", PocketSpec(105, 120, corner_jaw_diameter_mm=20, side_jaw_diameters_mm=24)),
 ]
 
 PRESET_CLOTHS = {
@@ -194,9 +210,9 @@ def _print_cloth_menu():
 def _print_pocket_menu():
     print("\nSelect POCKET profile:")
     for idx, (name, p) in enumerate(PRESET_POCKETS, start=1):
-        cj = f"{p.corner_jaw_radius_mm} mm" if p.corner_jaw_radius_mm is not None else "—"
-        sj = f"{p.side_jaw_radius_mm} mm" if p.side_jaw_radius_mm is not None else "—"
-        print(f"  {idx}. {name} — mouth: corner {p.corner_pocket_mm} mm / side {p.side_pocket_mm} mm; "
+        cj = f"{p.corner_jaw_diameter_mm} mm" if p.corner_jaw_diameter_mm is not None else "—"
+        sj = f"{p.side_jaw_diameters_mm} mm" if p.side_jaw_diameters_mm is not None else "—"
+        print(f"  {idx}. {name} — mouth: corner {p.corner_pocket_diameter_mm} mm / side {p.side_pocket_diameter_mm} mm; "
               f"jaw radius: corner {cj} / side {sj}")
     print("  c. Custom (enter manually)")
 
@@ -319,34 +335,37 @@ def set_up_hsv(table: TableSpec) -> TableSpec:
 def set_up_pockets():
     _print_pocket_menu()
     choice = _read_choice([str(i) for i in range(1, len(PRESET_POCKETS)+1)] + ["c"])
-    
+    corner_jaw_text = "Corner jaw diameter (mm)"
+    side_jaw_text = "Side jaw diameter (mm)"
     if choice == "c":
         corner = _read_int("Corner pocket mouth (mm)", 95, 160, 120)
         side   = _read_int("Side pocket mouth (mm)",   105, 180, 135)
-        corner_jaw = _read_optional_int("Corner jaw radius (mm)", 5, 40, 18)
-        side_jaw   = _read_optional_int("Side jaw radius (mm)",   5, 40, 20)
+        corner_jaw = _read_optional_int(corner_jaw_text, 10, 80, 36)
+        side_jaw   = _read_optional_int(side_jaw_text,   10, 80, 40)
         return PocketSpec(
-            corner_pocket_mm=corner,
-            side_pocket_mm=side,
-            corner_jaw_radius_mm=corner_jaw,
-            side_jaw_radius_mm=side_jaw,
+            corner_pocket_diameter_mm=corner,
+            side_pocket_diameter_mm=side,
+            corner_jaw_diameter_mm=corner_jaw,
+            side_jaw_diameters_mm=side_jaw,
         )
     _, preset = PRESET_POCKETS[int(choice) - 1]
     
     override = input("Override jaw radii? (y/N): ").strip().lower() == "y"
     if override:
         return PocketSpec(
-            corner_pocket_mm = preset.corner_pocket_mm,
-            side_pocket_mm = preset.side_pocket_mm,
-            corner_jaw_radius_mm = _read_optional_int(
-                "Corner jaw radius (mm)",
-                5, 40,
-                default=preset.corner_jaw_radius_mm
+            corner_pocket_diameter_mm = preset.corner_pocket_diameter_mm,
+            side_pocket_diameter_mm = preset.side_pocket_diameter_mm,
+            corner_jaw_diameter_mm = _read_optional_int(
+                corner_jaw_text,
+                10, 
+                80,
+                default=preset.corner_jaw_diameter_mm
             ),
-            side_jaw_radius_mm = _read_optional_int(
-                "Side jaw radius (mm)",
-                5, 40,
-                default=preset.side_jaw_radius_mm
+            side_jaw_diameters_mm = _read_optional_int(
+                side_jaw_text,
+                10, 
+                80,
+                default=preset.side_jaw_diameters_mm
             ),
         )
     
