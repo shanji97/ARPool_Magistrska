@@ -208,6 +208,8 @@ class DroidCamController:
         self.set_white_balance(WhiteBalance.Custom_1.value)
         self.set_focus_mode(FocusMode.Auto.value)
         print("Default settings applied.")
+        self.sync_all_locks()
+        self._sync_torch_state()
             
     def is_host_reachable(self, timeout = 2):
         try:

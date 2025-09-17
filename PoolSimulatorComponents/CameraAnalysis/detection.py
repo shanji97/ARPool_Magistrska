@@ -54,11 +54,11 @@ _dist = None
 _map1 = None
 _map2 = None
 _env = None
-_use_undistorted_view = False # True when using ultrawide or front camera (front does currently nothing but could be used for pattern to map 2D to 3D coordinated.)
+_use_undistorted_view = False
 _is_changing_camera = False
-_H_cached = None, 
-_pockets_px_cached = None,
-_pockets_ready = None
+_H_cached = None
+_pockets_px_cached = None
+_pockets_ready = False
 _force_rescan = False
 
 # Camera and stream
@@ -153,7 +153,7 @@ def print_precompute_results(precompute_results: dict):
     print("\nDone.\n")
     
 def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
-    global _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan,
+    global _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     _H_cached = homography_new
     _pockets_px_cached = points_new
     _pockets_ready = pockets_ready
@@ -345,6 +345,7 @@ def main():
     
     global _controller
     _controller = DroidCamController(ip, port)
+    _controller.apply_default_settings()
     
     capture, dimensions = open_stream()
     
@@ -365,15 +366,14 @@ def main():
     _ball_detector = ObjectDetector()
 
     retry_count = 0
-    pockets_px = None
+    pockets_px_raw = None
     table_fail_streak = 0
     
-    global _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     
     # Main execution loop
     while True:
         # Camera switching lock
-        global _is_changing_camera
         if _is_changing_camera:
             print("Changing camera - skipping current frame(s).")
             retry_count = 0
@@ -389,7 +389,10 @@ def main():
                 print(f"Frame capture failed too many times ({MAX_RETRY_COUNT_FRAMES} frames), exiting.")
                 break
             capture.release()
-            capture, _ = open_stream()
+            capture, frame = open_stream()
+            if not ret or frame is None:
+                print("Something wrong with open cv initialization - possible networking or device issues. Aborting......")
+                break
             _is_changing_camera = True
             continue
         retry_count = 0
@@ -400,6 +403,7 @@ def main():
             frame_u,
             (_env.table.cloth_lower_hsv, 
              _env.table.cloth_upper_hsv))
+        
         if table_bounding_box is None or corners is None:
             retry_count += 1
             table_fail_streak += 1
@@ -407,20 +411,33 @@ def main():
                 _pockets_ready = False
             continue
         
+        Lmm, Wmm = _env.table.playfield_mm
+        expected_aspect_ratio = Lmm / Wmm
+        corners = _ball_detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
+        
         if (not _pockets_ready) or _force_rescan:
             
-            Lmm, Wmm = _env.table.playfield_mm # Enviromnent stays the same for the whole game
-            H_new = _ball_detector.homography_mm_to_px(corners, Lmm, Wmm) # Can homography change? Based
+            H_new = _ball_detector.homography_mm_to_px(corners, Lmm, Wmm)
             corner_inset_mm, side_inset_mm = _env.pockets.derive_insets()
+            
             pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
-            pockets_px = _ball_detector.warp_mm_points_to_px(H_new, pockets_mm)
+            pockets_px_raw = _ball_detector.warp_mm_points_to_px(H_new, pockets_mm)
+            pockets_px = _ball_detector.smooth_pockets(pockets_px_raw)
             
             commit_cache(H_new, pockets_px, True, False)
+        else:
+            pockets_px_raw = _pockets_px_cached
+            
+        # if table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
+        #     new_lo, new_hi = _auto_tune_cloth_hsv(frame_u, table_mask)
+        #     _env.table.cloth_lower_hsv, _env.table.cloth_upper_hsv = new_lo, new_hi
+            
+        #     table_fail_streak = 0  # reset after adaptation
         
         
         if DEBUG:
             labels = ["TL","TR","ML","MR","BL","BR"]   # matches your pocket_mm_positions order
-            for (x,y), name in zip(pockets_px, labels):
+            for (x,y), name in zip(pockets_px_raw, labels):
                 cv2.circle(frame_u, (int(x), int(y)), 10, (0,255,255), 2)
                 cv2.putText(frame_u, name, (int(x)+6, int(y)-6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)

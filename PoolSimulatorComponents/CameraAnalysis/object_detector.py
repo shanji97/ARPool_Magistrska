@@ -14,12 +14,16 @@ class ObjectDetector:
             self.device = "cuda"
         # self.model = yolo(weights_path)
         # self.model.to(self.device)
+        self._corner_ema = None
+        self._pocket_ema = None
+        self._corner_alpha = .2
+        self._pocket_alpha = .25
     
-    
-    def get_gpu_info(self):
+    @staticmethod
+    def get_gpu_info():
+        cuda_version = "N/A"
+        vram = 0
         try:
-            cuda_version = "N/A"
-            vram = 0
             cuda_available = torch.cuda.is_available()
             if cuda_available:
                 device = torch.device('cuda:0')
@@ -46,12 +50,56 @@ class ObjectDetector:
         
         return np.array([top_left, top_right, bottom_left, bottom_right], dtype=np.float32)
     
+    def _exp_moving_avg(self, previous, x, alpha):
+        x = np.asarray(x, np.float32)
+        return x if previous is None else (alpha * x + (1.0 - alpha) * previous)
+    
+    def _aspect_ok(self, corners, expected_aspect_ratio = None, tolerance = .4):
+        if expected_aspect_ratio is None: return True
+        c = self._order_corners(np.asarray(corners, np.float32))
+        w = np.linalg.norm(c[1] - c[0]) + np.linalg.norm(c[3] - c[2]) # TR-TL + BR-BL 
+        h = np.linalg.norm(c[2] - c[0]) + np.linalg.norm(c[3] - c[1]) # BL-TL + BR-TR
+        # Opposite-edge averages → robust width/height
+        top    = np.linalg.norm(c[1] - c[0])  # TR - TL
+        bottom = np.linalg.norm(c[3] - c[2])  # BR - BL
+        left   = np.linalg.norm(c[2] - c[0])  # BL - TL
+        right  = np.linalg.norm(c[3] - c[1])  # BR - TR
+
+        width  = 0.5 * (top + bottom)
+        height = 0.5 * (left + right)
+        minimum_dimnesion = 1e-6
+        if height <= minimum_dimnesion or width <= minimum_dimnesion:
+            return False
+        aspect_ratio_obs = width / height
+        return (expected_aspect_ratio * (1 - tolerance)) <= aspect_ratio_obs <= (expected_aspect_ratio * (1 + tolerance))
+    
+    def gate_and_smooth_corners(self, corners, expected_aspect_ratio = None):
+        good = self._aspect_ok(corners, expected_aspect_ratio)
+        if not good and self._corner_ema is not None:
+            return self._corner_ema.copy()
+        self._corner_ema = self._exp_moving_avg(self._corner_ema, corners, self._corner_alpha)
+        return self._corner_ema.copy()
+    
+    def smooth_pockets(self, pockets_xy):
+        self._pocket_ema = self._exp_moving_avg(self._pocket_ema, pockets_xy, self._pocket_alpha)
+        return self._pocket_ema.copy()
+    
+    def _denoise_mask(self, mask, kernel_one = 3, kernel_two = 5):
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((kernel_one,kernel_one), np.uint8), iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((kernel_two,kernel_two), np.uint8), iterations=2)
+
+        return cv2.GaussianBlur(mask, (kernel_two, kernel_two),0)
+    
     def detect_table(self,
                     frame,
                     hsv_bounds):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, hsv_bounds[0], hsv_bounds[1])
+        mask = self._denoise_mask(
+            cv2.inRange(hsv, hsv_bounds[0], hsv_bounds[1]),
+            3, 5
+            )
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         if not contours:
             return (None, None, None)
         
@@ -97,6 +145,10 @@ class ObjectDetector:
             q = H @ v # Matrix multiplication
             out.append((float(q[0]/q[2]), float(q[1]/q[2])))
         return out
+    
+    def apply_smoothing(self, points_to_smooth):
+        pts = np.asarray(points_to_smooth, np.float32)
+        
     
     @staticmethod
     def detect_balls(frame, table_mask, min_ball_radius, max_ball_radius,gaussian_kernel = (9,9)):

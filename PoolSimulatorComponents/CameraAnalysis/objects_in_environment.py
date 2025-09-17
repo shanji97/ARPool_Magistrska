@@ -6,7 +6,7 @@ import json
 @dataclass
 class TableSpec:
     name: str
-    playfield_mm: Tuple[int, int]
+    playfield_mm: Tuple[float, float]
     overall_mm: Optional[Tuple[int, int]] = None
     notes: str = ""
     cloth_profile: Optional[str] = None
