@@ -19,11 +19,11 @@ class DetectionMode(Enum):
     Both = 3
 
 # Max resolution
-RESOLUTION = "1920x1080"
+WORK_RESOLUTION = "1920x1080"
 PERFORMANCE_RESOLUTION = "1280x720"
 FALLBACK_RESOLUTION = "1280x720"
 
-PATTERN = [
+PATTERNS = [
     "20mm_13x9",
     "25mm_10x7",
     "30mm_6x8",
@@ -41,7 +41,6 @@ MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means t
 TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
 
 DEBUG = True
-PERFORMANCE_MODE = True
 DETECTION_MODE = DetectionMode.Both
 
 # Runtime state
@@ -75,16 +74,15 @@ def setup_connection():
     port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
     return (ip, port)  
 
-def open_stream():
+def open_stream(dimensions: str = "1920x1080", perfomance_mode: bool = True):
     if not _controller or not _controller.is_host_reachable(2):
         print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.") 
     
-    resolution = RESOLUTION
-    
-    if PERFORMANCE_MODE is True:
+    resolution = WORK_RESOLUTION
+    if perfomance_mode is True:
         resolution = PERFORMANCE_RESOLUTION
         
-    capture = cv2.VideoCapture(send_camera_command("get_stream_url", resolution ))
+    capture = cv2.VideoCapture(send_camera_command("get_stream_url", resolution))
     
     if not capture.isOpened():
         print(f"Failed to open stream with {resolution} resolution, trying with {FALLBACK_RESOLUTION}...")
@@ -101,25 +99,42 @@ def open_stream():
     return (capture, resolution)
 
 # Calibration part
+def run_calibration_only(dimensions: str):
+    calib = Calibrator(WORK_RESOLUTION or dimensions)
+    summary = {}
+    try:
+        for cam_key in calib.CAMERA_FOLDERS.keys():
+            patterns = calib.available_patterns(cam_key) or [""]
+            rows = []
+            for pattern in patterns:
+                intr = calib.get_intrinsics(cam_key, dimensions, pattern=pattern)
+                rows.append((pattern or "<root>", intr.rms))
+            summary[cam_key] = rows
+    except Exception as e:
+        print(f"Error: {e}")
+        
+    finally:
+        print_precompute_results(summary)
+
 def _load_intrinsics_for_camera(dimensions: str):
     global _K, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
     
     meta = _controller.CAMERA_MAP[_controller.current_camera]
     _use_undistorted_view = (meta or {}).get("lens_correction_on", False) # If lens correction is off, then correct it (for UW and front camera).
-    cam_key = (meta or {}).get("folder_alias", "main")
+    cam_folder_alias = (meta or {}).get("folder_alias", "main")
     
-    if not cam_key:
+    if not cam_folder_alias:
         _K = _Knew = _dist = _map1 = _map2 = None
         return
         
-    intr = _calib.get_intrinsics_auto(cam_key, dimensions, candidates=PATTERN)
+    intr = _calib.get_intrinsics_auto(cam_folder_alias, dimensions, candidates=PATTERNS)
     _K = intr.K(); 
     _dist = np.array(intr.dist, np.float64)
     w, h = map(int, dimensions.split('x'))
     
     if _use_undistorted_view:
         if _Knew is None or _map1 is None or _map2 is None:
-            print(f"[calib] Building undistortion maps for {cam_key} at {dimensions}")
+            print(f"[calib] Building undistortion maps for {cam_folder_alias} at {dimensions}")
             _Knew, _ = cv2.getOptimalNewCameraMatrix(_K, _dist, (w, h), 1.0, (w, h))
             _map1, _map2 = cv2.initUndistortRectifyMap(
                 _K, _dist, None, _Knew, (w, h), cv2.CV_16SC2
@@ -328,7 +343,7 @@ def log_csv_row(writer,
 
     elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
     row += [
-        resolution_str, PERFORMANCE_MODE, DETECTION_MODE.name,
+        resolution_str, "PERFORMANCE_MODE", DETECTION_MODE.name,
         cuda_available, cuda_version, vram_mb, elapsed_ms
     ]
     writer.writerow(row)
@@ -534,5 +549,25 @@ def main():
     capture.release()
     
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Detection / Calibration runner")
+    parser.add_argument("--calibrate-only", action="store_true",
+                        help="Run calibration precompute for a given resolution and exit.")
+    parser.add_argument("--calib-res", type=str, default=None,
+                        help='Calibration resolution string like "1280x720" or "1920x1080". '
+                             'Defaults to PERFORMANCE_RESOLUTION when omitted.')
+    parser.add_argument("--force-calib", action="store_true",
+                        help="Force re-calibration (recompute even if cached).")
+    
+    args = parser.parse_args()
+    
+    if args.calibrate_only and args.calib_res:
+        # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
+        calib_dims = args.calib_res or PERFORMANCE_RESOLUTION
+        print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
+        run_calibration_only(calib_dims)
+        print("Done.")
+    else:
+        main()
     print("If this was you first run, you probably can run 'python -m pip cache purge' to remove GiB worth of cached packets.")

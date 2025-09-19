@@ -12,12 +12,6 @@ import numpy as np
 from metrics import compute_blur_laplacian, compute_coverage_fraction, classify_quality
 from stats_logger import StatsLogger
 
-CAMERA_FOLDERS = {
-    "main": ("main", "main_intrinsics"),
-    "tp": ("tp","tp_intrinsics"),                      
-    "uw_wth_lens_dist": ("uw_wth_lens_dist","uw_wth_lens_dist_intrinsics"),
-}
-
 MANIFEST_PREFIX = "calibcache_"
 CACHE_PREFIX = "_downscaled_"
 
@@ -41,6 +35,12 @@ class Intrinsics:
                          [0.0, 0.0, 1.0]], dtype=np.float64)
     
 class Calibrator:
+    
+    CAMERA_FOLDERS = {
+    "main": ("main", "main_intrinsics"),
+    "tp": ("tp","tp_intrinsics"),                      
+    "uw_wth_lens_dist": ("uw_wth_lens_dist","uw_wth_lens_dist_intrinsics"),
+    }
     
     DEFAULT_PATTERN_BY_CAM = {
     "main": "25mm_10x7",
@@ -128,7 +128,7 @@ class Calibrator:
         self.use_rational_model = use_rational_model
         
     def available_patterns(self, cam_key: str) -> List[str]:
-        camera_directory = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
+        camera_directory = os.path.join(self.base_directory, self.CAMERA_FOLDERS[cam_key][0])
         if not os.path.exists(camera_directory):
             return []
         extensions = {".jpg", ".jpeg", ".png"}
@@ -164,7 +164,7 @@ class Calibrator:
         old_force = self.force_recalib
         try:
             self.force_recalib = force
-            for cam_key in CAMERA_FOLDERS.keys():
+            for cam_key in self.CAMERA_FOLDERS.keys():
                 patterns = self.available_patterns(cam_key)
                 if not patterns:
                     patterns = [""] #camera root
@@ -290,7 +290,7 @@ class Calibrator:
                 
     def _compute_from_folder(self, cam_key: str, pattern: str, folder: Optional[str] = None, stats_logger: Optional[StatsLogger] = None, object_points_number_for_valid_detection = 10) -> Intrinsics:
         if folder is None:
-            folder = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
+            folder = os.path.join(self.base_directory, self.CAMERA_FOLDERS[cam_key][0])
         if not os.path.exists(folder):
             raise FileNotFoundError(f"Calibration folder not found: {folder}.")
 
@@ -399,8 +399,8 @@ class Calibrator:
     
     def _normalize_camera(self, cam: str):
         key = cam.strip().lower()
-        if key not in CAMERA_FOLDERS:
-            raise KeyError(f"Unknown camera key '{cam}'. Expected one of {list(CAMERA_FOLDERS)}")
+        if key not in self.CAMERA_FOLDERS:
+            raise KeyError(f"Unknown camera key '{cam}'. Expected one of {list(self.CAMERA_FOLDERS)}")
         return key
     
     def _parse_pattern_name(self, pattern_name: str):
@@ -419,12 +419,26 @@ class Calibrator:
             return None
              
     def _pattern_join(self, cam_key: str, *parts: str, cam_key_index = 0) -> str:
-        base_camera_directory = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0])
+        base_camera_directory = os.path.join(self.base_directory, self.CAMERA_FOLDERS[cam_key][0])
         return os.path.join(base_camera_directory, *[p for p in parts if p])
+    
+    def _base_dir_for_resolution(self, resolution: Optional[str]) -> str:
+        if not resolution:
+            return self.base_directory
+        try:
+            _, h = self._parse_resolution(resolution)
+        except Exception:
+            h = self.height
+        parent, last = os.path.split(self.base_directory)
+        if last.endswith("p"):
+            return os.path.join(parent, f"{h}p")
+        return self.base_directory
     
     def _json_path(self, cam_key: str, resolution: Optional[str] = None, pattern: str = "") -> str:
         dimensions = resolution or f"{self.width}x{self.height}"
-        intr_dir = self._pattern_join(cam_key, pattern, "_intrinsics", cam_key_index = 1)
+        base_dir_for_res = self._base_dir_for_resolution(dimensions)
+        base_camera_directory = os.path.join(base_dir_for_res, self.CAMERA_FOLDERS[cam_key][0])
+        intr_dir = os.path.join(base_camera_directory, *[p for p in (pattern, "_intrinsics") if p])
         os.makedirs(intr_dir, exist_ok=True)
         return os.path.join(intr_dir, f"intrinsics_{cam_key}_{dimensions}.json")
     
@@ -442,7 +456,7 @@ class Calibrator:
         return Intrinsics(**data)
     
     def _load_pattern_json(self, cam_key: str, pattern: str = ""):
-        config = os.path.join(self.base_directory, CAMERA_FOLDERS[cam_key][0], pattern, "pattern.json")
+        config = os.path.join(self.base_directory, self.CAMERA_FOLDERS[cam_key][0], pattern, "pattern.json")
         if not os.path.isfile(config):
             return None
         try:
