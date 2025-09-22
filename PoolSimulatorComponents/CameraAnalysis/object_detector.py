@@ -1,10 +1,15 @@
-# from ultralytics import yolo
+from ultralytics import YOLO
 import cv2
 import numpy as np
 import torch
 # from sort import sort
 
 class ObjectDetector:
+    
+    YOLO_MODEL_NAME = "yolov8n"
+    CONFIDENCE = .25
+    IOU = .45
+    MAX_DET = 64
    
     def __init__(self):
         self.cuda_available, self.cuda_version, self.vram = self.get_gpu_info()
@@ -12,6 +17,12 @@ class ObjectDetector:
             self.device = "cpu"
         else:
             self.device = "cuda"
+            
+        self.yolo = None
+        self._yolo_conf = float(self.CONFIDENCE)
+        self._iou = float(self.IOU)
+        self._max_det = int(self.MAX_DET)
+            
         # self.model = yolo(weights_path)
         # self.model.to(self.device)
         self._corner_ema = None
@@ -19,6 +30,18 @@ class ObjectDetector:
         self._corner_alpha = .2
         self._pocket_alpha = .25
     
+    def load_yolo(self):
+        if YOLO is None:
+            print("[YOLO] ultralytics not installed; YOLO path disabled.")
+        else:
+            try:
+                weights = self.YOLO_MODEL_NAME
+                self.yolo = YOLO(weights)
+                print(f"[YOLO] Loaded '{weights}' on {self.device}")
+            except Exception as e:
+                print(f"[YOLO] Failed to load model: {e}")
+                self._yolo = None
+
     @staticmethod
     def get_gpu_info():
         cuda_version = "N/A"
