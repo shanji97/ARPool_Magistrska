@@ -12,6 +12,8 @@ from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator
 from objects_in_environment import get_environment_config, EnvironmentConfig
+from connection import UsbTcpSender
+from formatters import build_transfer_block
 
 class DetectionMode(Enum):
     Tresholding = 1
@@ -29,7 +31,7 @@ PATTERNS = [
     "30mm_6x8",
     "35mm_7x4",
     ]
-
+TABLE_SURFACE_Y_M = 0.80
 BALL_RADIUS_RANGE_PX = (10, 30)
 
 # Grayscale tresholds
@@ -39,7 +41,7 @@ STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
 
 MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means there is a problem.
 TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
-
+SEND_EVERY_N_FRAMES = 1
 DEBUG = True
 DETECTION_MODE = DetectionMode.Both
 
@@ -100,7 +102,7 @@ def open_stream(dimensions: str = "1920x1080", perfomance_mode: bool = True):
 
 # Calibration part
 def run_calibration_only(dimensions: str):
-    calib = Calibrator(WORK_RESOLUTION or dimensions)
+    calib = Calibrator(dimensions or WORK_RESOLUTION)
     summary = {}
     try:
         for cam_key in calib.CAMERA_FOLDERS.keys():
@@ -347,6 +349,10 @@ def log_csv_row(writer,
         cuda_available, cuda_version, vram_mb, elapsed_ms
     ]
     writer.writerow(row)
+    
+# Environment helper
+def _mm_to_m(x_mm: float) -> float:
+    return float(x_mm) / 1000.0
 
 def main():
     
@@ -360,7 +366,6 @@ def main():
     
     global _controller
     _controller = DroidCamController(ip, port)
-    _controller.apply_default_settings()
     
     capture, dimensions = open_stream()
     
@@ -379,10 +384,15 @@ def main():
     
     global _ball_detector
     _ball_detector = ObjectDetector()
+    
+    usb_client = UsbTcpSender()
+    usb_client.connect()
 
     retry_count = 0
     pockets_px_raw = None
     table_fail_streak = 0
+    frame_counter = 0
+    
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     
@@ -438,7 +448,7 @@ def main():
             pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
             pockets_px_raw = _ball_detector.warp_mm_points_to_px(H_new, pockets_mm)
             pockets_px = _ball_detector.smooth_pockets(pockets_px_raw)
-            
+            table_fail_streak = 0
             commit_cache(H_new, pockets_px, True, False)
         else:
             pockets_px_raw = _pockets_px_cached
@@ -456,13 +466,30 @@ def main():
                 cv2.circle(frame_u, (int(x), int(y)), 10, (0,255,255), 2)
                 cv2.putText(frame_u, name, (int(x)+6, int(y)-6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
-    #Calirate on all patterns.
-    
-    
-    
-    
-    
-    # JUST CALIBRATION
+                
+                
+        pockets_xy_m = [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm]    
+        cue_xyz_m = None
+        eight_xyz_m = None
+        solids_xyzn_m = []  # list of (x,y,z,ball_number) → fill later
+        stripes_xyzn_m = []
+        table_LW_m = (_mm_to_m(Lmm), _mm_to_m(Wmm))
+        
+        if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
+            usb_client.send(
+                build_transfer_block(
+                    pockets_xy_m,
+                    table_LW_m,
+                    TABLE_SURFACE_Y_M,
+                    cue_xyz_m,
+                    eight_xyz_m,
+                    solids_xyzn_m,
+                    stripes_xyzn_m
+                )
+            )
+        
+
+
     #Object detection
     # log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
     
