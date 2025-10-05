@@ -4,7 +4,6 @@ using UnityEngine.SceneManagement;
 
 public class MenuFunctions : MonoBehaviour
 {
-    #region  MAIN MENU
     public void PlayGame()
     {
         var sceneToLoad = AppSettings.Instance.Settings.ApiMode switch
@@ -69,16 +68,4 @@ public class MenuFunctions : MonoBehaviour
             }
         }
     }
-    #endregion
-
-
-    #region SEMANTIC LABELING SCENE
-
-    public void SpawnPockets()
-    {
-
-    }
-
-
-    #endregion
 }

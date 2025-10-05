@@ -21,6 +21,8 @@ public class PocketMarkerService : MonoBehaviour
 
     public bool IsLocked { get; private set; } = false;
 
+    public const float BallDiameter = 57.15f;
+
     private GameObject[] _markers;
 
     private void Awake()
@@ -71,7 +73,7 @@ public class PocketMarkerService : MonoBehaviour
         if (IsLocked) return;
         if (pocketXZ == null || pocketXZ.Length != 6) return;
 
-        TableY = tableY;
+        TableY = tableY + (BallDiameter * .001f) * .5f;
         EnsureMarkers();
 
         for (byte i = 0; i < 6; i++)
@@ -87,15 +89,6 @@ public class PocketMarkerService : MonoBehaviour
 
         TableSize = new Vector2(length, width);
         TableY = tableY;
-
-        if (_markers != null)
-        {
-            for (byte i = 0; i < 6; i++)
-            {
-                var p = PocketPositions[i];
-                _markers[i].transform.position = new Vector3(p.x, TableY + SurfaceLift, p.z);
-            }
-        }
     }
 
     public void SetLocked(bool locked)
@@ -113,7 +106,7 @@ public class PocketMarkerService : MonoBehaviour
 
             // Disable grabbability when locked (so user can’t move them)
             if (go.TryGetComponent<XZOnlyConstraint>(out var constraint))
-                constraint.GrabbableEnabled = !IsLocked;
+                constraint.GrabbableEnabled = true;
 
             // If you use XR Grab Interactable or custom grab components,
             // disable them here when locked (example):

@@ -1,77 +1,180 @@
-# 📷 Camera Pool Table Analysis Instructions
+# ARPool Python Module – Full Developer Guide
 
-## 1. 🐍 Install Python 3.13 and Requirements
-
-Install Python and required packages:
-
-```bash
-pip install -r requirements.txt
-```
-
-> ⚠️ Make sure the filename is `requirements.txt`, not `requitements.txt` or something else!
+This document describes all Python components of the **ARPool_Magistrska** project. It covers installation, file responsibilities, data formats, running instructions, troubleshooting, and planned future work.
 
 ---
 
-## 2. 📱 Set Up DroidCam
+## 1. Installation and Setup
 
-### ✅ A. Install DroidCam
+- **Python:** version **3.12**
+- **Dependencies:** install with
+  ```bash
+  pip install -r PoolSimulatorComponents/CameraAnalysis/requirements.txt
+  ```
+  Typical packages include:
+  - `opencv-python`
+  - `numpy`
+  - `ultralytics` (YOLO)
+  - `PyYAML`
+  - `requests`
 
-- **PC Client**:  
-  Download and install the **DroidCam Client** for [Windows 10/11 or Linux](https://droidcam.app/).  
-  *Note: The OBS plugin is **not** required.*
+- **External Tools:**
+  - **ADB (Android Debug Bridge):** Required for USB port forwarding. Install Android Platform Tools, enable Developer Mode + USB debugging on Quest.
+  - **DroidCam:** App + PC client to use phone camera as input.
 
-- **Mobile App**:  
-  Install **DroidCam Webcam & OBS Camera** for:
-  - [Android](https://play.google.com/store/apps/details?id=com.dev47apps.obsdroidcam&pli=1)  
-  - [iOS](https://apps.apple.com/si/app/droidcam-webcam-obs-camera/id1510258102)  
-
-> 💡 You can purchase the PRO version or just watch ads (😆).
-
----
-
-### ✅ B. Configure the Phone App
-
-1. **Note the IP address and port** of the device (usually port `4747`).
-2. **Allow local network access** so the PC can connect to the camera.
-3. Set the following **camera settings**:
-   - Use the **back camera** by default.
-   - Set **maximum FPS**.
-   - Set **target bitrate to high**.
-4. Disable any **unnecessary features** to reduce latency.
+- **ADB Setup:**
+  ```bash
+  adb devices
+  adb forward tcp:5005 tcp:5005
+  ```
+  Unity app on Quest listens on port 5005.
 
 ---
 
-### ✅ C. Configure the DroidCam Client on PC
+## 2. File Overview
 
-1. Open the DroidCam Client on your PC.
-2. In **source properties**, configure:
-   - **Resolution**: `1920x1080`
-   - **Video Format**: `AVC/H.264`
-3. **If your device is detected**:
-   - Select it from the dropdown list.
-4. **If not detected**:
-   - Manually enter the IP and port from your phone.
-5. Enable:
-   - **Audio input**
-   - **AVC/H.264 hardware acceleration**
-6. Click **"Activate"** to start the stream.
+### `detection.py`
+- **Role:** Main entry point. Captures frames, runs detection, formats results, and streams via USB.
+- **Features:**
+  - Uses `cv2.VideoCapture` to connect to DroidCam feed.
+  - Invokes `ObjectDetector` for table/pocket/ball detection.
+  - Calls `formatters.build_transfer_block` to generate payload.
+  - Sends payload using `UsbTcpClient` from `connection.py`.
+  - Provides keyboard controls for camera (torch, focus, lens switch).
+  - Displays debug window with overlays and logs performance.
 
-> 🎉 You should now see your phone camera as a webcam source on your PC!
+### `object_detector.py`
+- **Role:** Implements detection logic.
+- **Features:**
+  - Modes: classical (threshold, Hough circles), YOLO, or BOTH.
+  - YOLO (via Ultralytics) detects balls and classifies (cue, solids, stripes, eight).
+  - Table detection: finds edges, corners, and computes homography.
+  - Pocket detection: identifies six pockets from table geometry.
+  - Ball detection: outputs center positions and optional ball numbers.
+  - Stabilization: caches pocket positions until mask changes.
+
+### `formatters.py`
+- **Role:** Converts detection results into text payload.
+- **Functions:**
+  - `line_pockets(pockets)` → `p x,y;...`
+  - `line_cue(cue)` → `c x,y,z`
+  - `line_eight(eight)` → `e x,y,z`
+  - `line_solids(list)` → `so x,y,z,n;...`
+  - `line_stripes(list)` → `st x,y,z,n;...`
+  - `line_table((L,W),y)` → `ts L,W,y`
+  - `build_transfer_block(...)` → Assembles full block with `\n\n` terminator.
+
+### `connection.py`
+- **Role:** Handles TCP communication.
+- **Class:** `UsbTcpClient`
+  - Connects to `127.0.0.1:5005` (forwarded to Quest).
+  - Methods: `connect()`, `send(data)`, `close()`.
+  - Auto-reconnects if Quest app restarts.
+- **Usage:** Called each frame by `detection.py`.
+
+### `droid_cam_controller.py`
+- **Role:** Communicates with DroidCam phone API.
+- **Features:**
+  - Torch toggle, autofocus/manual focus, zoom, exposure, lens switching.
+  - Uses `requests` to send HTTP PUT/GET to DroidCam server (`http://<phone_ip>:4747/...`).
+  - Maintains current camera index for cycling lenses.
+- **Integration:** Controlled via keybindings in `detection.py`.
+
+### `calibration.py` (if present)
+- **Role:** Runs chessboard/charuco calibration routines.
+- **Features:**
+  - Loads calibration images from `Images/Calibration/...`.
+  - Uses OpenCV calibration functions to compute intrinsics/extrinsics.
+  - Saves calibration data (RMS error, matrices) to file for reuse.
+- **Purpose:** Enables mapping pixel coords → metric coords for true 3D.
+
+### `stats_logger.py` (if present)
+- **Role:** Provides CSV/Parquet logging of detections.
+- **Features:**
+  - Saves frame-by-frame pockets, balls, detection confidences.
+  - Optionally logs camera metadata (lens, torch state).
+- **Usage:** Helps analyze jitter, false detections.
 
 ---
 
-## ⚠️ Final Notes
+## 3. Data Format Specification
 
-- Do **not** touch camera privacy settings or remove devices in **Device Manager**.
-- Your camera feed should now appear in your camera app and any compatible desktop software.
-- You may see **multiple camera sources** if you previously had virtual cameras—choose the one marked as DroidCam.
+Each payload is a text block with lines, terminated by `\n\n`.
+
+- **Pockets (p):**
+  ```
+  p x1,y1; x2,y2; x3,y3; x4,y4; x5,y5; x6,y6
+  ```
+  Order: TL, TR, ML, MR, BL, BR. Coordinates in meters.
+
+- **Cue (c):**
+  ```
+  c x,y,z
+  ```
+
+- **Eight (e):**
+  ```
+  e x,y,z
+  ```
+
+- **Solids (so):**
+  ```
+  so x,y,z,n; x,y,z,n; ...
+  ```
+
+- **Stripes (st):**
+  ```
+  st x,y,z,n; ...
+  ```
+
+- **Table summary (ts):**
+  ```
+  ts length,width,y
+  ```
 
 ---
 
-## 🖼️ Screenshots
+## 4. Running the Pipeline
 
-![Phone App Settings](/Images/Screenshots/settings.PNG)
+1. Start DroidCam app on phone + connect to PC client.
+2. Plug Quest via USB, enable debugging, run:
+   ```bash
+   adb forward tcp:5005 tcp:5005
+   ```
+3. Start Unity app on Quest.
+4. Launch Python detection:
+   ```bash
+   python PoolSimulatorComponents/CameraAnalysis/detection.py
+   ```
+5. Observe:
+   - PC shows detection overlay window.
+   - Unity shows pockets/balls in 3D.
 
-![Permissions on Phone](/Images/Screenshots/permissions.PNG)
+**Keyboard shortcuts in detection.py:**
+- `q` / Esc → quit
+- `t` → torch toggle
+- `f` → manual focus
+- `z` → zoom
+- `0-3` → switch phone camera lens
 
-![PC Client Settings](/Images/Screenshots/client.png)
+---
+
+## 5. Troubleshooting
+
+- **No Unity updates:** Check ADB forwarding with `adb forward --list`. Ensure Unity app is running.
+- **Quest not detected:** Ensure Developer Mode, correct USB cable, `adb devices` lists Quest.
+- **Camera not opening:** Adjust `cv2.VideoCapture` index or URL for DroidCam.
+- **Laggy:** Lower resolution (720p), ensure GPU YOLO (CUDA), adjust detection mode.
+- **Jitter:** Use lock mode in Unity, improve lighting, stabilize camera mount.
+
+---
+
+## 6. Future Work
+
+- **MQTT integration:** For wireless updates + lock synchronization.
+- **Persistent lock:** Unity lock command propagates back to Python.
+- **3D calibration:** Use calibration profiles for accurate z-coordinates.
+- **Ball ID tracking:** Add SORT/DeepSORT or YOLOv8 tracking to maintain ball identities.
+- **Packaging:** Provide executable build (PyInstaller) for easier deployment.
+
+---

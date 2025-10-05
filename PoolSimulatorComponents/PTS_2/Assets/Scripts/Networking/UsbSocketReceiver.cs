@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
@@ -158,7 +158,7 @@ public class UsbSocketReceiver : MonoBehaviour
                     {
                         _tableSize = new Vector2(L, W);
                         _tableY = Y;
-                        if (VerboseLogs) Debug.Log($"[USB] Table: {L:F3}�{W:F3} @ {Y:F3} m");
+                        if (VerboseLogs) Debug.Log($"[USB] Table: {L:F3}×{W:F3} @ {Y:F3} m");
                     }
                 }
                 // c/e/so/st ignored for now
@@ -167,4 +167,16 @@ public class UsbSocketReceiver : MonoBehaviour
             start += newLine + 1;
         }
     }
+
+#if UNITY_EDITOR
+    [ContextMenu("USB/Test Inject Sample Block")]
+    private void TestInjectSampleBlock()
+    {
+        // standard 9ft table + 6 pockets in your order (TL,TR,ML,MR,BL,BR)
+        string block =
+            "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
+            "ts 2.5400000,1.2700000,0.8000000\n";
+        ParseBlock(block);
+    }
+#endif
 }

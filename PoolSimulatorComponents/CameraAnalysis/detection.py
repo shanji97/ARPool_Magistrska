@@ -354,14 +354,42 @@ def log_csv_row(writer,
 def _mm_to_m(x_mm: float) -> float:
     return float(x_mm) / 1000.0
 
+# Testing
+def synth_test():
+    usb_sender = UsbTcpSender()
+    pockets_xy_m = [
+        (0.0320000, 1.2400000),
+        (2.5080001, 1.2400000),
+        (1.2700000, 0.0600000),
+        (1.2700000, 1.2100000),
+        (0.0320000, 0.0320000),
+        (2.5080001, 0.0320000),
+    ]
+    payload = build_transfer_block(
+        pockets_xy_m=pockets_xy_m,
+        table_LW_m=(2.5400000, 1.2700000),
+        table_surface_y_m=0.8000000,
+        cue_xyz_m=None, eight_xyz_m=None,
+        solids_xyzn_m=[], stripes_xyzn_m=[]
+    )
+    while True:
+        usb_sender.send(payload)
+        time.sleep(0.1)
+
+
+
 def main():
     
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
+    # Compute environment and static things, such as pockets.
     global _env
     _env = get_environment_config(interactive=True, use_last_known=True) 
     
+    corner_inset_mm, side_inset_mm = _env.pockets.derive_insets()
+    pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
+
     ip, port = setup_connection()
     
     global _controller
@@ -385,14 +413,13 @@ def main():
     global _ball_detector
     _ball_detector = ObjectDetector()
     
-    usb_client = UsbTcpSender()
-    usb_client.connect()
+    usb_sender = UsbTcpSender()
+    usb_sender.connect()
 
     retry_count = 0
     pockets_px_raw = None
     table_fail_streak = 0
     frame_counter = 0
-    
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     
@@ -443,10 +470,9 @@ def main():
         if (not _pockets_ready) or _force_rescan:
             
             H_new = _ball_detector.homography_mm_to_px(corners, Lmm, Wmm)
-            corner_inset_mm, side_inset_mm = _env.pockets.derive_insets()
             
-            pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
-            pockets_px_raw = _ball_detector.warp_mm_points_to_px(H_new, pockets_mm)
+            pockets_m = [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm]
+            pockets_px_raw = _ball_detector.warp_mm_points_to_px(H_new, pockets_m)
             pockets_px = _ball_detector.smooth_pockets(pockets_px_raw)
             table_fail_streak = 0
             commit_cache(H_new, pockets_px, True, False)
@@ -476,7 +502,7 @@ def main():
         table_LW_m = (_mm_to_m(Lmm), _mm_to_m(Wmm))
         
         if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
-            usb_client.send(
+            usb_sender.send(
                 build_transfer_block(
                     pockets_xy_m,
                     table_LW_m,
@@ -586,6 +612,7 @@ if __name__ == "__main__":
                              'Defaults to PERFORMANCE_RESOLUTION when omitted.')
     parser.add_argument("--force-calib", action="store_true",
                         help="Force re-calibration (recompute even if cached).")
+    parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
     args = parser.parse_args()
     
@@ -595,6 +622,9 @@ if __name__ == "__main__":
         print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
         run_calibration_only(calib_dims)
         print("Done.")
+    if argparse.synthetic:
+        print("Testing synthetic data to verify table object drawing function.")
+        synth_test()
     else:
         main()
     print("If this was you first run, you probably can run 'python -m pip cache purge' to remove GiB worth of cached packets.")
