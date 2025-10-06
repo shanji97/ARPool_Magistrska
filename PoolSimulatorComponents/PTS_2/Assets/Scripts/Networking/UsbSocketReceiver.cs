@@ -5,6 +5,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using Unity.Mathematics;
+using Unity.VisualScripting.Antlr3.Runtime;
 using UnityEngine;
 
 public class UsbSocketReceiver : MonoBehaviour
@@ -23,7 +25,7 @@ public class UsbSocketReceiver : MonoBehaviour
     // parsed state (XZ pairs in TL,TR,ML,MR,BL,BR order)
     private readonly (float x, float z)[] _pocketsXZ = new (float, float)[6];
     private bool _havePockets = false;
-    private float _tableY = 0.80f;
+    private float _tableY = .8f;
     private Vector2 _tableSize = new(2.54f, 1.27f);
 
     void Start() { if (AutoStart) StartServer(); }
@@ -101,29 +103,35 @@ public class UsbSocketReceiver : MonoBehaviour
     public static bool TryParseFloat(ReadOnlySpan<char> span, out float value) =>
         float.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
-    void Update()
+    public void Update()
     {
+        var svc = PocketMarkerService.Instance;
+        if (svc == null) return;
+
         while (_blocks.TryDequeue(out var block))
         {
-            try { ParseBlock(block); }
-            catch (Exception e) { Debug.LogWarning($"[USB] Parse error: {e}"); }
+            try { ParseBlock(block); } catch (System.Exception e) { Debug.LogWarning(e); }
         }
 
-        var svc = PocketMarkerService.Instance;
-        if (!_havePockets || svc == null) return;
-
-        if (!svc.IsLocked)
+        // apply only if NOT locked and NOT finalized
+        if (!_havePockets || svc.IsLocked || svc.LockFinalized)
         {
-            float y = UseTableYFromStream ? _tableY : OverrideTableY;
-            svc.SetTable(_tableSize.x, _tableSize.y, y);
-            svc.SetPocketsXZ(_pocketsXZ, y);
+            // ignore only pockets, keep the rest.
+            return;
+        }
+        else
+        {
+            ApplyPockets(svc, UseTableYFromStream ? _tableY : OverrideTableY);
         }
     }
+
+
 
     private void ParseBlock(string block)
     {
         ReadOnlySpan<char> span = block.AsSpan().Trim();
         int start = 0;
+        byte parsedPockets = 0;
         while (start < span.Length)
         {
             int newLine = span[start..].IndexOf('\n');
@@ -140,14 +148,29 @@ public class UsbSocketReceiver : MonoBehaviour
                     for (int i = 0; i < 6; i++)
                     {
                         if (body.IsEmpty) break;
+
                         TryNextToken(ref body, ';', out var pair);
-                        if (pair.IsEmpty) continue;
+                        if (pair.IsEmpty) break; // stop instead of continue so we don't mark 'havePockets' prematurely
+
+                        // split "x,y"
                         TryNextToken(ref pair, ',', out var xS);
                         var zS = pair;
+
+                        // (optional) trim spaces if your tokenizer doesn't already
+                        xS = xS.Trim();
+                        zS = zS.Trim();
+
                         if (TryParseFloat(xS, out float x) && TryParseFloat(zS, out float z))
-                            _pocketsXZ[i] = (x, z);
+                        {
+                            _pocketsXZ[i] = (x, z);   // Python (x,y) -> Unity (x,z)
+                            parsedPockets++;
+                        }
+                        else
+                        {
+                            break; // malformed pair: stop and don't claim success
+                        }
                     }
-                    _havePockets = true;
+                    _havePockets = parsedPockets == 6;
                 }
                 else if (token.SequenceEqual("ts"))
                 {
@@ -166,6 +189,12 @@ public class UsbSocketReceiver : MonoBehaviour
             if (newLine < 0) break;
             start += newLine + 1;
         }
+    }
+
+    private void ApplyPockets(PocketMarkerService svc, float y)
+    {
+        svc.SetTable(_tableSize.x, _tableSize.y, y);
+        svc.SetPocketsXZ(_pocketsXZ, y);
     }
 
 #if UNITY_EDITOR
