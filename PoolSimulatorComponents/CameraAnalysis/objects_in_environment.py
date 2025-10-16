@@ -6,7 +6,7 @@ import json
 @dataclass
 class TableSpec:
     name: str
-    playfield_mm: Tuple[float, float]
+    playfield_mm: Tuple[float, float, float]
     overall_mm: Optional[Tuple[int, int]] = None
     notes: str = ""
     cloth_profile: Optional[str] = None
@@ -52,11 +52,11 @@ class PocketSpec:
     
 @dataclass
 class BallSpec:
-    diameter_mm: float = 57.15
+    diameter_m: float = .05715
     
 @dataclass
 class CameraSpec:
-    height_from_floor_mm: float
+    height_from_floor_m: float
     
 @dataclass
 class EnvironmentConfig:
@@ -82,23 +82,23 @@ class EnvironmentConfig:
 # Playfield (nose-to-nose) + overall (full cabinet) sizes
 PRESET_TABLES: List[TableSpec] = [
     TableSpec("7ft (bar box)",
-            playfield_mm=(1930, 965),
+            playfield_mm=(1930, 965,785),
             overall_mm=(2133, 1120),  # ~7′×3.7′ cabinet
             notes="Common 7ft bar table"),
     TableSpec("8ft (home)",
-            playfield_mm=(2235, 1118),
+            playfield_mm=(2235, 1118,785),
             overall_mm=(2438, 1219),  # overall sizes (my measurements)
             notes="Typical 8ft home table"),
     TableSpec("8.5ft (pro-8)",
-            playfield_mm=(2340, 1170),
+            playfield_mm=(2340, 1170, 785),
             overall_mm=(2543, 1272),
             notes="Pro-8, no standard cabinet ref"),
     TableSpec("9ft (tournament)",
-            playfield_mm=(2540, 1270),
+            playfield_mm=(2540, 1270, 785),
             overall_mm=(2743, 1372),  #  9′×4.5′ # > This is @ Crnuce
             notes="WPA tournament size"),
     TableSpec("10ft (snooker)",
-            playfield_mm=(2845, 1422),
+            playfield_mm=(2845, 1422, 785),
             overall_mm=(3048, 1524),  # 10′×5′
             notes="10ft snooker/billiards"),
 ]
@@ -130,7 +130,7 @@ CLOTH_OPTIONS = [
 
 ENVIRONMENT_JSON = "../Configuration/last_environment.json"
 
-DEFAULT_BALLS = BallSpec(diameter_mm=57.15)
+DEFAULT_BALLS = BallSpec(diameter_m=.05715)
 
 SCHEMA_VERSION = 2 # Bump every time when a change is made (add/rename/delete).
 
@@ -297,6 +297,7 @@ def set_up_table(
         user_defined_str = "User-defined"
         Lpf = _read_int("Playfield length (mm)", 1500, 3200, 2540)
         Wpf = _read_int("Playfield width (mm)", 700, 1800, 1270)
+        Hpf = _read_float("Playfield height from floor (mm)", 600, 1500, 785)
         use_overall = input("Do you know overall cabinet size? (y/n): ").strip().lower()
         overall = None
         
@@ -304,8 +305,8 @@ def set_up_table(
             Lov = _read_int("Overall length (mm)", 2000, 3300, None)
             Wov = _read_int("Overall width (mm)", 1000, 1800, None)
             overall = (Lov, Wov)
-            return TableSpec("Custom", (Lpf, Wpf), overall, user_defined_str)
-        return TableSpec("Custom", (Lpf, Wpf), overall, user_defined_str)
+            return TableSpec("Custom", (Lpf, Wpf, Hpf), overall, user_defined_str)
+        return TableSpec("Custom", (Lpf, Wpf, Hpf), overall, user_defined_str)
     else:
         return replace(PRESET_TABLES[int(choice) - 1])
     
@@ -373,7 +374,7 @@ def set_up_pockets():
     
 def set_up_camera_height_mm():
     print("\nEnter camera height from FLOOR (m), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
-    return _read_float("Camera height (m)", 1.5, 4.0, 2.5) * 1000
+    return _read_float("Camera height (m)", 1.5, 4.0, 2.5)
 
 def get_environment_config(interactive: bool = True,
                            use_last_known: bool = True,

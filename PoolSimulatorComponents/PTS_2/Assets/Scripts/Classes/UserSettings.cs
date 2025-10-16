@@ -6,9 +6,7 @@ public class UserSettings
 
     public ScanControl ScanControl { get; set; } = ScanControl.ReScanScene;
 
-    public PoolTable DefaultTable { get; set; } = new PoolTable(TableType.Small);
+    public bool AllowControllerFallBack { get; set; } = false;
 
-    public SaveTableData LastSavedTableData { get; set; } = new();
-
-    public bool AllowControllerFallBack { get; set;} = false;
+    public EnvironmentInfo TableInfo {get; set;}  = null;
 }

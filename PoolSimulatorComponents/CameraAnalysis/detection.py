@@ -31,7 +31,7 @@ PATTERNS = [
     "30mm_6x8",
     "35mm_7x4",
     ]
-TABLE_SURFACE_Y_M = 0.80
+
 BALL_RADIUS_RANGE_PX = (10, 30)
 
 # Grayscale tresholds
@@ -54,7 +54,6 @@ _Knew = None
 _dist = None
 _map1 = None
 _map2 = None
-_env = None
 _use_undistorted_view = False
 _is_changing_camera = False
 _H_cached = None
@@ -177,7 +176,7 @@ def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
     _force_rescan = force_rescan
 
 def reset_pocket_globals():
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _is_changing_camera
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready;
     _is_changing_camera = True
     _H_cached = None
     _pockets_px_cached = None
@@ -357,6 +356,7 @@ def _mm_to_m(x_mm: float) -> float:
 # Testing
 def synth_test():
     usb_sender = UsbTcpSender()
+    usb_sender.connect()
     pockets_xy_m = [
         (0.0320000, 1.2400000),
         (2.5080001, 1.2400000),
@@ -366,11 +366,10 @@ def synth_test():
         (2.5080001, 0.0320000),
     ]
     payload = build_transfer_block(
-        pockets_xy_m=pockets_xy_m,
-        table_LW_m=(2.5400000, 1.2700000),
-        table_surface_y_m=0.8000000,
-        cue_xyz_m=None, eight_xyz_m=None,
-        solids_xyzn_m=[], stripes_xyzn_m=[]
+        pockets=pockets_xy_m,
+        table_LW_m=(2.5400000, 1.2700000, 0.8000000),
+        ball_diameter_m = 0.05715,
+        camera_height_m = 2.5
     )
     while True:
         usb_sender.send(payload)
@@ -384,12 +383,18 @@ def main():
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
     # Compute environment and static things, such as pockets.
-    global _env
-    _env = get_environment_config(interactive=True, use_last_known=True) 
+    env = get_environment_config(interactive=True, use_last_known=True) 
     
-    corner_inset_mm, side_inset_mm = _env.pockets.derive_insets()
-    pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
+    corner_inset_mm, side_inset_mm = env.pockets.derive_insets()
+    pockets_mm = env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
+    (Lhsv, Uhsv)  = (env.table.cloth_lower_hsv, env.table.cloth_upper_hsv)
+    Lmm, Wmm, Hmm = env.table.playfield_mm
+    ball_diameter_m = env.ball_spec.diameter_m
+    camera_height_m = env.camera.height_from_floor_m# Consider the units in the future.
 
+    del env
+    
+    # Set up connection and open stream 
     ip, port = setup_connection()
     
     global _controller
@@ -441,7 +446,8 @@ def main():
                 print(f"Frame capture failed too many times ({MAX_RETRY_COUNT_FRAMES} frames), exiting.")
                 break
             capture.release()
-            capture, frame = open_stream()
+            capture, dimensions= open_stream()
+            ret, frame = capture.read()
             if not ret or frame is None:
                 print("Something wrong with open cv initialization - possible networking or device issues. Aborting......")
                 break
@@ -451,10 +457,7 @@ def main():
             
         frame_u = undistort_frame_if_needed(frame) # Variables change based on camera switching
 
-        table_bounding_box, table_mask, corners = _ball_detector.detect_table(
-            frame_u,
-            (_env.table.cloth_lower_hsv, 
-             _env.table.cloth_upper_hsv))
+        table_bounding_box, table_mask, corners = _ball_detector.detect_table(frame_u, (Lhsv,Uhsv))
         
         if table_bounding_box is None or corners is None:
             retry_count += 1
@@ -463,7 +466,6 @@ def main():
                 _pockets_ready = False
             continue
         
-        Lmm, Wmm = _env.table.playfield_mm
         expected_aspect_ratio = Lmm / Wmm
         corners = _ball_detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
         
@@ -494,25 +496,25 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
                 
                 
-        pockets_xy_m = [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm]    
         cue_xyz_m = None
         eight_xyz_m = None
         solids_xyzn_m = []  # list of (x,y,z,ball_number) → fill later
         stripes_xyzn_m = []
-        table_LW_m = (_mm_to_m(Lmm), _mm_to_m(Wmm))
         
         if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
             usb_sender.send(
                 build_transfer_block(
-                    pockets_xy_m,
-                    table_LW_m,
-                    TABLE_SURFACE_Y_M,
+                    [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm],
+                    (_mm_to_m(Lmm), _mm_to_m(Wmm), _mm_to_m(Hmm)),
+                    ball_diameter_m,
+                    camera_height_m,
                     cue_xyz_m,
                     eight_xyz_m,
                     solids_xyzn_m,
                     stripes_xyzn_m
                 )
             )
+            frame_counter += 1
         
 
 
@@ -622,7 +624,7 @@ if __name__ == "__main__":
         print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
         run_calibration_only(calib_dims)
         print("Done.")
-    if argparse.synthetic:
+    if args.synthetic:
         print("Testing synthetic data to verify table object drawing function.")
         synth_test()
     else:
