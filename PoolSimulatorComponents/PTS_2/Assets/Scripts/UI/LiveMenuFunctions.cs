@@ -1,5 +1,4 @@
 using TMPro;
-using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -16,20 +15,20 @@ public class LiveMenuFunctions : MonoBehaviour
     {
         if (_lockButton) _lockButton.onClick.AddListener(ToggleLock);
         if (_confirmButton) _confirmButton.onClick.AddListener(ConfirmLock);
-        _isLocked = PocketMarkerService.Instance != null && PocketMarkerService.Instance.IsLocked;
+        _isLocked = TableService.Instance != null && TableService.Instance.IsLockedToJitter;
         UpdateUI();
     }
 
     private void ToggleLock()
     {
         _isLocked = !_isLocked;
-        PocketMarkerService.Instance.SetLocked(_isLocked);
+        TableService.Instance.SetLocked(_isLocked);
         UpdateUI();
     }
 
     private void ConfirmLock()
     {
-        var svc = PocketMarkerService.Instance;
+        var svc = TableService.Instance;
         if (svc == null) return;
         svc.FinalizeLocked();
         if (_final_lock_button_label) _final_lock_button_label.text = "Locked (final)"; 

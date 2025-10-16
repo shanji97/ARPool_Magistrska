@@ -1,10 +1,9 @@
 using System.Linq;
-using Unity.VisualScripting;
 using UnityEngine;
 
-public class PocketMarkerService : MonoBehaviour
+public class TableService : MonoBehaviour
 {
-    public static PocketMarkerService Instance { get; private set; }
+    public static TableService Instance { get; private set; }
 
     [Header("Visuals")]
     public GameObject PocketMarkerPrefab;
@@ -25,10 +24,11 @@ public class PocketMarkerService : MonoBehaviour
     public bool MaintainRectangleWhenLocked = true;
     private Vector3[] _lastMarkerPosition;
 
-    public bool IsLocked { get; private set; } = false;
+    public bool IsLockedToJitter { get; private set; } = false;
     public bool LockFinalized { get; private set; } = false;
+    public float CameraHeightFromFloor { get; private set; }
 
-    public const float BallDiameter = 57.15f;
+    public float BallDiameterM = .05715f;
     public const float movingTreshold = .0005f;
 
     private GameObject[] _markers;
@@ -42,7 +42,7 @@ public class PocketMarkerService : MonoBehaviour
 
     public void LateUpdate()
     {
-        if (!IsLocked || !MaintainRectangleWhenLocked || _markers is null) return;
+        if (!LockFinalized || !MaintainRectangleWhenLocked || _markers is null) return;
 
         // Detect which marker moved the most this frame.
         sbyte moved = -1;
@@ -101,7 +101,6 @@ public class PocketMarkerService : MonoBehaviour
         TR = new Vector3(rightX, TableY, topZ);
         BL = new Vector3(leftX, TableY, bottomZ);
         BR = new Vector3(rightX, TableY, bottomZ);
-        // Middles are centers on the short rails - really?!
         ML = new Vector3(centerX, TableY, bottomZ);
         MR = new Vector3(centerX, TableY, topZ);
 
@@ -114,10 +113,7 @@ public class PocketMarkerService : MonoBehaviour
         _markers[5].transform.position = new Vector3(BR.x, TableY + SurfaceLift, BR.z);
         // Refresh cache
         for (sbyte i = 0; i < 6; i++)
-        {
             _lastMarkerPosition[i] = _markers[i].transform.position;
-        }
-
     }
 
     public void EnsureMarkers()
@@ -159,32 +155,76 @@ public class PocketMarkerService : MonoBehaviour
     /// Order: TL, TR, ML, MR, BL, BR. X->Unity X, Z->Unity Z.
     /// Ignored if locked.
     /// </summary>
-    public void SetPocketsXZ((float x, float z)[] pocketXZ, float tableY)
+    public void SetPocketsXZ((float x, float z)[] pocketXZ, float tableY = .8f)
     {
-        if (IsLocked) return;
+        if (IsLockedToJitter) return;
         if (pocketXZ == null || pocketXZ.Length != 6) return;
 
-        TableY = tableY + (BallDiameter * .001f * .5f);
+        // Cloth plane Y = tableY; ball centers sit +radius above cloth:
+        var ballCenterY = tableY + (BallDiameterM * 0.5f);
+        TableY = tableY;
+
         EnsureMarkers();
 
         for (byte i = 0; i < 6; i++)
         {
-            PocketPositions[i] = new Vector3(pocketXZ[i].x, TableY, pocketXZ[i].z);
-            _markers[i].transform.position = new Vector3(pocketXZ[i].x, TableY + SurfaceLift, pocketXZ[i].z);
+            PocketPositions[i] = new Vector3(pocketXZ[i].x, ballCenterY, pocketXZ[i].z);
+            _markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
         }
     }
 
+    public void SetPocketsXZ((float x, float y)[] pocketXZ) => SetPocketsXZ(pocketXZ, TableY);
+
+    public void ReapplyPockets(float tableY)
+    {
+        if (PocketPositions == null || PocketPositions.Length == 0 || _markers == null || _markers.Length != 6)
+            return;
+
+        bool wasLocked = IsLockedToJitter;
+        if (wasLocked) IsLockedToJitter = false;
+
+        TableY = tableY;
+        var ballCenterY = tableY + (BallDiameterM * 0.5f);
+
+        for (int i = 0; i < PocketPositions.Length; i++)
+        {
+            var p3 = PocketPositions[i];
+            p3.y = ballCenterY;
+            PocketPositions[i] = p3;
+
+            if (_markers[i] != null)
+            {
+                var mPos = _markers[i].transform.position;
+                mPos.y = ballCenterY + SurfaceLift;
+                _markers[i].transform.position = mPos;
+            }
+        }
+
+        if (wasLocked) IsLockedToJitter = true;
+    }
+
+    public void SetFromEnvironmentCache(EnvironmentInfo environmentInfo)
+    {
+        SetBallDiameter(environmentInfo.PoolTable.BallDiameter_m);
+        SetCamera(environmentInfo.CameraCharacteristics.HFromFloor_m);
+        SetTable(environmentInfo);
+    }
+
+    public void SetBallDiameter(float ballDiameter) => BallDiameterM = ballDiameter > 0f ? ballDiameter : BallDiameterM;
+
     public void SetTable(float length, float width, float tableY)
     {
-        if (IsLocked) return;
+        if (IsLockedToJitter) return;
 
         TableSize = new Vector2(length, width);
         TableY = tableY;
     }
 
+    public void SetTable(EnvironmentInfo env) => SetTable(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m);
+
     public void SetLocked(bool locked)
     {
-        IsLocked = locked;
+        IsLockedToJitter = locked;
         ApplyLockStateToMarkers();
     }
 
@@ -192,6 +232,8 @@ public class PocketMarkerService : MonoBehaviour
     {
         SetLocked(true);
         LockFinalized = true;
+
+        _lastMarkerPosition = null;
     }
 
     private void ApplyLockStateToMarkers()
@@ -205,4 +247,6 @@ public class PocketMarkerService : MonoBehaviour
                 constraint.GrabbableEnabled = true;
         }
     }
+
+    public void SetCamera(float cameraHeightFromFloor) => CameraHeightFromFloor = cameraHeightFromFloor;
 }

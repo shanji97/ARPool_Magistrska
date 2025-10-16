@@ -1,8 +1,6 @@
 from __future__ import annotations
 import socket
-import time
-from typing import Iterable, Tuple, List, Optional
-
+from typing import Optional
 
 class UsbTcpSender:
     
