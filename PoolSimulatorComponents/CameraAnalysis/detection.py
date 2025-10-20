@@ -12,6 +12,8 @@ from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator
 from objects_in_environment import get_environment_config, EnvironmentConfig
+from connection import UsbTcpSender
+from formatters import build_transfer_block
 
 class DetectionMode(Enum):
     Tresholding = 1
@@ -30,8 +32,6 @@ PATTERNS = [
     "35mm_7x4",
     ]
 
-BALL_RADIUS_RANGE_PX = (10, 30)
-
 # Grayscale tresholds
 WHITE_TRESHOLD = 200 # For cue ball and striped balls.
 EIGHTBALL_TRESHOLD = 50
@@ -39,26 +39,35 @@ STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
 
 MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means there is a problem.
 TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
-
+SEND_EVERY_N_FRAMES = 1
 DEBUG = True
 DETECTION_MODE = DetectionMode.Both
 
 # Runtime state
 _controller = None
 _calib = None
-_ball_detector = None
-_K = None
+_detector = None
+_Km = None
 _Knew = None
 _dist = None
 _map1 = None
 _map2 = None
-_env = None
 _use_undistorted_view = False
 _is_changing_camera = False
 _H_cached = None
 _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
+
+# General helpers
+def _purge_cache():
+    import subprocess
+    try:
+        print("Trying to clean python package cache with 'python -m pip cache purge' to remove GiB worth of cached packets.")
+        result = subprocess.run(["python", "-m", "pip", "cache", "purge"], check=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
 
 # Camera and stream
 def _validate_ip(ip:str):
@@ -100,7 +109,7 @@ def open_stream(dimensions: str = "1920x1080", perfomance_mode: bool = True):
 
 # Calibration part
 def run_calibration_only(dimensions: str):
-    calib = Calibrator(WORK_RESOLUTION or dimensions)
+    calib = Calibrator(dimensions or WORK_RESOLUTION)
     summary = {}
     try:
         for cam_key in calib.CAMERA_FOLDERS.keys():
@@ -117,33 +126,33 @@ def run_calibration_only(dimensions: str):
         print_precompute_results(summary)
 
 def _load_intrinsics_for_camera(dimensions: str):
-    global _K, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
+    global _Km, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
     
     meta = _controller.CAMERA_MAP[_controller.current_camera]
     _use_undistorted_view = (meta or {}).get("lens_correction_on", False) # If lens correction is off, then correct it (for UW and front camera).
     cam_folder_alias = (meta or {}).get("folder_alias", "main")
     
     if not cam_folder_alias:
-        _K = _Knew = _dist = _map1 = _map2 = None
+        _Km = _Knew = _dist = _map1 = _map2 = None
         return
         
     intr = _calib.get_intrinsics_auto(cam_folder_alias, dimensions, candidates=PATTERNS)
-    _K = intr.K(); 
+    _Km = intr.K(); 
     _dist = np.array(intr.dist, np.float64)
     w, h = map(int, dimensions.split('x'))
     
     if _use_undistorted_view:
         if _Knew is None or _map1 is None or _map2 is None:
             print(f"[calib] Building undistortion maps for {cam_folder_alias} at {dimensions}")
-            _Knew, _ = cv2.getOptimalNewCameraMatrix(_K, _dist, (w, h), 1.0, (w, h))
+            _Knew, _ = cv2.getOptimalNewCameraMatrix(_Km, _dist, (w, h), 1.0, (w, h))
             _map1, _map2 = cv2.initUndistortRectifyMap(
-                _K, _dist, None, _Knew, (w, h), cv2.CV_16SC2
+                _Km, _dist, None, _Knew, (w, h), cv2.CV_16SC2
             )
     else:
         _Knew = None
         _map1 = _map2 = None
-        if DEBUG and _K is not None:
-            print("[K (distorted)]\n", _K)
+        if DEBUG and _Km is not None:
+            print("[K (distorted)]\n", _Km)
             print("[dist] ", _dist.ravel())
     
 def undistort_frame_if_needed(frame):
@@ -152,10 +161,10 @@ def undistort_frame_if_needed(frame):
     return frame
 
 def undistort_points(points_xy):
-    if _K is None:
+    if _Km is None:
         return points_xy
     points = np.asarray(points_xy, dtype=np.float32).reshape(-1, 1, 2)
-    undistorted_points = cv2.undistortPoints(points, _K, _dist, P=_Knew)
+    undistorted_points = cv2.undistortPoints(points, _Km, _dist, P=_Knew)
     return undistorted_points.reshape(-1, 2)
 
 def print_precompute_results(precompute_results: dict):
@@ -175,8 +184,8 @@ def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
     _force_rescan = force_rescan
 
 def reset_pocket_globals():
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _is_changing_camera
-    _is_changing_camera = True
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready;
+    _is_changing_camera = False
     _H_cached = None
     _pockets_px_cached = None
     _pockets_ready = False
@@ -259,15 +268,15 @@ def check_keys(dimensions: str = "1920x1080"):
     return (True, camera_info)
 
 def prepare_log_file():
-    global _ball_detector
-    if _ball_detector is None:
+    global _detector
+    if _detector is None:
         print("Ball detector not instantiated properly")
         return
     
     filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     file = open(filename, 'w', newline='')
     writer = csv.writer(file)
-    cuda_available, cuda_version, vram  = _ball_detector.get_gpu_info()
+    cuda_available, cuda_version, vram  = _detector.get_gpu_info()
     
     header = [
         "timestamp", "cloth_H", "cloth_S", "cloth_V",
@@ -347,20 +356,89 @@ def log_csv_row(writer,
         cuda_available, cuda_version, vram_mb, elapsed_ms
     ]
     writer.writerow(row)
+    
+# Environment helper
+def _mm_to_m(x_mm: float) -> float:
+    return float(x_mm) / 1000.0
 
-def main():
+# Testing
+def synth_test():
+    from ball_type import BallType
+    usb_sender = UsbTcpSender()
+    usb_sender.connect()
+
+    pockets_xy_m = [
+        (0.0320000, 1.2400000),
+        (2.5080001, 1.2400000),
+        (1.2700000, 0.0600000),
+        (1.2700000, 1.2100000),
+        (0.0320000, 0.0320000),
+        (2.5080001, 0.0320000),
+    ]
+    
+
+    # Synthetic balls — mix of solids, stripes, cue, eight
+    entries = [
+        # EIGHT
+        {"type": BallType.EIGHT.value, "x": 1.2500000, "y": 0.6350000, "number": 8, "confidence": 0.97, "vx": 0.0,  "vy": 0.0},
+        # CUE
+        {"type": BallType.CUE.value,   "x": 1.2700000, "y": 0.4000000, "number": "/", "confidence": 0.92, "vx": 0.15, "vy": -0.10},
+
+        # STRIPES (9–15)
+        {"type": BallType.STRIPE.value,"x": 0.3000000, "y": 0.5000000, "number": 9,  "confidence": 0.88, "vx": 0.20, "vy": -0.05},
+        {"type": BallType.STRIPE.value,"x": 0.4500000, "y": 0.5200000, "number": 10, "confidence": None, "vx": None, "vy": None},
+        {"type": BallType.STRIPE.value,"x": 0.6000000, "y": 0.5400000, "number": 11, "confidence": None, "vx": -0.10,"vy": 0.00},
+        {"type": BallType.STRIPE.value,"x": 0.7500000, "y": 0.5600000, "number": 12, "confidence": 0.66, "vx": 0.00, "vy": 0.00},
+        {"type": BallType.STRIPE.value,"x": 0.9000000, "y": 0.5800000, "number": 13, "confidence": 0.80, "vx": 0.05, "vy": 0.02},
+        {"type": BallType.STRIPE.value,"x": 1.0500000, "y": 0.6000000, "number": 14, "confidence": 0.74, "vx": -0.02,"vy": 0.03},
+        {"type": BallType.STRIPE.value,"x": 1.2000000, "y": 0.6200000, "number": 15, "confidence": 0.60, "vx": None, "vy": 0.00},
+
+        # SOLIDS (1–7)
+        {"type": BallType.SOLID.value, "x": 0.3500000, "y": 0.3000000, "number": 1, "confidence": 0.95, "vx": 0.10, "vy": 0.00},
+        {"type": BallType.SOLID.value, "x": 0.5000000, "y": 0.3200000, "number": 2, "confidence": 0.93, "vx": -0.12,"vy": 0.04},
+        {"type": BallType.SOLID.value, "x": 0.6500000, "y": 0.3400000, "number": 3, "confidence": None, "vx": -0.05,"vy": None},
+        {"type": BallType.SOLID.value, "x": 0.8000000, "y": 0.3600000, "number": 4, "confidence": 0.85, "vx": 0.00, "vy": 0.00},
+        {"type": BallType.SOLID.value, "x": 0.9500000, "y": 0.3800000, "number": 5, "confidence": 0.70, "vx": None, "vy": None},
+        {"type": BallType.SOLID.value, "x": 1.1000000, "y": 0.4000000, "number": 6, "confidence": 0.78, "vx": 0.03, "vy": -0.01},
+        {"type": BallType.SOLID.value, "x": 1.2500000, "y": 0.4200000, "number": 7, "confidence": 0.82, "vx": 0.01, "vy": 0.02},
+    ]
+
+    payload = build_transfer_block(
+        pockets=pockets_xy_m,
+        table_LW_m=(2.5400000, 1.2700000, 0.7850000),
+        ball_diameter_m=0.0571500,
+        camera_height_m=2.5,
+        detection_entries=entries
+    )
+
+    while True:
+        usb_sender.send(payload)
+        time.sleep(0.1)
+
+def main(ball_radius_range_px = (10,30)):
     
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
+
+    # Compute environment and static things, such as pockets.
+    env = get_environment_config(interactive=True, use_last_known=True) 
     
-    global _env
-    _env = get_environment_config(interactive=True, use_last_known=True) 
+    corner_inset_mm, side_inset_mm = env.pockets.derive_insets()
+    pockets_mm = env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
+    (Lhsv, Uhsv)  = (env.table.cloth_lower_hsv, env.table.cloth_upper_hsv)
+    Lmm, Wmm, Hmm = env.table.playfield_mm
+    ball_diameter_m = env.ball_spec.diameter_m
+    camera_height_m = env.camera.height_from_floor_m
+    expected_aspect_ratio = Lmm / Wmm
+    # Consider the units in the future.
+
+    del env
     
+    # Set up connection and open stream 
     ip, port = setup_connection()
     
     global _controller
     _controller = DroidCamController(ip, port)
-    _controller.apply_default_settings()
     
     capture, dimensions = open_stream()
     
@@ -377,12 +455,21 @@ def main():
         print("Could not open stream.")
         return
     
-    global _ball_detector
-    _ball_detector = ObjectDetector()
+    usb_sender = UsbTcpSender()
+    if not usb_sender.connect():
+        exit()
+    
+    global _detector
+    _detector = ObjectDetector()
+    
 
     retry_count = 0
     pockets_px_raw = None
     table_fail_streak = 0
+    frame_counter = 0
+    prev_points_for_xy = 0
+    previous_centers = []
+    max_track_dist_px = 60
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     
@@ -404,20 +491,17 @@ def main():
                 print(f"Frame capture failed too many times ({MAX_RETRY_COUNT_FRAMES} frames), exiting.")
                 break
             capture.release()
-            capture, frame = open_stream()
+            capture, dimensions = open_stream()
+            ret, frame = capture.read()
             if not ret or frame is None:
                 print("Something wrong with open cv initialization - possible networking or device issues. Aborting......")
                 break
-            _is_changing_camera = True
             continue
         retry_count = 0
             
-        frame_u = undistort_frame_if_needed(frame) # Variables change based on camera switching
+        frame = undistort_frame_if_needed(frame) # Variables change based on camera switching
 
-        table_bounding_box, table_mask, corners = _ball_detector.detect_table(
-            frame_u,
-            (_env.table.cloth_lower_hsv, 
-             _env.table.cloth_upper_hsv))
+        table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
         
         if table_bounding_box is None or corners is None:
             retry_count += 1
@@ -426,127 +510,71 @@ def main():
                 _pockets_ready = False
             continue
         
-        Lmm, Wmm = _env.table.playfield_mm
-        expected_aspect_ratio = Lmm / Wmm
-        corners = _ball_detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
+        corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
         
         if (not _pockets_ready) or _force_rescan:
             
-            H_new = _ball_detector.homography_mm_to_px(corners, Lmm, Wmm)
-            corner_inset_mm, side_inset_mm = _env.pockets.derive_insets()
-            
-            pockets_mm = _env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
-            pockets_px_raw = _ball_detector.warp_mm_points_to_px(H_new, pockets_mm)
-            pockets_px = _ball_detector.smooth_pockets(pockets_px_raw)
-            
+            H_new = _detector.homography_mm_to_px(corners, Lmm, Wmm)
+            pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+            pockets_px = _detector.smooth_pockets(pockets_px_raw)
+            table_fail_streak = 0
             commit_cache(H_new, pockets_px, True, False)
         else:
-            pockets_px_raw = _pockets_px_cached
-            
-        # if table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
-        #     new_lo, new_hi = _auto_tune_cloth_hsv(frame_u, table_mask)
-        #     _env.table.cloth_lower_hsv, _env.table.cloth_upper_hsv = new_lo, new_hi
-            
-        #     table_fail_streak = 0  # reset after adaptation
-        
+            pockets_px_raw = _pockets_px_cached        
         
         if DEBUG:
             labels = ["TL","TR","ML","MR","BL","BR"]   # matches your pocket_mm_positions order
             for (x,y), name in zip(pockets_px_raw, labels):
-                cv2.circle(frame_u, (int(x), int(y)), 10, (0,255,255), 2)
-                cv2.putText(frame_u, name, (int(x)+6, int(y)-6),
+                cv2.circle(frame, (int(x), int(y)), 10, (0,255,255), 2)
+                cv2.putText(frame, name, (int(x)+6, int(y)-6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
-    #Calirate on all patterns.
-    
-    
-    
-    
-    
-    # JUST CALIBRATION
-    #Object detection
-    # log_file, writer, cuda_available, cuda_version, vram_mb = prepare_log_file(ball_detector)
-    
-    # results_tresholding = []
-    # results_yolo = []
-    # pockets = [(0,0),(0,0)]
-        
-    # while True:
-        
-    #     should_break, camera_info = check_keys()
-    #     if not should_break:
-    #         break
-        
-    #     if camera_info is None:
-    #         camera_info  = initial_camera_info
-        
-    #     start_time = time.perf_counter()
-    #     results_tresholding = []
-    #     results_yolo = []
-        
-    #     if not ret:
-    #         print("Frame capture failed.")
-    #         capture.release()
-    #         capture, _ = open_stream()
-    #         ret, frame = capture.read()
-    #         retry_count += 1
-    #         if retry_count >= MAX_RETRY_COUNT:
-    #             print("Frame capture failed. Too many times.")
-    #             break
-    #         continue
-    #     else:
-    #         retry_count = 0
-            
-    #     table_bbox, table_mask = ball_detector.detect_table(frame, TABLE_LOWER_HSV, TABLE_UPPER_HSV)
-    #     if table_bbox is None:
-    #         print("No table detected")
-    #         continue
-        
-    #     # When the pocket is confirmed by user stop calculating pockets.
-    #     if user_confirmed_pocket_positions is False:
-    #         pockets = ObjectDetector.detect_pockets(table_bbox)            
+                
+        if _H_cached is None:
+            continue
+                
+        circles = _detector.detect_balls(
+                frame, 
+                table_mask,
+                ball_radius_range_px[0],
+                ball_radius_range_px[1]
+            ) or []
+       
 
-    #         if user_is_holding_top_left is True or user_adjusted_top_left is True:
-    #             pockets = [None, pockets[1]]
-    #         if user_is_holding_bottom_right is True or user_adjusted_bottom_right is True:
-    #             pockets = [pockets[0], None]      
-    #     else:
-    #         pockets = [(None,None)] 
-        # END PRECALIBRATION
-        
-        # balls = detect_balls(frame, table_mask)
-        # for circle in balls:
-        #     label = classify_balls(frame, circle)
-        #     if DEBUG:
-        #         x,y,r = circle
-        #         cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
-        #         cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        #         cv2.imshow("Detection Debug", frame)
-        
-        
-        
-        
-        # if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
-        #     balls = ball_detector.detect_balls(frame, table_mask, BALL_RADIUS_RANGE_PX[0],BALL_RADIUS_RANGE_PX[1])
+        centers_px = [(int(c[0]), int(c[1])) for c in circles]
+        centers_m = ObjectDetector.warp_px_to_m(_H_cached, centers_px)
 
-        #     for circle in balls:
-        #         x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
-        #         label = ball_detector.classify_balls(frame, (x, y, r), WHITE_TRESHOLD, EIGHTBALL_TRESHOLD, STRIPE_WHITE_RATIO)
-        #         results_tresholding.append((x, y, label))
-        #         if DEBUG:
-        #             cv2.circle(frame, (x, y), r, (0, 255, 0), 2)
-        #             cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        #     if DEBUG:
-        #         log_csv_row(writer, frame, table_mask, pockets, dimensions, start_time,
-        #                     table_bbox, results_tresholding, results_yolo,
-        #                     cuda_available, cuda_version, vram_mb)
-
-        #         cv2.imshow("Detection Debug", frame)
+        entries = []
+        for circle, (xm, ym) in zip(circles, centers_m):
+            # Skip until homography is available
+            if xm is None or ym is None:
+                continue
+            entry = _detector.circle_to_entry(
+                frame,
+                circle,
+                (xm, ym),                # pass center in meters
+                WHITE_TRESHOLD,
+                EIGHTBALL_TRESHOLD,
+                STRIPE_WHITE_RATIO
+            )
+            entries.append(entry)
+        
+        if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
+            usb_sender.send(
+                build_transfer_block(
+                    [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm],
+                    (_mm_to_m(Lmm), _mm_to_m(Wmm), _mm_to_m(Hmm)),
+                    ball_diameter_m,
+                    camera_height_m,
+                    entries
+                )
+            )
+        frame_counter += 1
        
     if DEBUG:
         # log_file.close()
         cv2.destroyAllWindows()
     capture.release()
+    usb_sender.close()
     
 if __name__ == "__main__":
     import argparse
@@ -559,6 +587,10 @@ if __name__ == "__main__":
                              'Defaults to PERFORMANCE_RESOLUTION when omitted.')
     parser.add_argument("--force-calib", action="store_true",
                         help="Force re-calibration (recompute even if cached).")
+    parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
+    
+    parser.add_argument("--ball-radius-range", type=str, default="10,30",
+                        help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
     
     args = parser.parse_args()
     
@@ -568,6 +600,10 @@ if __name__ == "__main__":
         print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
         run_calibration_only(calib_dims)
         print("Done.")
+    if args.synthetic:
+        print("Testing synthetic data to verify table object drawing function.")
+        synth_test()
     else:
-        main()
-    print("If this was you first run, you probably can run 'python -m pip cache purge' to remove GiB worth of cached packets.")
+        radius_range = tuple(map(int, args.ball_radius_range.split(",")))
+        main(radius_range)
+    _purge_cache()
