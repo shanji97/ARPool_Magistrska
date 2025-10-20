@@ -34,8 +34,8 @@ def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
 
     for ball in entries_px or []:
         t   = ball.get("type")
-        x   = float(round(ball.get("x", 0.0)))
-        y   = float(round(ball.get("y", 0.0)))
+        x   = float(ball.get("x", 0.0))
+        y   = float(ball.get("y", 0.0))
 
         # assign number based on type if not provided
         if t == BallType.EIGHT.value:
