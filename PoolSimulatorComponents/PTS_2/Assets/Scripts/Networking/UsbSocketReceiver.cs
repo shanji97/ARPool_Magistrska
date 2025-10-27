@@ -19,7 +19,7 @@ public class UsbSocketReceiver : MonoBehaviour
     private Thread _listenerThread;
     private volatile bool _running = false;
     private readonly ConcurrentQueue<string> _blocks = new();
-    private static readonly TableService svc = TableService.Instance;
+    private TableService svc = TableService.Instance;
 
     // parsed state (XZ pairs in TL,TR,ML,MR,BL,BR order)
     private bool _havePockets = false;
@@ -28,6 +28,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
     void Start()
     {
+        EnsureSvc();
         var environmentInfo = AppSettings.Instance.Settings.TableInfo;
         if (environmentInfo != null)
             ApplyEnvironmentFromCache(environmentInfo);
@@ -64,6 +65,18 @@ public class UsbSocketReceiver : MonoBehaviour
         try { _listenerThread?.Join(200); } catch { }
         _listener = null; _listenerThread = null;
         if (VerboseLogs) Debug.Log("[USB] TcpListener stopped.");
+    }
+
+    private void EnsureSvc()
+    {
+        if (svc != null) return;
+            svc = TableService.Instance;
+        if (svc == null)
+        {
+            Debug.LogWarning(
+                "[UsbSocketReceiver] 'svc' is not assigned. "
+            );
+        }
     }
 
     private void AcceptLoop()
@@ -110,16 +123,16 @@ public class UsbSocketReceiver : MonoBehaviour
         _blocks.Enqueue(block + "\n");
     }
 
-    public static bool TryNextToken(ref ReadOnlySpan<char> s, char sep, out ReadOnlySpan<char> tok)
+    private static bool TryNextToken(ref ReadOnlySpan<char> s, char sep, out ReadOnlySpan<char> tok)
     {
         int i = s.IndexOf(sep);
         if (i < 0) { tok = s; s = ReadOnlySpan<char>.Empty; return tok.Length > 0; }
         tok = s[..i]; s = s[(i + 1)..]; return true;
     }
-    public static bool TryParseFloat(ReadOnlySpan<char> span, out float value) =>
+    private static bool TryParseFloat(ReadOnlySpan<char> span, out float value) =>
         float.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
-    private void ParseBlock(string block, bool isLockFinallized = false)
+    private void ParseBlock(string block, bool isLockFinalized = false)
     {
         ReadOnlySpan<char> span = block.AsSpan().Trim();
         int start = 0;
@@ -136,7 +149,9 @@ public class UsbSocketReceiver : MonoBehaviour
                 ReadOnlySpan<char> token = separator > 0 ? line[..separator] : line;
                 ReadOnlySpan<char> body = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
 
-                if (!isLockFinallized && !_havePockets && token.SequenceEqual("p"))
+                if (svc == null) continue;
+
+                if (!isLockFinalized && !_havePockets && token.SequenceEqual("p"))
                 {
                     pocketsXZ = new (float, float)[6];
                     for (int i = 0; i < 6; i++)
@@ -168,7 +183,7 @@ public class UsbSocketReceiver : MonoBehaviour
                     if (!_allTablePropertiesParsed)
                         svc.SetPocketsXZ(pocketsXZ);
                 }
-                else if (!isLockFinallized && !_allTablePropertiesParsed && token.SequenceEqual("t"))
+                else if (!isLockFinalized && !_allTablePropertiesParsed && token.SequenceEqual("t"))
                 {
                     // Expect body like: "L=2.540; W=1.270; H=0.800; name=9ft (tournament); ..."
                     // We'll scan sequentially, split by ';', then split each into "key=value".
@@ -264,6 +279,13 @@ public class UsbSocketReceiver : MonoBehaviour
     [ContextMenu("USB/Test Inject Sample Block (full balls set)")]
     private void TestInjectSampleBlock()
     {
+        EnsureSvc();
+        if (svc == null)
+        {
+            Debug.LogError("[USB] TableService.Instance is still null — make sure a TableService is in the scene.");
+            return;
+        }
+
         string block =
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
             "e 1.2500000,0.6350000,8,0.97,0.00,0.00\n" +
@@ -271,7 +293,7 @@ public class UsbSocketReceiver : MonoBehaviour
             "st 0.3000000,0.5000000,9,0.88,0.20,-0.05; 0.4500000,0.5200000,10,0.91,\\,\\; 0.6000000,0.5400000,11,\\,-0.10,0.00; 0.7500000,0.5600000,12,0.66,0.00,0.00; 0.9000000,0.5800000,13,0.80,0.05,0.02; 1.0500000,0.6000000,14,0.74,-0.02,0.03; 1.2000000,0.6200000,15,0.60,\\,0.00\n" +
             "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n" +
             "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n";
-        ParseBlock(block);
+        ParseBlock(block, false);
     }
 #endif
 }

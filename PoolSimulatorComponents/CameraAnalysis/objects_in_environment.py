@@ -14,7 +14,7 @@ class TableSpec:
     cloth_upper_hsv: Optional[Tuple[int, int, int]] = None
     
     def pocket_mm_positions(self, corner_inset_mm: float, side_inset_mm: float):
-        L, W  = self.playfield_mm
+        L, W, H = self.playfield_mm
         
         # Corners in mm (origin BL; +X length, +Y width)
         TL = (0.0, W)
