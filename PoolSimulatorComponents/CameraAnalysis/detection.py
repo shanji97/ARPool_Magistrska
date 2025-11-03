@@ -13,17 +13,12 @@ from object_detector import ObjectDetector
 from calibration import Calibrator
 from objects_in_environment import get_environment_config, EnvironmentConfig
 from connection import UsbTcpSender
-from formatters import build_transfer_block
+from formatters import build_transfer_block, LABEL_MAP
 
 class DetectionMode(Enum):
     Tresholding = 1
     YOLO = 2
     Both = 3
-
-# Max resolution
-WORK_RESOLUTION = "1920x1080"
-PERFORMANCE_RESOLUTION = "1280x720"
-FALLBACK_RESOLUTION = "1280x720"
 
 PATTERNS = [
     "20mm_13x9",
@@ -54,7 +49,7 @@ _map1 = None
 _map2 = None
 _use_undistorted_view = False
 _is_changing_camera = False
-_H_cached = None
+_H_new = None
 _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
@@ -83,21 +78,26 @@ def setup_connection():
     port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
     return (ip, port)  
 
-def open_stream(dimensions: str = "1920x1080", perfomance_mode: bool = True):
+def open_stream(dimensions:str = "1920x1080"):
+    return open_stream(dimensions, False, dimensions, dimensions)
+
+def open_stream(work_resolution:str = "1920x1080",
+         performance_mode = False,
+         perf_resoulution: str ="1280x720",
+         fallback_resoulution: str ="1280x720",
+         ):
     if not _controller or not _controller.is_host_reachable(2):
         print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.") 
     
-    resolution = WORK_RESOLUTION
-    if perfomance_mode is True:
-        resolution = PERFORMANCE_RESOLUTION
+    resolution = work_resolution if performance_mode is False else perf_resoulution
         
     capture = cv2.VideoCapture(send_camera_command("get_stream_url", resolution))
     
     if not capture.isOpened():
-        print(f"Failed to open stream with {resolution} resolution, trying with {FALLBACK_RESOLUTION}...")
-        capture = cv2.VideoCapture(send_camera_command("get_stream_url", FALLBACK_RESOLUTION))
+        print(f"Failed to open stream with {resolution} resolution, trying with {fallback_resoulution}...")
+        capture = cv2.VideoCapture(send_camera_command("get_stream_url", fallback_resoulution))
         if not capture.isOpened():
-            print(f"Failed to open stream with {FALLBACK_RESOLUTION} resolution.")
+            print(f"Failed to open stream with {fallback_resoulution} resolution.")
             return (None, None)
     ret, _ = capture.read()
     if not ret:
@@ -108,8 +108,8 @@ def open_stream(dimensions: str = "1920x1080", perfomance_mode: bool = True):
     return (capture, resolution)
 
 # Calibration part
-def run_calibration_only(dimensions: str):
-    calib = Calibrator(dimensions or WORK_RESOLUTION)
+def run_calibration_only(dimensions: str = "1920x1080"):
+    calib = Calibrator(dimensions)
     summary = {}
     try:
         for cam_key in calib.CAMERA_FOLDERS.keys():
@@ -184,7 +184,7 @@ def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
     _force_rescan = force_rescan
 
 def reset_pocket_globals():
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready;
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready
     _is_changing_camera = False
     _H_cached = None
     _pockets_px_cached = None
@@ -218,7 +218,7 @@ def send_camera_command(command: str, *args):
         _controller.apply_default_settings()
     elif command == "select_camera":
         if args:
-            global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready
+            global _is_changing_camera, _H_new, _pockets_px_cached, _pockets_ready
             _is_changing_camera = True
             _controller.select_camera(args[0])   
             _load_intrinsics_for_camera(args[1])
@@ -415,8 +415,14 @@ def synth_test():
         usb_sender.send(payload)
         time.sleep(0.1)
 
-def main(ball_radius_range_px = (10,30)):
-    
+def main(ball_radius_range_px = (10,30), 
+         work_resolution:str = "1920x1080",
+         performance_mode = False,
+         perf_resoulution: str ="1280x720",
+         fallback_resoulution: str ="1280x720",
+         detection_mode = DetectionMode.YOLO
+         ):
+
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
 
@@ -429,8 +435,7 @@ def main(ball_radius_range_px = (10,30)):
     Lmm, Wmm, Hmm = env.table.playfield_mm
     ball_diameter_m = env.ball_spec.diameter_m
     camera_height_m = env.camera.height_from_floor_m
-    expected_aspect_ratio = Lmm / Wmm
-    # Consider the units in the future.
+    expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future.
 
     del env
     
@@ -440,7 +445,7 @@ def main(ball_radius_range_px = (10,30)):
     global _controller
     _controller = DroidCamController(ip, port)
     
-    capture, dimensions = open_stream()
+    capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
     
     if dimensions is not None:
         try:
@@ -457,24 +462,24 @@ def main(ball_radius_range_px = (10,30)):
     
     usb_sender = UsbTcpSender()
     if not usb_sender.connect():
+        print("Could not connect to Quest 3. Check port forwarding.")
         exit()
     
     global _detector
-    _detector = ObjectDetector()
-    
+    _detector = ObjectDetector(LABEL_MAP)
 
     retry_count = 0
     pockets_px_raw = None
     table_fail_streak = 0
     frame_counter = 0
-    prev_points_for_xy = 0
-    previous_centers = []
-    max_track_dist_px = 60
+    H_new = None
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
+    start_time = time.time() if DEBUG else None
     
     # Main execution loop
     while True:
+        
         # Camera switching lock
         if _is_changing_camera:
             print("Changing camera - skipping current frame(s).")
@@ -491,17 +496,26 @@ def main(ball_radius_range_px = (10,30)):
                 print(f"Frame capture failed too many times ({MAX_RETRY_COUNT_FRAMES} frames), exiting.")
                 break
             capture.release()
-            capture, dimensions = open_stream()
+            capture, dimensions = open_stream(dimensions)
             ret, frame = capture.read()
             if not ret or frame is None:
                 print("Something wrong with open cv initialization - possible networking or device issues. Aborting......")
                 break
             continue
         retry_count = 0
-            
+
+        if DEBUG:
+            frame_counter += 1
+            if frame_counter % 30 == 0:
+                elapsed = time.time() - start_time
+                fps = frame_counter / elapsed
+                print(f"[INFO] FPS: {fps:.2f}")
+                
         frame = undistort_frame_if_needed(frame) # Variables change based on camera switching
 
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
+        
+        # Pockets
         
         if table_bounding_box is None or corners is None:
             retry_count += 1
@@ -520,6 +534,7 @@ def main(ball_radius_range_px = (10,30)):
             table_fail_streak = 0
             commit_cache(H_new, pockets_px, True, False)
         else:
+            H_new = _H_cached
             pockets_px_raw = _pockets_px_cached        
         
         if DEBUG:
@@ -529,7 +544,7 @@ def main(ball_radius_range_px = (10,30)):
                 cv2.putText(frame, name, (int(x)+6, int(y)-6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
                 
-        if _H_cached is None:
+        if H_new is None:
             continue
                 
         circles = _detector.detect_balls(
@@ -539,9 +554,8 @@ def main(ball_radius_range_px = (10,30)):
                 ball_radius_range_px[1]
             ) or []
        
-
         centers_px = [(int(c[0]), int(c[1])) for c in circles]
-        centers_m = ObjectDetector.warp_px_to_m(_H_cached, centers_px)
+        centers_m = ObjectDetector.warp_px_to_m(H_new, centers_px)
 
         entries = []
         for circle, (xm, ym) in zip(circles, centers_m):
@@ -558,6 +572,22 @@ def main(ball_radius_range_px = (10,30)):
             )
             entries.append(entry)
         
+        yolo_px = []
+        yolo_entries = []
+        if detection_mode in (DetectionMode.YOLO.value, DetectionMode.Both.value):
+            if _detector.yolo is None:
+              _detector.load_yolo()
+              try: 
+                yolo_px = _detector.detect_balls_yolo(frame)
+                Hinv = lambda pts: ObjectDetector.warp_px_to_m(H_new, pts)
+                yolo_entries = _detector.yolo_to_entries(yolo_px, Hinv)
+              except Exception as e:
+                  print("[YOLO] detection error:", e)
+                  yolo_px = []
+                  yolo_entries = []
+                     
+        entries_to_send = entries
+        # entries_to_send = yolo_entries
         if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
             usb_sender.send(
                 build_transfer_block(
@@ -565,7 +595,7 @@ def main(ball_radius_range_px = (10,30)):
                     (_mm_to_m(Lmm), _mm_to_m(Wmm), _mm_to_m(Hmm)),
                     ball_diameter_m,
                     camera_height_m,
-                    entries
+                    entries_to_send
                 )
             )
         frame_counter += 1
@@ -580,23 +610,41 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
+    
     parser.add_argument("--calibrate-only", action="store_true",
                         help="Run calibration precompute for a given resolution and exit.")
+    
     parser.add_argument("--calib-res", type=str, default=None,
                         help='Calibration resolution string like "1280x720" or "1920x1080". '
                              'Defaults to PERFORMANCE_RESOLUTION when omitted.')
+    
+    parser.add_argument("--work-res", type=str, default="1920x1080",
+                        help='Work resolution string like "1280x720" or "1920x1080".')
+    
+    parser.add_argument("--perf-res", type=str, default="1280x720",
+                        help='Performance resolution string like "1280x720" or "1920x1080".')
+    
+    parser.add_argument("--fallback-res", type=str, default="1280x720",
+                        help='Fallback resolution string like "1280x720" or "1920x1080".')
+    
+    parser.add_argument("--performance", action="store_true", help="Uses performance mode.")
+    
     parser.add_argument("--force-calib", action="store_true",
                         help="Force re-calibration (recompute even if cached).")
+    
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
     parser.add_argument("--ball-radius-range", type=str, default="10,30",
                         help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
     
+    parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value,
+                        help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
+    
     args = parser.parse_args()
     
-    if args.calibrate_only and args.calib_res:
+    if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
-        calib_dims = args.calib_res or PERFORMANCE_RESOLUTION
+        calib_dims = args.calib_res or args.perf_res or args.fallback_res
         print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
         run_calibration_only(calib_dims)
         print("Done.")
@@ -604,6 +652,18 @@ if __name__ == "__main__":
         print("Testing synthetic data to verify table object drawing function.")
         synth_test()
     else:
-        radius_range = tuple(map(int, args.ball_radius_range.split(",")))
-        main(radius_range)
+        try:
+            if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
+                print(f"Chosen detection mode {args.detection_mode}.")
+            
+            radius_range = tuple(map(int, args.ball_radius_range.split(",")))
+            main(radius_range,
+                args.work_res,
+                args.performance,
+                args.perf_res,
+                args.fallback_res,
+                args.detection_mode)
+        except Exception as e:
+            print(f"Error while executing main loop. Check parameters.")
+            
     _purge_cache()

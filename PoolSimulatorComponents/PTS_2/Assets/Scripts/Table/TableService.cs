@@ -204,14 +204,11 @@ public class TableService : MonoBehaviour
         if (wasLocked) IsLockedToJitter = true;
     }
 
-    public void SetFromEnvironmentCache(EnvironmentInfo environmentInfo)
-    {
-        SetBallDiameter(environmentInfo.PoolTable.BallDiameter_m);
-        SetCamera(environmentInfo.CameraCharacteristics.HFromFloor_m);
-        SetTable(environmentInfo);
-    }
-
     public void SetBallDiameter(float ballDiameter) => BallDiameterM = ballDiameter > 0f ? ballDiameter : BallDiameterM;
+
+    public static void SetTable(Vector2 widthAndLength, float height) => SetTable(widthAndLength.x, widthAndLength.y, height);
+    public static void SetTable(Vector3 tableDimensions) => SetTable(tableDimensions.x, tableDimensions.z, tableDimensions.y);
+    public void SetTable(EnvironmentInfo env) => SetTable(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m);
 
     public void SetTable(float length, float width, float tableY)
     {
@@ -221,7 +218,6 @@ public class TableService : MonoBehaviour
         TableY = tableY;
     }
 
-    public void SetTable(EnvironmentInfo env) => SetTable(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m);
 
     public void SetLocked(bool locked)
     {

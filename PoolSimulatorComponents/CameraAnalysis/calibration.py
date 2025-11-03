@@ -558,7 +558,7 @@ if __name__ == "__main__":
         description="Offline camera calibration tool"
     )
     parser.add_argument("--device", type=str, default="i16pm",
-                        help="Device alias (default: i16pm)")
+                        help="Device alias (default: i16pm - iPhone 16 Pro Max)")
     parser.add_argument("--res", type=str, default="1920x1080",
                         help="Target resolution, e.g. 1920x1080 or 1080p")
     parser.add_argument("--pattern", type=str, default="",

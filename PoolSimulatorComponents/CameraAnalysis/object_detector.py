@@ -11,14 +11,14 @@ class ObjectDetector:
     IOU = .45
     MAX_DET = 64
    
-    def __init__(self):
+    def __init__(self, label_map):
         self.cuda_available, self.cuda_version, self.vram = self.get_gpu_info()
         self.device = "cuda" if self.cuda_available else "cpu"
         self.yolo = None
         self._yolo_conf = float(self.CONFIDENCE)
         self._iou = float(self.IOU)
         self._max_det = int(self.MAX_DET)
-      
+        self.label_map = label_map
         self._corner_ema = None
         self._pocket_ema = None
         self._corner_alpha = .2
@@ -35,6 +35,10 @@ class ObjectDetector:
             except Exception as e:
                 print(f"[YOLO] Failed to load model: {e}")
                 self._yolo = None
+                
+    def _ensure_yolo(self):
+        if self.yolo is None:
+            self.load_yolo()
 
     @staticmethod
     def get_gpu_info():
@@ -224,6 +228,71 @@ class ObjectDetector:
             "vy": None,
         }
         
-
+    def detect_balls_yolo(self, frame_bgr):
+        self._ensure_yolo()
+        if self.yolo is None:
+            return []
+        results = self.yolo.predict(
+            
+            source = frame_bgr,
+            conf = self._yolo_conf,
+            iou = self._iou,
+            max_det = self._max_det,
+            verbose = False,
+            device = self.device
+        )
+        
+        if not results:
+            return []
+        out = []
+        r0 = results[0]
+        boxes = r0.boxes
+        if boxes is None or boxes.xyxy is None:
+            return out
+        
+        xyxy = boxes.cpu().numpy()
+        cls = boxes.cls.cpu().numpy().astype(int)
+        conf = boxes.conf.cpu().numpy()
+        
+        id_to_type = {
+        0: BallType.CUE.value,
+        1: BallType.EIGHT.value,
+        2: BallType.SOLID.value,
+        3: BallType.STRIPE.value,
+        }
+        
+        for (x1, y1, x2, y2), c, p in zip(xyxy, cls, conf):
+            if  c not in id_to_type:
+                continue
+            cx = 0.5 * (x1 + x2)
+            cy = 0.5 * (y1 + y2)
+            out.append((float(cx), float(cy), id_to_type[int(c)], float(p)))
+        return out
+    
+    def yolo_to_entries(self, detections_px, H_inv_m_from_px):
+        if not detections_px:
+            return []
+        pts_px = [(d[0], d[1]) for d in detections_px]
+        centers_m = H_inv_m_from_px(pts_px)
+        
+        entries = []
+        for (xm, ym), (_, _, t, conf) in zip(centers_m, detections_px):
+            if xm is None or ym is None:
+                continue
+            entries.append({
+                "type": t,            # 'c','e','st','so'
+                "x": xm,
+                "y": ym,
+                "number": self.label_map[BallType.UNKNOWN.value][1] if t in (BallType.SOLID.value, BallType.STRIPE.value) 
+                else (self.label_map[BallType.CUE.value][1] 
+                      if t==BallType.CUE.value 
+                      else self.label_map[BallType.EIGHT.value][1]),
+                "confidence": float(conf),
+                "vx": None,
+                "vy": None,
+            })
+        return entries
+        
+    
     def classify_balls_yolo():
         pass
