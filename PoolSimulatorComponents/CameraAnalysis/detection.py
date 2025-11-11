@@ -64,6 +64,16 @@ def _purge_cache():
     except subprocess.CalledProcessError as e:
         print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
 
+def _install_dependencies_from_sub_folder(sub_folders = ["pix2pockets"]):
+    import subprocess
+    import os
+    print("Installing dependencies for other projects.....")
+    for folder in sub_folders:
+        req_file = os.path.join(folder,"requirements.txt" )
+        if not subprocess.run(["pip", "install", "-r", req_file], check=True):
+            print(f"Failed to install other project dependencies which are neccessary for this project. Requirements txt: {req_file}.")
+
+
 # Camera and stream
 def _validate_ip(ip:str):
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
@@ -655,7 +665,7 @@ if __name__ == "__main__":
         try:
             if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
                 print(f"Chosen detection mode {args.detection_mode}.")
-            
+            _install_dependencies_from_sub_folder()
             radius_range = tuple(map(int, args.ball_radius_range.split(",")))
             main(radius_range,
                 args.work_res,

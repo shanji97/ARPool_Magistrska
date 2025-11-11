@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices.WindowsRuntime;
 using UnityEngine;
 
 public class TableService : MonoBehaviour
@@ -7,6 +8,8 @@ public class TableService : MonoBehaviour
     [Header("Visuals")]
     public GameObject PocketMarkerPrefab;
     public Transform MarkersParent;
+    public int PocketCount { get; private set; }
+    public bool HasAllPockets() => PocketCount == 6;
 
     [Tooltip("Offset above table surface to avoid z-fighting")]
     public float SurfaceLift = 0.01f;
@@ -16,19 +19,34 @@ public class TableService : MonoBehaviour
 
     [Header("State (read-only)")]
     public readonly Vector3[] PocketPositions = new Vector3[6];  // TL,TR,ML,MR,BL,BR
-    public float TableY = .8f;
-    public Vector2 TableSize = new(2.54f, 1.27f);
+
+    public float TableY = -1f;
+    public bool IsTableHeightSet() => TableY > 0;
+
+    public Vector2 TableSize = new(-1, -1);
+    public bool Is2DTableSet() => TableSize != null && TableSize.x > 0 && TableSize.y > 0;
 
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
     private Vector3[] _lastMarkerPosition;
     public bool IsLockedToJitter { get; private set; } = false;
     public bool LockFinalized { get; private set; } = false;
-    public float CameraHeightFromFloor { get; private set; }
-    public float BallDiameterM = .05715f;
+
+    public float CameraHeightFromFloor { get; private set; } = -1f;
+    public bool IsCameraFromFloorSet() => CameraHeightFromFloor > 0;
+
+    public float BallDiameterM = -1f;
+    public bool IsBallDiameterSet() => BallDiameterM > 0;
+
+    public bool AreProperstiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet() && IsBallDiameterSet();
+
     public const float movingTreshold = .0005f;
 
     private GameObject[] _markers;
+    private const byte maxPocketCount = 6;
+    private const byte stripeCount = 7; 
+    private const byte solidCount = 7; 
+    private const byte maxBallCount = solidCount + stripeCount + 2;
 
     public void Awake()
     {
@@ -116,13 +134,19 @@ public class TableService : MonoBehaviour
         for (sbyte i = 0; i < 6; i++)
             _lastMarkerPosition[i] = _markers[i].transform.position;
     }
+    
+    public void IncrementPocketCount()
+    {
+        if (PocketCount == 6) return;
+        PocketCount++;
+    }
 
     public void EnsureMarkers()
     {
-        if (_markers?.Length == 6) return;
+        if (_markers?.Length == maxPocketCount) return;
         _markers = new GameObject[6];
 
-        for (byte i = 0; i < 6; i++)
+        for (byte i = 0; i < maxPocketCount; i++)
         {
             GameObject go;
             if (PocketMarkerPrefab != null)
@@ -156,10 +180,10 @@ public class TableService : MonoBehaviour
     /// Order: TL, TR, ML, MR, BL, BR. X->Unity X, Z->Unity Z.
     /// Ignored if locked.
     /// </summary>
-    public void SetPocketsXZ((float x, float z)[] pocketXZ, float tableY = .8f)
+    public void SetPocketsXZ((float x, float z)[] pocketXZ, float tableY)
     {
         if (IsLockedToJitter) return;
-        if (pocketXZ == null || pocketXZ.Length != 6) return;
+        if (pocketXZ?.Length != maxPocketCount) return;
 
         // Cloth plane Y = tableY; ball centers sit +radius above cloth:
         var ballCenterY = tableY + (BallDiameterM * 0.5f);
@@ -167,7 +191,7 @@ public class TableService : MonoBehaviour
 
         EnsureMarkers();
 
-        for (byte i = 0; i < 6; i++)
+        for (byte i = 0; i < maxPocketCount; i++)
         {
             PocketPositions[i] = new Vector3(pocketXZ[i].x, ballCenterY, pocketXZ[i].z);
             _markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
@@ -175,6 +199,12 @@ public class TableService : MonoBehaviour
     }
 
     public void SetPocketsXZ((float x, float y)[] pocketXZ) => SetPocketsXZ(pocketXZ, TableY);
+
+    public void ReapplyPockets()
+    {
+        if (TableY > 0)
+            ReapplyPockets(TableY);
+    }
 
     public void ReapplyPockets(float tableY)
     {
@@ -206,16 +236,22 @@ public class TableService : MonoBehaviour
 
     public void SetBallDiameter(float ballDiameter) => BallDiameterM = ballDiameter > 0f ? ballDiameter : BallDiameterM;
 
-    public static void SetTable(Vector2 widthAndLength, float height) => SetTable(widthAndLength.x, widthAndLength.y, height);
-    public static void SetTable(Vector3 tableDimensions) => SetTable(tableDimensions.x, tableDimensions.z, tableDimensions.y);
+    public void SetTableLenght(float length) => SetTable(length, TableSize.y, TableY);
+    public void SetTableWidth(float width) => SetTable(TableSize.x, width, TableY);
+    public void SetTableHeight(float height) => SetTable(TableSize.x, TableSize.y, height);
+
+    public void SetTable(Vector2 widthAndLength, float height) => SetTable(widthAndLength.x, widthAndLength.y, height);
+    public void SetTable(Vector3 tableDimensions) => SetTable(tableDimensions.x, tableDimensions.z, tableDimensions.y);
     public void SetTable(EnvironmentInfo env) => SetTable(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m);
 
-    public void SetTable(float length, float width, float tableY)
+    public void SetTable(float length, float width, float newTableY)
     {
         if (IsLockedToJitter) return;
 
-        TableSize = new Vector2(length, width);
-        TableY = tableY;
+        TableSize = new Vector2(length > 0 ? length : TableSize.x, width > 0 ? width : TableSize.y);
+        if (newTableY > 0 && newTableY != TableY)
+            ReapplyPockets();
+        TableY = newTableY;
     }
 
 
