@@ -1,0 +1,24 @@
+{
+  "_schema_version": 2,
+  "table": {
+    "name": "Predator_9ft_Debug",
+    "playfield_mm": [2540, 1270, 800],
+    "overall_mm": [2874, 1606],
+    "notes": "Predator APEX 9ft Pro – PBS TV overhead feed",
+    "cloth_profile": "Predator_TV_Blue",
+    "cloth_lower_hsv": [90, 60, 60],
+    "cloth_upper_hsv": [120, 255, 255]
+  },
+  "pockets": {
+    "corner_pocket_diameter_mm": 76,
+    "side_pocket_diameter_mm": 86,
+    "corner_jaw_diameter_mm": 36,
+    "side_jaw_diameters_mm": 40
+  },
+  "ball_spec": {
+    "diameter_m": 0.05715
+  },
+  "camera": {
+    "height_from_floor_m": 2.5
+  }
+}
