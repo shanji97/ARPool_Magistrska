@@ -11,7 +11,7 @@ class ObjectDetector:
     IOU = .45
     MAX_DET = 64
    
-    def __init__(self, label_map):
+    def __init__(self, label_map, debug:bool = False):
         self.cuda_available, self.cuda_version, self.vram = self.get_gpu_info()
         self.device = "cuda" if self.cuda_available else "cpu"
         self.yolo = None
@@ -23,6 +23,7 @@ class ObjectDetector:
         self._pocket_ema = None
         self._corner_alpha = .2
         self._pocket_alpha = .25
+        self.debug = debug
     
     def load_yolo(self):
         if YOLO is None:
@@ -291,6 +292,9 @@ class ObjectDetector:
                 "vx": None,
                 "vy": None,
             })
+            
+        if self.debug:
+            print(entries)
         return entries
         
     

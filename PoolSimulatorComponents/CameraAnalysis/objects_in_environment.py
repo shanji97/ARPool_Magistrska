@@ -128,7 +128,7 @@ CLOTH_OPTIONS = [
     ("Grey cloth",        *PRESET_CLOTHS["Grey cloth"]),
 ]
 
-ENVIRONMENT_JSON = "../Configuration/last_environment.json"
+ENVIRONMENT_JSON_PATH = "../Configuration/"
 
 DEFAULT_BALLS = BallSpec(diameter_m=.05715)
 
@@ -376,12 +376,28 @@ def set_up_camera_height_mm():
     print("\nEnter camera height from FLOOR (m), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
     return _read_float("Camera height (m)", 1.5, 4.0, 2.5)
 
+def get_debug_env_config(config_name: str) -> EnvironmentConfig:
+    env = get_environment_config(False, True, config_name, True)
+    if "debug" not in env.table.name:
+        print(f"No configuration with the name {config_name} has been found. Applied default debug configuration.")
+        return None
+    return env
+
 def get_environment_config(interactive: bool = True,
                            use_last_known: bool = True,
-                           cache_path: str = ENVIRONMENT_JSON) -> EnvironmentConfig:
+                           config_name: str = "last_environment.json",
+                           debug: bool = False) -> EnvironmentConfig:
+    
+    if  (config_name is None or len(config_name) == 0) and debug:
+        print('No debug config specified. Using last known enviroment.')
+        return get_environment_config()
+    
+    cache_path = f"{ENVIRONMENT_JSON_PATH}{config_name}"
     
     if use_last_known:
         env = load_last_environment(cache_path)
+        if debug:
+            return env
         if env is not None:
             needs_cloth = (
                 env.table.cloth_profile in (None, "") or

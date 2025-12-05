@@ -6,12 +6,13 @@ import csv
 from enum import Enum
 import json
 import re
+from typing import Optional
 
 # Custom imports
 from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator
-from objects_in_environment import get_environment_config, EnvironmentConfig
+from objects_in_environment import get_environment_config, get_debug_env_config, EnvironmentConfig
 from connection import UsbTcpSender
 from formatters import build_transfer_block, LABEL_MAP
 
@@ -64,15 +65,21 @@ def _purge_cache():
     except subprocess.CalledProcessError as e:
         print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
 
-def _install_dependencies_from_sub_folder(sub_folders = ["pix2pockets"]):
+def _install_dependecies_for_other_projects(sub_folders = ["pix2pockets"]):
     import subprocess
     import os
+    installed_text = "installed.txt"
     print("Installing dependencies for other projects.....")
     for folder in sub_folders:
-        req_file = os.path.join(folder,"requirements.txt" )
+        if os.path.exists(os.path.join(folder, installed_text)):
+            continue
+        req_file = os.path.join(folder,"requirements.txt")
         if not subprocess.run(["pip", "install", "-r", req_file], check=True):
             print(f"Failed to install other project dependencies which are neccessary for this project. Requirements txt: {req_file}.")
-
+        else:
+            with open(os.path.join([folder, installed_text]), "w") as file:
+                file.write("Dependecies successfully installed.")       
+    subprocess.run(["cls"], check=True)
 
 # Camera and stream
 def _validate_ip(ip:str):
@@ -92,10 +99,9 @@ def open_stream(dimensions:str = "1920x1080"):
     return open_stream(dimensions, False, dimensions, dimensions)
 
 def open_stream(work_resolution:str = "1920x1080",
-         performance_mode = False,
+         performance_mode: bool = False,
          perf_resoulution: str ="1280x720",
-         fallback_resoulution: str ="1280x720",
-         ):
+         fallback_resoulution: str ="1280x720"):
     if not _controller or not _controller.is_host_reachable(2):
         print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.") 
     
@@ -411,6 +417,10 @@ def synth_test():
         {"type": BallType.SOLID.value, "x": 0.9500000, "y": 0.3800000, "number": 5, "confidence": 0.70, "vx": None, "vy": None},
         {"type": BallType.SOLID.value, "x": 1.1000000, "y": 0.4000000, "number": 6, "confidence": 0.78, "vx": 0.03, "vy": -0.01},
         {"type": BallType.SOLID.value, "x": 1.2500000, "y": 0.4200000, "number": 7, "confidence": 0.82, "vx": 0.01, "vy": 0.02},
+        
+        # Unknown sample
+        # {"type": BallType.SOLID.value, "x": 1.2500000, "y": 0.4200000, "number": "/"" "confidence": 0.82, "vx": 0.01, "vy": 0.02},
+        # {"type": BallType.STRIPE.value, "x": 1.2500000, "y": 0.4200000, "number": "/"" "confidence": 0.82, "vx": 0.01, "vy": 0.02},
     ]
 
     payload = build_transfer_block(
@@ -425,19 +435,24 @@ def synth_test():
         usb_sender.send(payload)
         time.sleep(0.1)
 
-def main(ball_radius_range_px = (10,30), 
-         work_resolution:str = "1920x1080",
-         performance_mode = False,
+def main(
+         debug_config_name: Optional[str],
+         debug: bool = False,
+         ball_radius_range_px = (10,30), 
+         work_resolution: str = "1920x1080",
+         performance_mode: str = False,
          perf_resoulution: str ="1280x720",
          fallback_resoulution: str ="1280x720",
-         detection_mode = DetectionMode.YOLO
+         detection_mode: Enum = DetectionMode.YOLO
          ):
 
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
-
+    
+    DEBUG = debug
+    
     # Compute environment and static things, such as pockets.
-    env = get_environment_config(interactive=True, use_last_known=True) 
+    env = get_environment_config(interactive=True, use_last_known=True) if not debug else get_debug_env_config(debug_config_name)
     
     corner_inset_mm, side_inset_mm = env.pockets.derive_insets()
     pockets_mm = env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
@@ -445,8 +460,8 @@ def main(ball_radius_range_px = (10,30),
     Lmm, Wmm, Hmm = env.table.playfield_mm
     ball_diameter_m = env.ball_spec.diameter_m
     camera_height_m = env.camera.height_from_floor_m
-    expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future.
-
+    expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future. Regardless of this, the 
+    
     del env
     
     # Set up connection and open stream 
@@ -521,7 +536,7 @@ def main(ball_radius_range_px = (10,30),
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
                 
-        frame = undistort_frame_if_needed(frame) # Variables change based on camera switching
+        frame = undistort_frame_if_needed(frame) if not DEBUG else frame # Variables change based on camera switching
 
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
         
@@ -554,66 +569,67 @@ def main(ball_radius_range_px = (10,30),
                 cv2.putText(frame, name, (int(x)+6, int(y)-6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
                 
-        if H_new is None:
-            continue
+        # if H_new is None:
+        #     continue
                 
-        circles = _detector.detect_balls(
-                frame, 
-                table_mask,
-                ball_radius_range_px[0],
-                ball_radius_range_px[1]
-            ) or []
+        # circles = _detector.detect_balls(
+        #         frame, 
+        #         table_mask,
+        #         ball_radius_range_px[0],
+        #         ball_radius_range_px[1]
+        #     ) or []
        
-        centers_px = [(int(c[0]), int(c[1])) for c in circles]
-        centers_m = ObjectDetector.warp_px_to_m(H_new, centers_px)
+        # centers_px = [(int(c[0]), int(c[1])) for c in circles]
+        # centers_m = ObjectDetector.warp_px_to_m(H_new, centers_px)
 
-        entries = []
-        for circle, (xm, ym) in zip(circles, centers_m):
-            # Skip until homography is available
-            if xm is None or ym is None:
-                continue
-            entry = _detector.circle_to_entry(
-                frame,
-                circle,
-                (xm, ym),                # pass center in meters
-                WHITE_TRESHOLD,
-                EIGHTBALL_TRESHOLD,
-                STRIPE_WHITE_RATIO
-            )
-            entries.append(entry)
+        # entries = []
+        # for circle, (xm, ym) in zip(circles, centers_m):
+        #     # Skip until homography is available
+        #     if xm is None or ym is None:
+        #         continue
+        #     entry = _detector.circle_to_entry(
+        #         frame,
+        #         circle,
+        #         (xm, ym),                # pass center in meters
+        #         WHITE_TRESHOLD,
+        #         EIGHTBALL_TRESHOLD,
+        #         STRIPE_WHITE_RATIO
+        #     )
+        #     entries.append(entry)
         
-        yolo_px = []
-        yolo_entries = []
-        if detection_mode in (DetectionMode.YOLO.value, DetectionMode.Both.value):
-            if _detector.yolo is None:
-              _detector.load_yolo()
-              try: 
-                yolo_px = _detector.detect_balls_yolo(frame)
-                Hinv = lambda pts: ObjectDetector.warp_px_to_m(H_new, pts)
-                yolo_entries = _detector.yolo_to_entries(yolo_px, Hinv)
-              except Exception as e:
-                  print("[YOLO] detection error:", e)
-                  yolo_px = []
-                  yolo_entries = []
+        # yolo_px = []
+        # yolo_entries = []
+        # if detection_mode in (DetectionMode.YOLO.value, DetectionMode.Both.value):
+        #     if _detector.yolo is None:
+        #       _detector.load_yolo()
+        #       try: 
+        #         yolo_px = _detector.detect_balls_yolo(frame)
+        #         Hinv = lambda pts: ObjectDetector.warp_px_to_m(H_new, pts)
+        #         yolo_entries = _detector.yolo_to_entries(yolo_px, Hinv)
+        #       except Exception as e:
+        #           print("[YOLO] detection error:", e)
+        #           yolo_px = []
+        #           yolo_entries = []
                      
-        entries_to_send = entries
-        # entries_to_send = yolo_entries
-        if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
-            usb_sender.send(
-                build_transfer_block(
-                    [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm],
-                    (_mm_to_m(Lmm), _mm_to_m(Wmm), _mm_to_m(Hmm)),
-                    ball_diameter_m,
-                    camera_height_m,
-                    entries_to_send
-                )
-            )
-        frame_counter += 1
+        # entries_to_send = entries
+        # # entries_to_send = yolo_entries
+        # if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
+        #     usb_sender.send(
+        #         build_transfer_block(
+        #             [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm],
+        #             (_mm_to_m(Lmm), _mm_to_m(Wmm), _mm_to_m(Hmm)),
+        #             ball_diameter_m,
+        #             camera_height_m,
+        #             entries_to_send
+        #         )
+        #     )
+        # frame_counter += 1
        
     if DEBUG:
         # log_file.close()
         cv2.destroyAllWindows()
-    capture.release()
+    if capture is not None:
+        capture.release()
     usb_sender.close()
     
 if __name__ == "__main__":
@@ -621,10 +637,15 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
     
+    parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/2t_png.rf.cc82f8a1e04420002737935546caff16.jpg",
+                        help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set to .")
+    
+    parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
+    
     parser.add_argument("--calibrate-only", action="store_true",
                         help="Run calibration precompute for a given resolution and exit.")
     
-    parser.add_argument("--calib-res", type=str, default=None,
+    parser.add_argument("--calib-res", type=str, default="1920x1080",
                         help='Calibration resolution string like "1280x720" or "1920x1080". '
                              'Defaults to PERFORMANCE_RESOLUTION when omitted.')
     
@@ -665,9 +686,12 @@ if __name__ == "__main__":
         try:
             if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
                 print(f"Chosen detection mode {args.detection_mode}.")
-            _install_dependencies_from_sub_folder()
+            _install_dependecies_for_other_projects()
             radius_range = tuple(map(int, args.ball_radius_range.split(",")))
-            main(radius_range,
+            main(
+                args.debug_image,
+                args.debug,
+                radius_range,
                 args.work_res,
                 args.performance,
                 args.perf_res,
