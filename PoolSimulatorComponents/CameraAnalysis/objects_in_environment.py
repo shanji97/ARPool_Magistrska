@@ -46,8 +46,18 @@ class PocketSpec:
     # Kept optional so you can later refine geometry if you want to model rebounds realistically.
 
     def derive_insets(self):
-        corner_inset = self.corner_pocket_diameter_mm * 0.5
-        side_inset = self.side_pocket_diameter_mm * 0.5
+          # Use jaw curvature radius if available (CORRECT)
+        if self.corner_jaw_diameter_mm is not None:
+            corner_inset = self.corner_jaw_diameter_mm * 0.5
+        else:
+            # fallback for legacy configs
+            corner_inset = self.corner_pocket_diameter_mm * 0.5
+        
+        if self.side_jaw_diameters_mm is not None:
+            side_inset = self.side_jaw_diameters_mm * 0.5
+        else:
+            side_inset = self.side_pocket_diameter_mm * 0.5
+        
         return float(corner_inset), float(side_inset)
     
 @dataclass
@@ -377,18 +387,15 @@ def set_up_camera_height_mm():
     return _read_float("Camera height (m)", 1.5, 4.0, 2.5)
 
 def get_debug_env_config(config_name: str) -> EnvironmentConfig:
-    env = get_environment_config(False, True, config_name, True)
-    if "debug" not in env.table.name:
-        print(f"No configuration with the name {config_name} has been found. Applied default debug configuration.")
-        return None
-    return env
+    return get_environment_config(False, True, config_name, True)
 
 def get_environment_config(interactive: bool = True,
                            use_last_known: bool = True,
                            config_name: str = "last_environment.json",
                            debug: bool = False) -> EnvironmentConfig:
     
-    if  (config_name is None or len(config_name) == 0) and debug:
+    if  (config_name is None or len(config_name)==0 ) and debug:
+        print(config_name)
         print('No debug config specified. Using last known enviroment.')
         return get_environment_config()
     
