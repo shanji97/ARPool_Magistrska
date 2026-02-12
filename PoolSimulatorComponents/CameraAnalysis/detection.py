@@ -12,7 +12,7 @@ from typing import Optional
 from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator
-from objects_in_environment import get_environment_config, get_debug_env_config, EnvironmentConfig
+from objects_in_environment import EnvironmentConfig
 from connection import UsbTcpSender
 from formatters import build_transfer_block, LABEL_MAP
 
@@ -61,6 +61,7 @@ def _purge_cache():
         print("Trying to clean python package cache with 'python -m pip cache purge' to remove GiB worth of cached packets.")
         result = subprocess.run(["python", "-m", "pip", "cache", "purge"], check=True)
         print(result.stdout)
+        os.system("cls")
     except subprocess.CalledProcessError as e:
         print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
 
@@ -76,16 +77,16 @@ def _install_dependecies_for_other_projects(sub_folders = ["pix2pockets"]):
         if not subprocess.run(["pip", "install", "-r", req_file], check=True):
             print(f"Failed to install other project dependencies which are neccessary for this project. Requirements txt: {req_file}.")
         else:
-            with open(os.path.join([folder, installed_text]), "w") as file:
-                file.write("Dependecies successfully installed.")       
-    subprocess.run(["cls"], check=True)
+            with open(os.path.join(folder, installed_text), "w") as file:
+                file.write("Dependecies successfully installed.")      
+    os.system("cls")
 
 # Camera and stream
 def _validate_ip(ip:str):
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
     return re.match(pattern, ip) is not None
 
-def setup_connection():
+def _setup_connection():
     ip = input("Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
     while not _validate_ip(ip):
         print("Invalid IP format. Try again.")
@@ -93,6 +94,18 @@ def setup_connection():
         
     port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
     return (ip, port)  
+
+def _open_ports(usb_quest_port: int = 5005):
+    import subprocess
+    import math
+    usb_quest_port = 5005 if math.nan(usb_quest_port) or usb_quest_port > 2**16 else usb_quest_port
+    port = "5005" if  usb_quest_port is None and len(str(usb_quest_port)) > 5 else str(usb_quest_port)
+    if not subprocess.run(["adb", "forward",f"tcp:{port}", f"tcp:{port}"]):
+        print("Failed to run command mannualy. Ensure the Quest 3 is connected via the USB cable and try again using the MQDH.")
+        print("You have 20 seconds to do this manually.")
+        time.sleep(25)
+        return False
+    return True
 
 def open_stream(work_resolution:str = "1920x1080",
          performance_mode: bool = False,
@@ -301,6 +314,21 @@ def check_keys(dimensions: str = "1920x1080"):
         print("[pockets] Re-scan requested (r)")
     return (True, camera_info)
 
+
+
+def send_to_quest(env):
+    usb_sender = UsbTcpSender()
+    if not usb_sender.connect():
+        _open_ports()
+        if not usb_sender.connect():
+            print("Could not forward USB connection to Quest")
+            exit()
+            
+    # json = env.get_json()
+        return True
+    
+    pass
+
 def prepare_log_file():
     global _detector
     if _detector is None:
@@ -474,17 +502,21 @@ def main(
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
     # Compute environment and static things, such as pockets.
-    env = get_environment_config(interactive=True, use_last_known=True) if not debug else get_debug_env_config(debug_config_name)
-    
-    corner_inset_mm, side_inset_mm = env.pockets.derive_insets()
-    pockets_mm = env.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
-    (Lhsv, Uhsv)  = (env.table.cloth_lower_hsv, env.table.cloth_upper_hsv)
-    Lmm, Wmm, Hmm = env.table.playfield_mm
-    ball_diameter_m = env.ball_spec.diameter_m
-    camera_height_m = env.camera.height_from_floor_m
+    env = EnvironmentConfig.__new__(EnvironmentConfig)
+    config = env.get_environment_config(interactive=True, use_last_known=True) if not debug else env.get_debug_env_config(debug_config_name)
+    corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
+    pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
+    (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
+    Lmm, Wmm, Hmm = config.table.playfield_mm
+    ball_diameter_m = config.ball_spec.diameter_m
+    camera_height_m = config.camera.height_from_floor_m
     expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future. Regardless of this, the 
     
-    del env
+    # Send json to Quest 3 PC.
+    if send_to_quest(config):
+        print("Could not send environment data to Quest 3. Chekc USB and network settings")
+    
+    del config
     
     # Set up connection and open stream 
     
@@ -498,7 +530,7 @@ def main(
         print(f"[debug] Using static image as fake feed: {debug_image_path}.")
         print(f"[debug] Resized debug image to work-res: {dimensions}")
     else:
-        ip, port = setup_connection()
+        ip, port = _setup_connection()
         global _controller
         _controller = DroidCamController(ip, port)
         capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
@@ -519,7 +551,9 @@ def main(
     
     usb_sender = UsbTcpSender()
     if not usb_sender.connect():
-        print("Could not connect to Quest 3. Check port forwarding.")
+        _open_ports()
+        if not usb_sender.connect():
+            print("Could not connect to Quest 3. Check port forwarding.")
         exit()
     
     global _detector
@@ -688,7 +722,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
     
     # Debug switches
-    parser.add_argument("--debug-conf", type=str, default="predator_9ft_virtual_debug.json",
+    parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json",
                         help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
     
     parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png",
@@ -697,6 +731,11 @@ if __name__ == "__main__":
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
     
     parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
+    
+    parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
+    parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
+    
+    
     
     # Calibration
     parser.add_argument("--calibrate-only", action="store_true",
@@ -730,6 +769,12 @@ if __name__ == "__main__":
                         help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
     
     args = parser.parse_args()
+    
+    if args.debug_static and args.debug_phone:
+        print("Static image analysis and live capture cannot run at the same time.")
+    if (not args.debug_static and not args.debug_phone) and args.debug:
+        print("Either static image analysis or live capture must be enabled while running in debug mode.")
+    
     
     if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION

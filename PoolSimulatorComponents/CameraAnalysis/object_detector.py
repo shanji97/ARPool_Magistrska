@@ -103,9 +103,11 @@ class ObjectDetector:
         return self._pocket_ema.copy()
     
     def _denoise_mask(self, mask, kernel_one = 3, kernel_two = 5):
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((kernel_one,kernel_one), np.uint8), iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((kernel_two,kernel_two), np.uint8), iterations=2)
-
+        kernels = [kernel_one, kernel_two]
+        interations_for_kernel = [1, 2]
+        operations_in_iteration = [cv2.MORPH_OPEN, cv2.MORPH_CLOSE]
+        for morph in zip(operations_in_iteration, kernels, interations_for_kernel):
+            mask = cv2.morphologyEx(mask, morph[0], np.ones((morph[1], morph[1]), np.uint8), iterations=morph[2])
         return cv2.GaussianBlur(mask, (kernel_two, kernel_two),0)
     
     def detect_table(self,
