@@ -1,0 +1,108 @@
+\documentclass[a4paper, 12pt]{article}
+\usepackage[slovene]{babel}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage[square,numbers,sort&compress]{natbib}
+\bibliographystyle{elsarticle-num}
+
+\definecolor{munsell}{rgb}{0.0, 0.5, 0.69}
+\newcommand\cmnt[1]{\textcolor{munsell}{#1}}
+
+
+\topmargin=0cm
+\topskip=0cm
+\textheight=25cm
+\headheight=0cm
+\headsep=0cm
+\oddsidemargin=0cm
+\evensidemargin=0cm
+\textwidth=16cm
+\parindent=0cm
+\parskip=12pt
+
+\renewcommand{\baselinestretch}{1.2}
+
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% Izpolni kandidat! %%%%%%%%%%%%%%%%%%%%%%%%%%
+\newcommand{\ImeKandidata}{Aleksander} % Ime
+\newcommand{\PriimekKandidata}{Kovač} % Priimek
+\newcommand{\VpisnaStevilka}{63220478} % vpisna številka
+\newcommand{\StudijskiProgram}{Multimedija, MAG} % Študijski program/smer
+\newcommand{\NaslovBivalisca}{Lendavske gorice 409A, 9220 Lendava, Slovenija} % kaniddatov naslov
+\newcommand{\SLONaslov}{Sistem za vadbo biljard igre osmica v obogateni resničnosti} % naslov dela v slovenščini
+\newcommand{\ENGNaslov}{Augmented Reality Training System for Eight-Ball Pool} % naslov dela v angleščini
+%%%%%%%%%%%%%%%%%%%%%%%%%% Konec izpolnjevanja %%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\newcommand{\ProblemParagraph}{\noindent\textbf{Problem in pregled stanja tehnike.} }
+\newcommand{\ContributionsParagraph}{\noindent\textbf{Pričakovani znanstveni ali tehnični prispevki. } }
+\newcommand{\MethodologyParagraph}{\noindent\textbf{Metodologija in ovrednotenje. } }
+
+\newcommand{\Kandidat}{\ImeKandidata~\PriimekKandidata}
+\noindent
+\Kandidat\\
+\NaslovBivalisca \\
+Študijski program: \StudijskiProgram \\
+Vpisna številka: \VpisnaStevilka
+\bigskip
+
+{\bf Komisija za študijske zadeve}\\
+Univerza v Ljubljani, Fakulteta za računalništvo in informatiko\\
+Večna pot 113, 1000 Ljubljana\\
+
+{\Large\bf
+{\centering
+    Vloga za prijavo teme magistrskega dela \\%[2mm]
+\large Kandidat: \Kandidat \\[10mm]}}
+
+
+\Kandidat, študent/-ka magistrskega programa na Fakulteti za računalništvo in informatiko, zaprošam Komisijo za študijske zadeve, da odobri predloženo temo magistrskega dela z naslovom:
+
+%\hfill\begin{minipage}{\dimexpr\textwidth-2cm}
+Slovenski: {\bf \SLONaslov}\\
+Angleški: {\bf \ENGNaslov}
+%\end{minipage}
+
+Tema je bila že potrjena lani in je ponovno vložena: {\bf \textit{DA} }
+
+Izjavljam, da so spodaj navedeni mentorji predlog teme pregledali in odobrili ter da se z oddajo predloga strinjajo.
+
+Magistrsko delo nameravam pisati v slovenščini. % In case you would like to write the thesis in English, comment this line out, and use the following template to explain your request:
+%Komisijo zaprošam, da odobri pisanje magistrskega dela v angleškem jeziku z obrazložitvijo ... .
+
+Za mentorja/mentorico predlagam:
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% Izpolni kandidat! %%%%%%%%%%%%%%%%%%%%%%%%%%
+\hfill\begin{minipage}{\dimexpr\textwidth-2cm}
+Ime in priimek: izr. prof. dr. Matevž Pesek\\
+Ustanova: Fakulteta za računalništvo in informatiko, Univerza v Ljubljani\\
+Elektronski naslov: matevz.pesek@fri.uni-lj.si
+\end{minipage}
+%%%%%%%%%%%%%%%%%%%%%%%%%% Konec izpolnjevanja %%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\bigskip
+
+\hfill V Ljubljani, \today.\newpage
+
+\section{Ključne besede}
+
+slovensko: obogatena resničnost, zaznava predmetov, sledenje predmetom, namizna igra \\
+angleško: augmented reality, object detection, object tracking, tabletop game
+
+\section*{Podroben predlog magistrske naloge}
+\ProblemParagraph~Trenutno prevladujoče rešitve za podporo učenju biljarda temeljijo na dvorazsežnostnih nadglavnih kamerah ali globinskih sistemih ter tudi naglavnimi prikazovalniki \cite{Sousa2016,WenKai2024,Yan2024Enhancing, BWisePool2025}. Čeprav izboljšajo uspešnost začetnikov, podpirajo le enega uporabnika, zahtevajo drago strojno opremo in ne zagotavljajo stabilne poravnave med navideznimi in realnimi objekti, kar vodi do napak pri udarcih. Metode, uporabljene v projektu »pix2pockets« \cite{schiøtt2025pix2pocketsshotsuggestions8ball}, dosegajo zaznavo z napako do 4 milimetre, vendar ne naslovijo prikaza v mešani resničnosti in vendar te rešitve ne ponujajo vpogleda v to, kako bi se takšna natančnost ohranila pri sočasni uporabi več naglavnih prikazovalnikov ali pri pravilnem zastiranju med navideznimi in realnimi objekti. Zato ostaja odprto vprašanje, ali je mogoče s cenovno dostopnimi naglavnimi prikazovalniki (angl. ``head-mounted display''), snemalnimi napravami (npr. pametni telefon) in (prenosnimi) osebnimi računalniki vzpostaviti večuporabniški sistem, ki zanesljivo prikaže navidezne objekte pomešane z resničnimi, na primeru igre biljard.
+
+\ContributionsParagraph~Namen naloge je razvoj prototipa za vadbo igre osmica v mešani resničnosti, ki bo omogočal hkratni prikaz istega navideznega stanja mize na dveh naglavnih prikazovalnikih Meta Quest~3. Prispevek vključuje postopek za preslikavo  dvorazsežnostnih zaznav krogel in žepov v tridimenzionalni koordinatni sistem z jasno definiranimi metrikami napake ter uvedbo osnovnega postopka zastiranja v načinu transparentnega pogleda (angl. ``passthrough''). \cite{Macedo2023Occlusion,Krajancich2020Factored,Zhang2023AddOn,MetaDevelopers2024b}. Dodatno bomo pripravili nabor enostavnih ročnih kretenj kot osnovo za kasnejše sledenje telesu noter-navzen (angl. ``inside-out body tracking'') \cite{UploadVR2023} ter protokol za ovrednotenje učnih učinkov v kontekstu izobraževalnih in športnih aplikacij \cite{Chow2023Exergaming}.
+
+\MethodologyParagraph~Metodologija bo obsegala umerjen zajem nad standardno mizo za biljard, implementacijo dvorazsežnostnega algoritma zaznave krogel \cite{schiøtt2025pix2pocketsshotsuggestions8ball}, preslikavo rezultatov v trorazsežnostni prostor ter validacijo začetnih in končnih položajev z referenčnimi meritvami. V ogrodju razvitega s strani podjetja Meta, bomo implementirali prikaz navideznih elementov v načinu tranparentenga pogleda, osnovni mehanizem zastiranja in preproste ročne kretnje. Večuporabniški način bomo vzpostavili preko povezave z računalnikom, ki bo na primarni prikazovalnik pošiljal lokacije krogel, sekundarni prikazovalnik pa bodo prejemal informacijo preko primarnega. Sistem bomo ovrednotili s kvantitativnimi metrikami poravnave in kvalitativnim testiranjem udeležencev različnih sposobnostnih stopenj.
+{\small
+\bibliography{bib/references}
+}
+
+\end{document}
+
+
