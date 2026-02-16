@@ -314,21 +314,6 @@ def check_keys(dimensions: str = "1920x1080"):
         print("[pockets] Re-scan requested (r)")
     return (True, camera_info)
 
-
-
-def send_to_quest(env):
-    usb_sender = UsbTcpSender()
-    if not usb_sender.connect():
-        _open_ports()
-        if not usb_sender.connect():
-            print("Could not forward USB connection to Quest")
-            exit()
-            
-    # json = env.get_json()
-        return True
-    
-    pass
-
 def prepare_log_file():
     global _detector
     if _detector is None:
@@ -511,10 +496,6 @@ def main(
     ball_diameter_m = config.ball_spec.diameter_m
     camera_height_m = config.camera.height_from_floor_m
     expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future. Regardless of this, the 
-    
-    # Send json to Quest 3 PC.
-    if send_to_quest(config):
-        print("Could not send environment data to Quest 3. Chekc USB and network settings")
     
     del config
     
