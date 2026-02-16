@@ -1,0 +1,20 @@
+{
+    "name": "Classes",
+    "rootNamespace": "",
+    "references": [
+        "GUID:64dca168057442b4db6994092aa157d9"
+    ],
+    "includePlatforms": [
+        "Android",
+        "Editor",
+        "WindowsStandalone64"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

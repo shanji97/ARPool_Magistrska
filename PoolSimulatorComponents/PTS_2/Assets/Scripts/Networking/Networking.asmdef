@@ -1,0 +1,22 @@
+{
+    "name": "Networking",
+    "rootNamespace": "",
+    "references": [
+        "GUID:e0a28f8aa9466444297cb8b06f6d8354",
+        "GUID:d57657dfcac605a4686698618c1b7e83",
+        "GUID:64dca168057442b4db6994092aa157d9"
+    ],
+    "includePlatforms": [
+        "Android",
+        "Editor",
+        "WindowsStandalone64"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
