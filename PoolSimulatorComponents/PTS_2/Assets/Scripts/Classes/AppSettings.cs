@@ -1,11 +1,15 @@
 using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEngine;
 
 public class AppSettings : MonoBehaviour
 {
     private static string Path => System.IO.Path.Combine(Application.persistentDataPath, "userSettings.json");
+
+    public GameMode GameMode { get; private set; } = GameMode.InMenu;
 
     public UserSettings Settings { get; private set; } = new UserSettings();
 
@@ -91,4 +95,15 @@ public class AppSettings : MonoBehaviour
         Settings = new UserSettings();
         Save();
     }
+
+    public void AddTableStateEntries(List<TableStateEntry> tableStateEntries)
+    {
+        if (!tableStateEntries.Any())
+            Debug.Log("No table state entries are being loaded in.");
+
+        (Settings.TableStates ??= new List<TableStateEntry>()).AddRange(tableStateEntries);
+        Save();
+    }
+
+    public void SetGameMode(GameMode mode) => GameMode = mode;
 }

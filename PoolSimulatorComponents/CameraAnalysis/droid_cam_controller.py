@@ -32,13 +32,13 @@ class DroidCamController:
     
     CAMERA_MAP = {
     0: {"name": "Front", "torch_supported": False, "folder_alias": "front", 
-        "lens_correction_on": False, "lens_correction_manual_control":True, "os": "ios_18.6.2"},  
+        "lens_correction_on": False, "lens_correction_manual_control":True, "os": "ios_18.7.2"},  
     1: {"name": "Main", "torch_supported": True, "folder_alias": "main", 
-        "lens_correction_on": True, "lens_correction_manual_control": False, "os": "ios_18.6.2"},
+        "lens_correction_on": True, "lens_correction_manual_control": False, "os": "ios_18.7.2"},
     2: {"name": "Telephoto", "torch_supported": True, "folder_alias": "tp", 
-        "lens_correction_on": True, "lens_correction_manual_control":False, "os": "ios_18.6.2"},
+        "lens_correction_on": True, "lens_correction_manual_control":False, "os": "ios_18.7.2"},
     3: {"name": "Ultrawide", "torch_supported": True, "folder_alias": "uw_wth_lens_dist", 
-        "lens_correction_on": False, "lens_correction_manual_control":True, "os": "ios_18.6.2"},
+        "lens_correction_on": False, "lens_correction_manual_control":True, "os": "ios_18.7.2"},
     }
 
     ZOOM_RANGE = (1.0, 6.0)

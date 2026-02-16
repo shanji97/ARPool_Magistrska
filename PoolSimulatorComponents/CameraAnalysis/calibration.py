@@ -188,16 +188,17 @@ class Calibrator:
         cam_key = self._normalize_camera(camera)
         target_res = target_resolution or f"{self.width}x{self.height}"
         
-        sq_size_m, cols, rows = self._resolve_pattern(cam_key, pattern)
-        prev_sq_size_m = self.sq_size_meters
-        prev_inner_corners = self.inner_corners
-        self.sq_size_meters = sq_size_m
-        self.inner_corners = (cols, rows)
         try:
             intrinsics = self._load_json(cam_key, target_res, pattern)
             if intrinsics and self.force_recalib is False:
                 self._cache[cam_key] = intrinsics
                 return intrinsics
+        
+            sq_size_m, cols, rows = self._resolve_pattern(cam_key, pattern)
+            prev_inner_corners = self.inner_corners
+            self.inner_corners = (cols, rows)
+            self.sq_size_meters = sq_size_m
+            prev_sq_size_m = self.sq_size_meters
             
             if target_res == f"{self.width}x{self.height}" or self.force_recalib:
                 cache_directory = self._prepare_image_set(cam_key, target_res, pattern)
@@ -557,7 +558,7 @@ if __name__ == "__main__":
         description="Offline camera calibration tool"
     )
     parser.add_argument("--device", type=str, default="i16pm",
-                        help="Device alias (default: i16pm)")
+                        help="Device alias (default: i16pm - iPhone 16 Pro Max)")
     parser.add_argument("--res", type=str, default="1920x1080",
                         help="Target resolution, e.g. 1920x1080 or 1080p")
     parser.add_argument("--pattern", type=str, default="",

@@ -1,5 +1,5 @@
-argparse
-numpy
+# Core
+numpy==2.2.6
 opencv-python
 ultralytics
 PyYAML
@@ -8,10 +8,14 @@ ffmpeg-python
 requests
 pandas
 pyarrow
-sort-tracker
 
-# Pytorch - use Python 3.12
---extra-index-url https://download.pytorch.org/whl/cu128
-torch
-torchvision
-torchaudio
+# Tracking (pure-Python)
+scipy
+filterpy
+
+# PyTorch (unchanged as you already had it)
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+torch==2.9.0+cu130
+torchaudio==2.9.0+cu130
+torchvision==0.24.0+cu130

@@ -13,9 +13,9 @@ public class InstructionMenuController : MonoBehaviour
         if (mainCamera != null)
         {
             // Calculate target position defaultDistance in front of camera
-            Vector3 spawnPos = mainCamera.transform.position + mainCamera.transform.forward * defaultDistance;
+
             // Set menu position
-            transform.position = spawnPos;
+            transform.position = mainCamera.transform.position + (mainCamera.transform.forward * defaultDistance);
 
             // Orient the menu to face the user (only yaw, to keep it upright)
             Vector3 forwardFlat = Vector3.ProjectOnPlane(mainCamera.transform.forward, Vector3.up);

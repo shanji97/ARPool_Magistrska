@@ -8,7 +8,7 @@ public class PanelFunctions : MonoBehaviour
     public Transform CanvasElement;
 
     // Start is called before the first frame update
-    void Awake()
+    public void Awake()
     {
 #if !DEVELOPMENT_BUILD && !UNITY_EDITOR
         DestroyPlaygroundButton();
@@ -20,7 +20,7 @@ public class PanelFunctions : MonoBehaviour
             Debug.LogError("CanvasElement is null. Please assign it in the inspector or set it in the code.");
             return;
         }
-    
+
         OrderPanelItems();
     }
 

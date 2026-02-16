@@ -2,7 +2,7 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 import torch
-# from sort import sort
+from ball_type import BallType
 
 class ObjectDetector:
     
@@ -11,24 +11,19 @@ class ObjectDetector:
     IOU = .45
     MAX_DET = 64
    
-    def __init__(self):
+    def __init__(self, label_map, debug:bool = False):
         self.cuda_available, self.cuda_version, self.vram = self.get_gpu_info()
-        if not self.cuda_available:
-            self.device = "cpu"
-        else:
-            self.device = "cuda"
-            
+        self.device = "cuda" if self.cuda_available else "cpu"
         self.yolo = None
         self._yolo_conf = float(self.CONFIDENCE)
         self._iou = float(self.IOU)
         self._max_det = int(self.MAX_DET)
-            
-        # self.model = yolo(weights_path)
-        # self.model.to(self.device)
+        self.label_map = label_map
         self._corner_ema = None
         self._pocket_ema = None
         self._corner_alpha = .2
         self._pocket_alpha = .25
+        self.debug = debug
     
     def load_yolo(self):
         if YOLO is None:
@@ -41,6 +36,10 @@ class ObjectDetector:
             except Exception as e:
                 print(f"[YOLO] Failed to load model: {e}")
                 self._yolo = None
+                
+    def _ensure_yolo(self):
+        if self.yolo is None:
+            self.load_yolo()
 
     @staticmethod
     def get_gpu_info():
@@ -59,20 +58,16 @@ class ObjectDetector:
             print(f"Error fetching GPU info: {e}")
             return (False, cuda_version, vram)
     
-    def _order_corners(self, corner_data):  
-        # Always output the corners in order TL, TR, BL, BR. 
-        # The remaining 2 are a the center of the longer table axis.
-        
+    def _order_corners(self, corner_data):
         corner_data = np.asarray(corner_data, dtype=np.float32)
-        sum_of_points = corner_data.sum(axis=1)
-        diff = np.diff(corner_data, axis=1).reshape(-1)
-        top_left = corner_data[np.argmin(sum_of_points)]
-        bottom_right = corner_data[np.argmax(sum_of_points)]
-        top_right = corner_data[np.argmin(diff)]
-        bottom_left = corner_data[np.argmax(diff)]
+        s = corner_data.sum(axis=1)
+        d = np.diff(corner_data, axis=1).reshape(-1)
+        tl = corner_data[np.argmin(s)]
+        br = corner_data[np.argmax(s)]
+        tr = corner_data[np.argmin(d)]
+        bl = corner_data[np.argmax(d)]
+        return np.array([tl, tr, bl, br], dtype=np.float32)
         
-        return np.array([top_left, top_right, bottom_left, bottom_right], dtype=np.float32)
-    
     def _exp_moving_avg(self, previous, x, alpha):
         x = np.asarray(x, np.float32)
         return x if previous is None else (alpha * x + (1.0 - alpha) * previous)
@@ -96,7 +91,7 @@ class ObjectDetector:
         aspect_ratio_obs = width / height
         return (expected_aspect_ratio * (1 - tolerance)) <= aspect_ratio_obs <= (expected_aspect_ratio * (1 + tolerance))
     
-    def gate_and_smooth_corners(self, corners, expected_aspect_ratio = None):
+    def gate_and_smooth_corners(self, corners, expected_aspect_ratio = 2.0):
         good = self._aspect_ok(corners, expected_aspect_ratio)
         if not good and self._corner_ema is not None:
             return self._corner_ema.copy()
@@ -108,9 +103,11 @@ class ObjectDetector:
         return self._pocket_ema.copy()
     
     def _denoise_mask(self, mask, kernel_one = 3, kernel_two = 5):
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((kernel_one,kernel_one), np.uint8), iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((kernel_two,kernel_two), np.uint8), iterations=2)
-
+        kernels = [kernel_one, kernel_two]
+        interations_for_kernel = [1, 2]
+        operations_in_iteration = [cv2.MORPH_OPEN, cv2.MORPH_CLOSE]
+        for morph in zip(operations_in_iteration, kernels, interations_for_kernel):
+            mask = cv2.morphologyEx(mask, morph[0], np.ones((morph[1], morph[1]), np.uint8), iterations=morph[2])
         return cv2.GaussianBlur(mask, (kernel_two, kernel_two),0)
     
     def detect_table(self,
@@ -151,12 +148,12 @@ class ObjectDetector:
     @staticmethod      
     def homography_mm_to_px(corners_px, table_length_mm, table_width_mm):
         TL, TR, BL, BR = corners_px.astype(np.float32)
-        TLm = np.array([0.0,         table_width_mm], np.float32)
-        TRm = np.array([table_length_mm, table_width_mm], np.float32)
-        BRm = np.array([table_length_mm, 0.0], np.float32)
-        BLm = np.array([0.0,         0.0], np.float32)
+        TLm = np.array([0.0,              table_width_mm], np.float32)
+        TRm = np.array([table_length_mm,  table_width_mm], np.float32)
+        BRm = np.array([table_length_mm,  0.0],           np.float32)
+        BLm = np.array([0.0,              0.0],           np.float32)
         src = np.array([TLm, TRm, BRm, BLm], np.float32)
-        dst = np.array([TL,  TR,  BL,  BR ], np.float32)
+        dst = np.array([TL,  TR,  BR,  BL], np.float32)   # <-- fixed order
         H, _ = cv2.findHomography(src, dst, method=cv2.RANSAC)
         return H
 
@@ -169,10 +166,22 @@ class ObjectDetector:
             out.append((float(q[0]/q[2]), float(q[1]/q[2])))
         return out
     
+    @staticmethod
+    def warp_px_to_m(H, points_px):
+        if H is None:
+            return [(None, None) for _ in points_px]
+        Hinverse = np.linalg.inv(H)
+        out = []
+        for (xpx, ypx) in points_px:
+            v = np.array([float(xpx), float(ypx), 1.0], np.float32)
+            q = Hinverse @ v
+            mmx, mmy = (q[0] / q[2]), (q[1] / q[2])
+            out.append((mmx / 1000.0, mmy / 1000.0))
+        return out
+        
     def apply_smoothing(self, points_to_smooth):
         pts = np.asarray(points_to_smooth, np.float32)
-        
-    
+
     @staticmethod
     def detect_balls(frame, table_mask, min_ball_radius, max_ball_radius,gaussian_kernel = (9,9)):
         masked = cv2.bitwise_and(frame, frame, mask=table_mask)
@@ -195,22 +204,101 @@ class ObjectDetector:
         x, y, r = int(circle[0]), int(circle[1]), int(circle[2])
         roi = frame[y - r:y + r, x - r:x + r]
         if roi.size == 0:
-            return "unknown"
+            return  BallType.UNKNOWN.value
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         white_pixels = np.sum(gray > white_treshold)
         black_pixels = np.sum(gray < eightball_treshold)
         total_pixels = roi.shape[0] * roi.shape[1]
         white_ratio = white_pixels / total_pixels
         if black_pixels / total_pixels > 0.5:
-            return "8-ball"
+            return BallType.EIGHT.value
         if white_ratio > 0.8:
-            return "cue"
+            return BallType.CUE.value
         if white_ratio > stripe_white_ratio:
-            return "striped"
-        return "solid"
+            return  BallType.STRIPE.value
+        return BallType.SOLID.value
+    
+    @staticmethod
+    def circle_to_entry(frame, circle, circle_center_m, white_treshold, eight_treshold, stripe_wb_ratio):
+        t = ObjectDetector.classify_balls(frame, circle, white_treshold, eight_treshold, stripe_wb_ratio) # Only white balls with color stripe for now.
+        x, y, = circle_center_m
+        return {
+            "type": t,
+            "x": x,
+            "y": y,
+            "confidence" : None,
+            "vx": None,
+            "vy": None,
+        }
         
-
-    def classify_balls_yolo():
-        pass
+    def detect_balls_yolo(self, frame_bgr):
+        self._ensure_yolo()
+        if self.yolo is None:
+            return []
+        results = self.yolo.predict(
+            
+            source = frame_bgr,
+            conf = self._yolo_conf,
+            iou = self._iou,
+            max_det = self._max_det,
+            verbose = False,
+            device = self.device
+        )
+        
+        if not results:
+            return []
+        out = []
+        r0 = results[0]
+        boxes = r0.boxes
+        if boxes is None or boxes.xyxy is None:
+            return out
+        
+        xyxy = boxes.cpu().numpy()
+        cls = boxes.cls.cpu().numpy().astype(int)
+        conf = boxes.conf.cpu().numpy()
+        
+        id_to_type = {
+        0: BallType.CUE.value,
+        1: BallType.EIGHT.value,
+        2: BallType.SOLID.value,
+        3: BallType.STRIPE.value,
+        }
+        
+        for (x1, y1, x2, y2), c, p in zip(xyxy, cls, conf):
+            if  c not in id_to_type:
+                continue
+            cx = 0.5 * (x1 + x2)
+            cy = 0.5 * (y1 + y2)
+            out.append((float(cx), float(cy), id_to_type[int(c)], float(p)))
+        return out
+    
+    def yolo_to_entries(self, detections_px, H_inv_m_from_px):
+        if not detections_px:
+            return []
+        pts_px = [(d[0], d[1]) for d in detections_px]
+        centers_m = H_inv_m_from_px(pts_px)
+        
+        entries = []
+        for (xm, ym), (_, _, t, conf) in zip(centers_m, detections_px):
+            if xm is None or ym is None:
+                continue
+            entries.append({
+                "type": t,            # 'c','e','st','so'
+                "x": xm,
+                "y": ym,
+                "number": self.label_map[BallType.UNKNOWN.value][1] if t in (BallType.SOLID.value, BallType.STRIPE.value) 
+                else (self.label_map[BallType.CUE.value][1] 
+                      if t==BallType.CUE.value 
+                      else self.label_map[BallType.EIGHT.value][1]),
+                "confidence": float(conf),
+                "vx": None,
+                "vy": None,
+            })
+            
+        if self.debug:
+            print(entries)
+        return entries
         
     
+    def classify_balls_yolo():
+        pass

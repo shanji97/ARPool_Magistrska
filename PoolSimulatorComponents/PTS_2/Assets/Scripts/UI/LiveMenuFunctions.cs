@@ -15,7 +15,7 @@ public class LiveMenuFunctions : MonoBehaviour
     {
         if (_lockButton) _lockButton.onClick.AddListener(ToggleLock);
         if (_confirmButton) _confirmButton.onClick.AddListener(ConfirmLock);
-        _isLocked = TableService.Instance != null && TableService.Instance.IsLockedToJitter;
+        _isLocked = TableService.Instance != null ? TableService.Instance.IsLockedToJitter : null == true;
         UpdateUI();
     }
 
@@ -31,7 +31,7 @@ public class LiveMenuFunctions : MonoBehaviour
         var svc = TableService.Instance;
         if (svc == null) return;
         svc.FinalizeLocked();
-        if (_final_lock_button_label) _final_lock_button_label.text = "Locked (final)"; 
+        if (_final_lock_button_label) _final_lock_button_label.text = "Locked (final)";
         if (_lockButton) _lockButton.interactable = false;
         if (_confirmButton) _confirmButton.interactable = false;
     }

@@ -27,7 +27,7 @@ public class XZOnlyConstraint : MonoBehaviour
         // Lock Y height
         Vector3 pos = transform.position;
         pos.y = _initialPosition.y;
-        
+
         // Lock rotation to preserved
         transform.SetPositionAndRotation(pos, _initialRotation);
     }

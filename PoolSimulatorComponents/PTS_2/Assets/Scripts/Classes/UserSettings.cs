@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 public class UserSettings
 {
     public string SelectedLabel { get; set; } = SemanticLabel.OTHER;
@@ -8,5 +10,9 @@ public class UserSettings
 
     public bool AllowControllerFallBack { get; set; } = false;
 
-    public EnvironmentInfo TableInfo {get; set;}  = null;
+    public EnvironmentInfo EnviromentInfo {get; set;}  = null;
+
+    public DeviceInformation DeviceInformation { get; set; } = DeviceInformation.PrimaryQuest;
+
+    public List<TableStateEntry> TableStates { get; set; } = null;
 }

@@ -12,38 +12,36 @@ public class UsbSocketReceiver : MonoBehaviour
     public const int Port = 5005;
     public bool AutoStart = true;
     public bool VerboseLogs = true;
-    public bool UseTableYFromStream = true;
-    public float OverrideTableY = 0.80f;
 
     private TcpListener _listener;
     private Thread _listenerThread;
     private volatile bool _running = false;
     private readonly ConcurrentQueue<string> _blocks = new();
-    private static readonly TableService svc = TableService.Instance;
+    private TableService svc = TableService.Instance;
 
     // parsed state (XZ pairs in TL,TR,ML,MR,BL,BR order)
-    private bool _havePockets = false;
-    private Vector2 _tableSize = new(-1f, -1f);
-    private bool _allTablePropertiesParsed = false;
-
-    void Start()
+    public void Start()
     {
-        var environmentInfo = AppSettings.Instance.Settings.TableInfo;
+        EnsureSvc();
+        var environmentInfo = AppSettings.Instance.Settings.EnviromentInfo;
         if (environmentInfo != null)
-            ApplyEnvironmentFromCache(environmentInfo);
+            ApplyEnvironment(environmentInfo);
 
         if (AutoStart) StartServer();
     }
 
-    void OnDestroy() => StopServer();
+    public void OnDestroy() => StopServer();
+
+    public void OnApplicationQuit() => StopServer();
 
     public void Update()
     {
         if (svc == null) return;
 
+        var pocketsXZ = new (float, float)[6];
         while (_blocks.TryDequeue(out var block))
         {
-            try { ParseBlock(block, svc.LockFinalized); } catch (Exception e) { Debug.LogWarning(e); }
+            try { ParseBlock(block, pocketsXZ, svc.LockFinalized); } catch (Exception e) { Debug.LogWarning(e); }
         }
     }
 
@@ -64,6 +62,18 @@ public class UsbSocketReceiver : MonoBehaviour
         try { _listenerThread?.Join(200); } catch { }
         _listener = null; _listenerThread = null;
         if (VerboseLogs) Debug.Log("[USB] TcpListener stopped.");
+    }
+
+    private void EnsureSvc()
+    {
+        if (svc != null) return;
+        svc = TableService.Instance;
+        if (svc == null)
+        {
+            Debug.LogWarning(
+                "[UsbSocketReceiver] 'svc' is not assigned. "
+            );
+        }
     }
 
     private void AcceptLoop()
@@ -110,21 +120,25 @@ public class UsbSocketReceiver : MonoBehaviour
         _blocks.Enqueue(block + "\n");
     }
 
-    public static bool TryNextToken(ref ReadOnlySpan<char> s, char sep, out ReadOnlySpan<char> tok)
+    private static bool TryNextToken(ref ReadOnlySpan<char> s, char sep, out ReadOnlySpan<char> tok)
     {
         int i = s.IndexOf(sep);
         if (i < 0) { tok = s; s = ReadOnlySpan<char>.Empty; return tok.Length > 0; }
         tok = s[..i]; s = s[(i + 1)..]; return true;
     }
-    public static bool TryParseFloat(ReadOnlySpan<char> span, out float value) =>
+
+    private static bool TryParseFloat(ReadOnlySpan<char> span, out float value) =>
         float.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
-    private void ParseBlock(string block, bool isLockFinallized = false)
+    private void ParseBlock(string block, (float x, float z)[] pocketsXZ, bool isLockFinalized = false)
     {
         ReadOnlySpan<char> span = block.AsSpan().Trim();
         int start = 0;
-        byte parsedPockets = 0;
-        (float x, float z)[] pocketsXZ = null;
+
+        // p -> line intended for pocket parsing
+        // t -> line intended for table parsing
+        // L, W, H, BD, C, BC -> lines intended for parsing table parameters. Need only once
+
         while (start < span.Length)
         {
             int newLine = span[start..].IndexOf('\n');
@@ -136,10 +150,22 @@ public class UsbSocketReceiver : MonoBehaviour
                 ReadOnlySpan<char> token = separator > 0 ? line[..separator] : line;
                 ReadOnlySpan<char> body = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
 
-                if (!isLockFinallized && !_havePockets && token.SequenceEqual("p"))
+                if (svc == null) continue;
+
+                if (svc.HasAllPockets() && svc.AreProperstiesParsed() && isLockFinalized && BallTypeWire.TryParseToken(token, out var ballType))
                 {
-                    pocketsXZ = new (float, float)[6];
-                    for (int i = 0; i < 6; i++)
+                    // Tries to save the table. Only one table currently supported.
+                    if (svc.TrySaveEnviroment())
+                        Debug.Log("Enviroment successfully parsed. Saved to configuration.");
+
+
+                    ParseBalls(line, ballType);
+                    continue;
+                }
+
+                if (!isLockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
+                {
+                    for (byte i = 0; i < svc.MaxPocketCount; i++)
                     {
                         if (body.IsEmpty) break;
 
@@ -157,28 +183,34 @@ public class UsbSocketReceiver : MonoBehaviour
                         if (TryParseFloat(xS, out float x) && TryParseFloat(zS, out float z))
                         {
                             pocketsXZ[i] = (x, z);   // Python (x,y) -> Unity (x,z)
-                            parsedPockets++;
+                            svc.IncrementPocketCount();
                         }
                         else
                         {
                             break; // malformed pair: stop and don't claim success
                         }
                     }
-                    _havePockets = parsedPockets == 6;
-                    if (!_allTablePropertiesParsed)
+                    if (svc.HasAllPockets())
                         svc.SetPocketsXZ(pocketsXZ);
                 }
-                else if (!isLockFinallized && !_allTablePropertiesParsed && token.SequenceEqual("t"))
+                else if (!isLockFinalized && !svc.AreProperstiesParsed() && token.SequenceEqual("t"))
                 {
                     // Expect body like: "L=2.540; W=1.270; H=0.800; name=9ft (tournament); ..."
                     // We'll scan sequentially, split by ';', then split each into "key=value".
-                    float playFieldLength = -1f;
-                    float playFieldWidth = -1f;
-                    float playFieldHeight = -1f;
-                    float ballDiameter = -1f;
-                    float cameraHeightFromFloor = -1f;
+                    float playfieldHeight = 0;
+                    float playFieldLength = 0;
+                    float playFieldWidth = 0;
+                    float ballDiameter = 0;
+                    float cameraHeightFromFloor = 0;
+                    float ballCircumference = 0;
+
                     while (!body.IsEmpty)
                     {
+                        playfieldHeight = svc.IsTableHeightSet() ? svc.TableY : -1f;
+                        (playFieldLength, playFieldWidth) = svc.Is2DTableSet() ? (svc.TableSize.x, svc.TableSize.y) : (-1f, -1f);
+                        ballDiameter = svc.IsBallDiameterSet() ? svc.BallDiameterM : -1f;
+                        cameraHeightFromFloor = svc.IsCameraFromFloorSet() ? svc.CameraHeightFromFloor : -1f;
+                        ballCircumference = svc.IsBallCircumferenceSet() ? svc.BallCircumferenceM : -1f;
                         if (!TryNextToken(ref body, ';', out ReadOnlySpan<char> pair)) break;
                         pair = pair.Trim();
                         if (pair.IsEmpty) continue;
@@ -190,84 +222,127 @@ public class UsbSocketReceiver : MonoBehaviour
                         var val = pair[(eq + 1)..].Trim();
 
                         // Only pull what we actually need in Unity right now:
-                        if (key.SequenceEqual("L"))
-                            TryParseFloat(val, out playFieldLength);
-                        else if (key.SequenceEqual("W"))
-                            TryParseFloat(val, out playFieldWidth);
-                        else if (key.SequenceEqual("H"))
-                            TryParseFloat(val, out playFieldHeight);
-                        else if (key.SequenceEqual("B"))
-                            TryParseFloat(val, out ballDiameter);
-                        else if (key.SequenceEqual("C"))
-                            TryParseFloat(val, out cameraHeightFromFloor);
+                        switch (key)
+                        {
+                            case var k when k.SequenceEqual("L"):
+                                TryParseFloat(val, out playFieldLength);
+                                break;
 
-                        // Example:
-                        // else if (key.SequenceEqual("corner_pocket_diameter_mm")) { /* parse need it in-scene */ }
+                            case var k when k.SequenceEqual("W"):
+                                TryParseFloat(val, out playFieldWidth);
+                                break;
 
+                            case var k when k.SequenceEqual("H"):
+                                TryParseFloat(val, out playfieldHeight);
+                                break;
+
+                            case var k when k.SequenceEqual("BD"):
+                                TryParseFloat(val, out ballDiameter);
+                                break;
+
+                            case var k when k.SequenceEqual("C"):
+                                TryParseFloat(val, out cameraHeightFromFloor);
+                                break;
+
+                            case var k when k.SequenceEqual("BC"):
+                                TryParseFloat(val, out ballCircumference);
+                                break;
+                        }
                     }
 
-                    if (playFieldLength != -1 && playFieldWidth != -1)
-                        _tableSize = new Vector2(playFieldLength, playFieldWidth);
-
-                    if (playFieldHeight != -1)
-                    {
-                        if (_tableSize.x > 0f && _tableSize.y > 0f)
-                            svc.SetTable(_tableSize.x, _tableSize.y, playFieldHeight);
-
-                        if (_havePockets)
-                            svc.ReapplyPockets(playFieldHeight);
-                    }
-                    if (ballDiameter != -1)
-                        svc.SetBallDiameter(ballDiameter);
-                    if (cameraHeightFromFloor != -1)
-                        svc.SetCamera(cameraHeightFromFloor);
-
-                    if (playFieldHeight != -1 && _tableSize.x > 0f && _tableSize.y > 0f && cameraHeightFromFloor > 0f && ballDiameter > 0f && !_allTablePropertiesParsed)
-                        _allTablePropertiesParsed = true;
-
-                    if (VerboseLogs) Debug.Log($"[USB] Table(t): L={_tableSize.x:F3}, W={_tableSize.y:F3}, H={playFieldHeight:F3} m");
+                    ApplyEnvironment(playFieldLength, playFieldWidth, playfieldHeight, ballDiameter, ballCircumference, cameraHeightFromFloor);
                 }
-                // c/e/so/st ignored for now
             }
             if (newLine < 0) break;
             start += newLine + 1;
         }
     }
 
-    private void ApplyEnvironmentFromCache(EnvironmentInfo env)
+    private void ApplyEnvironment(float playfieldLength = -1,
+                                  float playfieldWidth = -1,
+                                  float playfieldHeight = -1,
+                                  float ballDiameter = -1,
+                                  float ballCircumference = -1,
+                                  float cameraHeightFromFloor = -1)
     {
-        _tableSize = new(env.PoolTable.L_m, env.PoolTable.W_m);
-        svc.SetFromEnvironmentCache(env);
-        _allTablePropertiesParsed = true;
+        // Width and length of the table.
+        svc.SetTableLenght(playfieldLength);
+        svc.SetTableWidth(playfieldWidth);
+
+        if (!svc.IsTableHeightSet() && playfieldHeight > 0f)
+        {
+            svc.SetTable(playfieldLength, playfieldWidth, playfieldHeight);
+            if (svc.HasAllPockets())
+                svc.ReapplyPockets();
+        }
+
+        svc.SetBallDiameter(ballDiameter);
+        svc.SetCamera(cameraHeightFromFloor);
+        svc.SetBallCircumference(ballCircumference);
+
+        if (VerboseLogs)
+        {
+            Debug.Log($"[USB] Table(t): L={playfieldLength:F3}m,\r\n" +
+            $" W={playfieldWidth:F3}m,\r\n" +
+            $" H={playfieldHeight:F3}m,\r\n" +
+            $" BD={ballDiameter}m,\r\n" +
+            $" BC={ballCircumference}m,\r\n" +
+            $" C={cameraHeightFromFloor}m,\r\n");
+        }
     }
 
-    private void ApplyEnvironment((float, float)[] pocketsXZ, float tableY = -1, float ballDiameter = -1, float cameraH = -1)
+    private void ApplyEnvironment(EnvironmentInfo env)
     {
-        if (tableY != -1)
-        {
-            if (_tableSize.x > 0 && _tableSize.y > 0 && !_allTablePropertiesParsed)
-            {
-                svc.SetTable(_tableSize.x, _tableSize.y, tableY);
-                _allTablePropertiesParsed = true;
-            }
-            if (pocketsXZ != null && pocketsXZ.Length == 6)
-            {
-                svc.SetPocketsXZ(pocketsXZ, tableY);
-                _havePockets = true;
-            }
-        }
-        if (ballDiameter != -1) svc.SetBallDiameter(ballDiameter);
-        if (cameraH != -1) svc.SetCamera(cameraH);
+        if (env != null)
+            ApplyEnvironment(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m, env.PoolTable.BallDiameter_m, env.PoolTable.BallCircumference_m, env.CameraCharacteristics.HFromFloor_m);
+        else
+            Debug.LogError("Enviroment info not properly cached or corrupted.");
+    }
+
+    private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
+    {
+        //TODO: check the parsing algorithm.
+
+        // skip token (c/e/so/st) + whitespace
+        int spaceIndex = line.IndexOf(' ');
+        var data = line[(spaceIndex + 1)..];
+
+        // split by comma
+        var parts = data.ToString().Split(',');
+
+        // Example: x,y,id,conf,vx,vy
+        float x = float.Parse(parts[0], CultureInfo.InvariantCulture);
+        float y = float.Parse(parts[1], CultureInfo.InvariantCulture);
+
+        byte id = (byte)balltype;
+
+        float conf = float.Parse(parts[3], CultureInfo.InvariantCulture);
+        float vx = float.Parse(parts[4], CultureInfo.InvariantCulture);
+        float vy = float.Parse(parts[5], CultureInfo.InvariantCulture);
+
+        svc.PlaceBalls(x, y, id, conf, vx, vy);
     }
 
 #if UNITY_EDITOR
-    [ContextMenu("USB/Test Inject Sample Block (t row)")]
+    [ContextMenu("USB/Test Inject Sample Block (full balls set)")]
     private void TestInjectSampleBlock()
     {
-        string block =
+        (float x, float z)[] pocketsXZ = null;
+        EnsureSvc();
+        if (svc == null)
+        {
+            Debug.LogError("[USB] TableService.Instance is still null — make sure a TableService is in the scene.");
+            return;
+        }
+
+        const string block =
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
+            "e 1.2500000,0.6350000,8,0.97,0.00,0.00\n" +
+            "c 1.2700000,0.4000000,/,0.92,0.15,-0.10\n" +
+            "st 0.3000000,0.5000000,9,0.88,0.20,-0.05; 0.4500000,0.5200000,10,0.91,\"\",''; 0.6000000,0.5400000,11,\\,-0.10,0.00; 0.7500000,0.5600000,12,0.66,0.00,0.00; 0.9000000,0.5800000,13,0.80,0.05,0.02; 1.0500000,0.6000000,14,0.74,-0.02,0.03; 1.2000000,0.6200000,15,0.60,\\,0.00\n" +
+            "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n" +
             "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n";
-        ParseBlock(block);
+        ParseBlock(block, pocketsXZ, false);
     }
 #endif
 }

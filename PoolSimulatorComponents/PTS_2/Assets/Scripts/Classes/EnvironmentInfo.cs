@@ -16,6 +16,7 @@ public class EnvironmentInfo
         [JsonProperty("W_m")] public float W_m { get; set; }
         [JsonProperty("H_m")] public float H_m { get; set; }
         [JsonProperty("B_m")] public float BallDiameter_m { get; set; } = .05715f;
+        [JsonProperty("B_c")] public float BallCircumference_m { get; set; } = .068f;
     }
 
     public class Camera

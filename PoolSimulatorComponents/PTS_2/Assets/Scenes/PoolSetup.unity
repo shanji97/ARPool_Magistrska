@@ -1881,8 +1881,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   AutoStart: 1
   VerboseLogs: 1
-  UseTableYFromStream: 1
-  OverrideTableY: 0.8
 --- !u!4 &1586150832
 Transform:
   m_ObjectHideFlags: 0
@@ -1949,7 +1947,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _monoscopic: 0
   _sharpenType: 0
-  _enableDynamicResolution: 0
+  _enableDynamicResolution: 1
   minDynamicResolutionScale: 1
   maxDynamicResolutionScale: 1
   quest2MinDynamicResolutionScale: 0.7
@@ -1960,8 +1958,13 @@ MonoBehaviour:
   maxRenderScale: 1
   _headPoseRelativeOffsetRotation: {x: 0, y: 0, z: 0}
   _headPoseRelativeOffsetTranslation: {x: 0, y: 0, z: 0}
-  profilerTcpPort: 32419
-  expandMixedRealityCapturePropertySheet: 0
+  enableCoreMetricsRelease: 0
+  enableCoreMetricsDevelopment: 1
+  coreMetricVisibility:
+    visibleMemoryMetricStats: 0
+    visibleMemoryMetricGraphs: 0
+    visibleRenderMetricStats: 0
+    visibleRenderMetricGraphs: 0
   enableMixedReality: 0
   compositionMethod: 0
   extraHiddenLayers:
@@ -1999,8 +2002,9 @@ MonoBehaviour:
   requestBodyTrackingPermissionOnStartup: 0
   requestFaceTrackingPermissionOnStartup: 0
   requestEyeTrackingPermissionOnStartup: 0
-  requestScenePermissionOnStartup: 0
+  requestScenePermissionOnStartup: 1
   requestRecordAudioPermissionOnStartup: 0
+  requestPassthroughCameraAccessPermissionOnStartup: 1
   _localDimming: 1
   _trackingOriginType: 1
   usePositionTracking: 1
@@ -2145,9 +2149,13 @@ MonoBehaviour:
   MarkersParent: {fileID: 1481800618}
   SurfaceLift: 0.01
   DefaultSphereScale: 0.03
-  TableY: 0.8
   TableSize: {x: 2.54, y: 1.27}
   MaintainRectangleWhenLocked: 1
+  BallDiameterM: -1
+  BallCircumferenceM: -1
+  MarkerCount: 2
+  StripedBalls: 090a0b0c0d0e0f
+  SolidBalls: 01020304050607
 --- !u!1 &1857997943
 GameObject:
   m_ObjectHideFlags: 0

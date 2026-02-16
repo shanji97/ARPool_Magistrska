@@ -5,7 +5,7 @@ using TMPro;
 using UnityEngine;
 
 [RequireComponent(typeof(TMP_Dropdown))]
-public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReactive
+public class DropdownSettings : MonoBehaviour, ISettingsBindable, ISettingsReactive
 {
     public string SettingsKey;
     public string defaultValue;
@@ -18,7 +18,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
     {
         get
         {
-            return _options == null || !_options.Any() ?
+            return _options?.Any() != true ?
                  GenerateOptionsFromSettings(AppSettings.Instance.Settings) :
                  _options;
         }
@@ -35,7 +35,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
     {
         AppSettings.OnSettingsChanged += OnSettingsChanged;
     }
-    
+
     public void OnDisable()
     {
         AppSettings.OnSettingsChanged -= OnSettingsChanged;
@@ -81,6 +81,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
             nameof(settings.SelectedLabel) => settings.SelectedLabel,
             nameof(settings.ApiMode) => settings.ApiMode.ToString(),
             nameof(settings.ScanControl) => settings.ScanControl.ToString(),
+            nameof(settings.DeviceInformation) => settings.DeviceInformation.ToString(),
             _ => defaultValue
         };
     }
@@ -100,6 +101,10 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
                 if (Enum.TryParse(value, out ScanControl control))
                     settings.ScanControl = control;
                 break;
+            case nameof(settings.DeviceInformation):
+                if(Enum.TryParse(value, out DeviceInformation deviceInformation))
+                    settings.DeviceInformation = deviceInformation;
+                break;
             default:
                 Debug.LogWarning($"Unknown setting key: {SettingsKey}");
                 break;
@@ -116,7 +121,7 @@ public class SettingsDropdown : MonoBehaviour, ISettingsBindable, ISettingsReact
 
             nameof(settings.ScanControl) => Enum.GetNames(typeof(ScanControl)).ToList(),
 
-            // Add more if needed
+            nameof(settings.DeviceInformation) => Enum.GetNames(typeof(DeviceInformation)).ToList(),
 
             _ => new List<string>()
         };

@@ -5,12 +5,12 @@ using System.IO;
 using UnityEditor;
 using UnityEditor.Callbacks;
 
-public class AdbForwardPostBuild
+public static class AdbForwardPostBuild
 {
     private const int PcPort = 5005;
     private const int QuestPort = 5005;
 
-    private static readonly string DeviceSerial = null;
+    private const string DeviceSerial = null;
 
     [PostProcessBuild(999)] // Last command, after we write to disk
     public static void OnPostprocessBuild(BuildTarget target, string pathToBuildProject)
