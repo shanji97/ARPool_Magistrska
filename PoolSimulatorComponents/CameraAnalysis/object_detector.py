@@ -21,6 +21,8 @@ class ObjectDetector:
         self.label_map = label_map
         self._corner_ema = None
         self._pocket_ema = None
+        self._last_stable_pockets = None
+        self._pocket_stable_frames = 0
         self._corner_alpha = .2
         self._pocket_alpha = .25
         self.debug = debug
@@ -101,6 +103,30 @@ class ObjectDetector:
     def smooth_pockets(self, pockets_xy):
         self._pocket_ema = self._exp_moving_avg(self._pocket_ema, pockets_xy, self._pocket_alpha)
         return self._pocket_ema.copy()
+
+    def reset_pocket_tracking(self):
+        self._pocket_ema = None
+        self._last_stable_pockets = None
+        self._pocket_stable_frames = 0
+
+    def stabilize_pockets(self, pockets_xy, max_delta_px = 1.5, required_stable_frames = 8):
+        smoothed = np.asarray(self.smooth_pockets(pockets_xy), dtype=np.float32)
+        if self._last_stable_pockets is None:
+            self._last_stable_pockets = smoothed.copy()
+            self._pocket_stable_frames = 1
+            return smoothed.copy(), False, float("inf")
+
+        deltas = np.linalg.norm(smoothed - self._last_stable_pockets, axis=1)
+        max_delta = float(np.max(deltas)) if deltas.size else 0.0
+
+        if max_delta <= float(max_delta_px):
+            self._pocket_stable_frames += 1
+        else:
+            self._pocket_stable_frames = 0
+
+        self._last_stable_pockets = smoothed.copy()
+        is_stable = self._pocket_stable_frames >= int(required_stable_frames)
+        return smoothed.copy(), is_stable, max_delta
     
     def _denoise_mask(self, mask, kernel_one = 3, kernel_two = 5):
         kernels = [kernel_one, kernel_two]

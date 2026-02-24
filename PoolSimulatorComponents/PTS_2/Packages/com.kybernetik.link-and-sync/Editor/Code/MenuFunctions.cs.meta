@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 0e4a11cffdb15c1439eda2c46f04e827
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 229569
+  packageName: Link & Sync
+  packageVersion: 3.0
+  assetPath: Packages/com.kybernetik.link-and-sync/Editor/Code/MenuFunctions.cs
+  uploadId: 518890

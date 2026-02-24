@@ -14,7 +14,7 @@ from object_detector import ObjectDetector
 from calibration import Calibrator
 from objects_in_environment import EnvironmentConfig
 from connection import UsbTcpSender
-from formatters import build_transfer_block, LABEL_MAP
+from formatters import build_conf_transfer_block, line_configuration_name, line_pockets, LABEL_MAP
 
 class DetectionMode(Enum):
     Tresholding = 1
@@ -37,6 +37,8 @@ MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means t
 TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
 SEND_EVERY_N_FRAMES = 1
 DETECTION_MODE = DetectionMode.Both
+POCKET_STABLE_MAX_DELTA_PX = 1.5
+POCKET_STABLE_REQUIRED_FRAMES = 8
 
 # Runtime state
 _controller = None
@@ -57,11 +59,12 @@ _force_rescan = False
 # General helpers
 def _purge_cache():
     import subprocess
+    import os
     try:
         print("Trying to clean python package cache with 'python -m pip cache purge' to remove GiB worth of cached packets.")
         result = subprocess.run(["python", "-m", "pip", "cache", "purge"], check=True)
         print(result.stdout)
-        os.system("cls")
+        # os.system("cls")
     except subprocess.CalledProcessError as e:
         print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
 
@@ -79,7 +82,7 @@ def _install_dependecies_for_other_projects(sub_folders = ["pix2pockets"]):
         else:
             with open(os.path.join(folder, installed_text), "w") as file:
                 file.write("Dependecies successfully installed.")      
-    os.system("cls")
+    _purge_cache()
 
 # Camera and stream
 def _validate_ip(ip:str):
@@ -97,15 +100,33 @@ def _setup_connection():
 
 def _open_ports(usb_quest_port: int = 5005):
     import subprocess
-    import math
-    usb_quest_port = 5005 if math.nan(usb_quest_port) or usb_quest_port > 2**16 else usb_quest_port
-    port = "5005" if  usb_quest_port is None and len(str(usb_quest_port)) > 5 else str(usb_quest_port)
-    if not subprocess.run(["adb", "forward",f"tcp:{port}", f"tcp:{port}"]):
+    # Validate and normalize the provided port value
+    try:
+        port_int = int(usb_quest_port) if usb_quest_port is not None else 5005
+    except Exception:
+        port_int = 5005
+
+    # Clamp to valid TCP port range
+    if port_int <= 0 or port_int > 2 ** 16 - 1:
+        port_int = 5005
+
+    port = str(port_int)
+    result = subprocess.run(["adb", "forward", f"tcp:{port}", f"tcp:{port}"], check=False)
+    if result.returncode != 0:
         print("Failed to run command mannualy. Ensure the Quest 3 is connected via the USB cable and try again using the MQDH.")
         print("You have 20 seconds to do this manually.")
-        time.sleep(25)
+        time.sleep(20)
         return False
     return True
+
+def send_config_name_to_quest(config_name: str):
+    _open_ports(5005)
+    sender = UsbTcpSender()
+    print(line_configuration_name(config_name))
+    sender.send(line_configuration_name(config_name))
+    # Send file name to Quest 3
+   
+    # Send file content to 
 
 def open_stream(work_resolution:str = "1920x1080",
          performance_mode: bool = False,
@@ -117,10 +138,15 @@ def open_stream(work_resolution:str = "1920x1080",
     if debug and debug_static_image_present:
         return (None, None)
     
-    global _controller
-    
-    if not _controller or not _controller.is_host_reachable(2):
-        print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.") 
+    if _controller is None:
+        print("Controller is not initialized; cannot open stream.")
+        return (None, None)
+    if not _controller.is_host_reachable(2):
+        try:
+            print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.")
+        except Exception:
+            print("Device not reachable. Check network settings. Exiting.")
+        return (None, None)
     
     resolution = work_resolution if performance_mode is False else perf_resoulution
         
@@ -222,11 +248,14 @@ def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
     _force_rescan = force_rescan
 
 def reset_pocket_globals():
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _detector
     _is_changing_camera = False
     _H_cached = None
     _pockets_px_cached = None
     _pockets_ready = False
+    _force_rescan = False
+    if _detector is not None:
+        _detector.reset_pocket_tracking()
     return
 
 # Camera control part
@@ -454,7 +483,7 @@ def synth_test():
         # {"type": BallType.STRIPE.value, "x": 1.2500000, "y": 0.4200000, "number": "/"" "confidence": 0.82, "vx": 0.01, "vy": 0.02},
     ]
 
-    payload = build_transfer_block(
+    payload = build_conf_transfer_block(
         pockets=pockets_xy_m,
         table_LW_m=(2.5400000, 1.2700000, 0.7850000),
         ball_diameter_m=0.0571500,
@@ -482,13 +511,22 @@ def main(
     debug_frame = None
     dimensions = None
     capture = None
+    config = None   
 
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
     # Compute environment and static things, such as pockets.
+    print("HEy")
     env = EnvironmentConfig.__new__(EnvironmentConfig)
-    config = env.get_environment_config(interactive=True, use_last_known=True) if not debug else env.get_debug_env_config(debug_config_name)
+    
+    if debug:
+        config = env.get_debug_env_config(debug_config_name)
+    else:
+        config = env.get_environment_config(interactive= True, use_last_known= True)
+    if config is not None:
+        send_config_name_to_quest(config.get_json_name_for_unity())
+    
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
     (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
@@ -539,6 +577,7 @@ def main(
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
+    _detector.reset_pocket_tracking()
 
     retry_count = 0
     pockets_px_raw = None
@@ -549,7 +588,7 @@ def main(
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     start_time = time.time() if debug else None
     
-    # Main execution loop
+    # Main execution loop detection
     while True:
         
         # Camera switching lock
@@ -557,6 +596,8 @@ def main(
             print("Changing camera - skipping current frame(s).")
             retry_count = 0
             _pockets_ready = False
+            # Sometime in the future this won't be need, since the pockets are stationary and a loopback from the Quest
+            # is going to be available that the pockets have been comnputed.
             continue
             
         if not debug:
@@ -599,27 +640,61 @@ def main(
                 print(f"[INFO] FPS: {fps:.2f}")
                 
         frame = undistort_frame_if_needed(frame) if not debug else frame # Variables change based on camera switching
-
+        
+        # Assuming we have correctly calculated the table.
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
-        
-        # Pockets
-        
         if table_bounding_box is None or corners is None:
             retry_count += 1
             table_fail_streak += 1
             if table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
                 _pockets_ready = False
+                _detector.reset_pocket_tracking()
+            continue
+
+        corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
+        H_new = _detector.homography_mm_to_px(corners, Lmm, Wmm)
+        if H_new is None:
             continue
         
-        corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
+        
+        # CURRENT LOCATION
+        # Detect pockets and get a 2D calculation.
+        # If the pockets are not yet calcucated recalculate them and once they are stable enough:
+            # 1) "Finalize them"
+            # 2) "Compute the 2D position from the pixels to real coordinates in relation to the table (if neede, I can implement some marker system)."
+            # 3)  Send them to the Quest via the connection and skip the calculation entirely for the rest of the python application execution time.
+        
         
         if (not _pockets_ready) or _force_rescan:
+            if _force_rescan:
+                _detector.reset_pocket_tracking()
+                _pockets_ready = False
+                _force_rescan = False
+                print("[pockets] Re-scan in progress...")
             
-            H_new = _detector.homography_mm_to_px(corners, Lmm, Wmm)
             pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
-            pockets_px = _detector.smooth_pockets(pockets_px_raw)
+            pockets_px, stable, max_delta_px = _detector.stabilize_pockets(
+                pockets_px_raw,
+                max_delta_px=POCKET_STABLE_MAX_DELTA_PX,
+                required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES
+            )
             table_fail_streak = 0
-            commit_cache(H_new, pockets_px, True, False)
+
+            # Using the detector file (object_detector.py) compute the pockets here and do some stabilisation...
+            
+            
+            # Once stabilised save the pocket positions in 2D and 3D and send them to the Quest 3 for further processing.
+            if stable:
+                pockets_xy_m = ObjectDetector.warp_px_to_m(H_new, pockets_px)
+                sent = usb_sender.send(line_pockets(pockets_xy_m))
+                if sent:
+                    print(f"[pockets] Locked with max delta {max_delta_px:.3f}px and sent to Quest.")
+                    commit_cache(H_new, pockets_px, True, False)
+                else:
+                    print("[pockets] Stable but failed to send pocket payload. Will retry.")
+                    commit_cache(H_new, pockets_px, False, False)
+            else:
+                commit_cache(H_new, pockets_px, False, False)
         else:
             H_new = _H_cached
             pockets_px_raw = _pockets_px_cached        
@@ -633,7 +708,11 @@ def main(
             cv2.imshow("debug", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-                
+        #END OF CURRENT  LOCATION
+        
+        
+        
+        
         # if H_new is None:
         #     continue
                 

@@ -25,7 +25,7 @@ public class TableService : MonoBehaviour
     public bool IsTableHeightSet() => TableY > 0;
 
     public Vector2 TableSize = new(-1, -1);
-    public bool Is2DTableSet() => TableSize != null && TableSize.x > 0 && TableSize.y > 0;
+    public bool Is2DTableSet() => TableSize.x > 0 && TableSize.y > 0;
 
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
@@ -44,7 +44,7 @@ public class TableService : MonoBehaviour
 
     public bool AreBallPropertiesSet() => IsBallDiameterSet() && IsBallCircumferenceSet();
 
-    public bool AreProperstiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet() && AreBallPropertiesSet();
+    public bool ArePropertiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet() && AreBallPropertiesSet();
 
     private bool _enviromentSaved = false;
 
@@ -167,7 +167,7 @@ public class TableService : MonoBehaviour
     public void SetTable(Vector2 widthAndLength, float height) => SetTable(widthAndLength.x, widthAndLength.y, height);
     public void SetTable(Vector3 tableDimensions) => SetTable(tableDimensions.x, tableDimensions.z, tableDimensions.y);
     public void SetTable(Vector3Float tableDimensions) => SetTable(tableDimensions.X, tableDimensions.Z, tableDimensions.Y);
-    public void SetTable(EnvironmentInfo env) => SetTable(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m);
+    public void SetTable(EnvironmentInfo env) => SetTable(env.Table.Length, env.Table.Width, env.Table.Height);
     public void SetTable(float length, float width, float newTableY)
     {
         if (IsLockedToJitter) return;
@@ -199,18 +199,21 @@ public class TableService : MonoBehaviour
 
         var info = new EnvironmentInfo()
         {
-            PoolTable = new EnvironmentInfo.Table()
+            Table = new Table(
+                (short)(TableSize.x > TableSize.y ? TableSize.x : TableSize.y),
+                (short)(TableSize.x > TableSize.y ? TableSize.y : TableSize.x),
+                (short)TableY
+            ),
+
+
+            BallSpec = new BallSpec()
             {
-                // Ensuring the width and height are saved correclty saved regardles of
-                L_m = TableSize.x > TableSize.y ? TableSize.x : TableSize.y,
-                W_m = TableSize.x > TableSize.y ? TableSize.y : TableSize.x,
-                H_m = TableY,
-                BallCircumference_m = BallCircumferenceM,
-                BallDiameter_m = BallDiameterM
+                DiameterM = BallCircumferenceM,
+                BallCircumferenceM = BallDiameterM
             },
-            CameraCharacteristics = new EnvironmentInfo.Camera()
+            CameraData = new CameraData()
             {
-                HFromFloor_m = CameraHeightFromFloor
+                HeightFromFloorM = CameraHeightFromFloor
             }
         };
 

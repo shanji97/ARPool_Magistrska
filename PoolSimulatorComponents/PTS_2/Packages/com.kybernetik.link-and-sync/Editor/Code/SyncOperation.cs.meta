@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 961489d269393984bb46a9feda5e56e1
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 229569
+  packageName: Link & Sync
+  packageVersion: 3.0
+  assetPath: Packages/com.kybernetik.link-and-sync/Editor/Code/SyncOperation.cs
+  uploadId: 518890

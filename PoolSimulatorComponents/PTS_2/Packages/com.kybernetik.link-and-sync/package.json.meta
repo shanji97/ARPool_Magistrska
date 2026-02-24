@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 57fafb5ab1b911b49a59102a76d43691
+PackageManifestImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 229569
+  packageName: Link & Sync
+  packageVersion: 3.0
+  assetPath: Packages/com.kybernetik.link-and-sync/package.json
+  uploadId: 518890
