@@ -82,4 +82,4 @@ def build_conf_transfer_block(
     for f in (ball_lines):
         if f: lines.append(f)
     # lines.append(line_table(table_LW_m, ball_diameter_m, camera_height_m))
-    return "\n".join(lines) + "\n\n"
+    return "\n".join(lines) + "\n"

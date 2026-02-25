@@ -10,8 +10,8 @@ class UsbTcpSender:
                  host: str = "127.0.0.1",
                  port: int = 5005,
                  auto_reconnect: bool = True,
-                 connect_timeout_s: float = 2.0,
-                 send_timeout_s: float = 2.0,
+                 connect_timeout_s: float = 30.0,
+                 send_timeout_s: float = 30.0,
                  retry_initial_delay_s: float = 0.5,
                  retry_max_delay_s: float = 5.0) -> None:
         self.host = host

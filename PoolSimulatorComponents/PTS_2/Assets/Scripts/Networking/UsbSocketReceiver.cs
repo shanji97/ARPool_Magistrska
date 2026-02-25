@@ -172,6 +172,9 @@ public class UsbSocketReceiver : MonoBehaviour
 
                 if (!isLockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
                 {
+                    if (pocketsXZ == null)
+                        pocketsXZ = new (float x, float z)[6];
+                            
                     for (byte i = 0; i < svc.MaxPocketCount; i++)
                     {
                         if (body.IsEmpty) break;
@@ -208,6 +211,8 @@ public class UsbSocketReceiver : MonoBehaviour
                     var resourcePath = $"TableConfigurations/{environmentJsonData}";
                     var jsonAsset = Resources.Load<TextAsset>(resourcePath);
 
+                    Debug.Log("environment data");
+
                     if (jsonAsset == null)
                     {
                         Debug.LogError($"[Unity] JSON resource not found at Resources/{resourcePath}.json");
@@ -232,10 +237,12 @@ public class UsbSocketReceiver : MonoBehaviour
                                 }
                                 else
                                 {
+                                    // TODO: If this enviromnet is already loaded in, skip the application.
+
                                     if (ApplyEnvironment(env))
                                     {
-                                        AppSettings.Instance.Settings.EnviromentInfo = env;
                                         // Now properties are parsed -> subsequent env parsing will be skipped by your existing guards.
+                                        AppSettings.Instance.Settings.EnviromentInfo = env;
                                     }
                                 }
                             }
@@ -283,42 +290,6 @@ public class UsbSocketReceiver : MonoBehaviour
 
                         switch (key)
                         {
-                            case var k when k.SequenceEqual("E"):
-                                if (svc.ArePropertiesParsed()) continue;
-
-                                // Get the string name of the used environment.
-                                var environmentJsonData = val.ToString().Replace(".json", string.Empty);
-
-                                // Load corresponding JSON resource and read the JSON out of it.
-                                var resourcePath = $"TableConfigurations/{environmentJsonData}";
-                                var jsonAssset = Resources.Load<TextAsset>(resourcePath);
-                                if (jsonAssset == null)
-                                {
-                                    Debug.LogError($"[Unity] JSON resource not found at Resources/{resourcePath}.json");
-                                    break;
-                                }
-
-                                var data = jsonAssset.text;
-                                EnvironmentInfo e;
-                                try
-                                {
-                                    e = JsonConvert.DeserializeObject<EnvironmentInfo>(data);
-                                    if (e == null)
-                                    {
-                                        Debug.LogError("[USB] Failed to deserialize environment json data. Check data input.");
-                                        break;
-                                    }
-
-                                    if (ApplyEnvironment(e))
-                                        AppSettings.Instance.Settings.EnviromentInfo = e;
-                                }
-                                catch (Exception ex)
-                                {
-                                    Debug.LogError($"[USB] Failed to deserialize environment JSON. Resource: {resourcePath}. Error: {ex}");
-                                    break;
-                                }
-                                break;
-
                             case var k when k.SequenceEqual("L"):
                                 TryParseFloat(val, out playFieldLength);
                                 break;
@@ -438,13 +409,13 @@ public class UsbSocketReceiver : MonoBehaviour
         }
 
         const string block =
+            "E predator_9ft_virtual_debug.json\n" +
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
             "e 1.2500000,0.6350000,8,0.97,0.00,0.00\n" +
             "c 1.2700000,0.4000000,/,0.92,0.15,-0.10\n" +
             "st 0.3000000,0.5000000,9,0.88,0.20,-0.05; 0.4500000,0.5200000,10,0.91,\"\",''; 0.6000000,0.5400000,11,\\,-0.10,0.00; 0.7500000,0.5600000,12,0.66,0.00,0.00; 0.9000000,0.5800000,13,0.80,0.05,0.02; 1.0500000,0.6000000,14,0.74,-0.02,0.03; 1.2000000,0.6200000,15,0.60,\\,0.00\n" +
             "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n" +
-            "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n" +
-            "E predator_9ft_virtual_debug.json\n";
+            "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n";
 
         ParseBlock(block, pocketsXZ, false);
     }

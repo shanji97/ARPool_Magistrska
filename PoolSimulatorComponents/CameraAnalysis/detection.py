@@ -7,6 +7,7 @@ from enum import Enum
 import json
 import re
 from typing import Optional
+from pathlib import Path
 
 # Custom imports
 from droid_cam_controller import DroidCamController
@@ -39,9 +40,13 @@ SEND_EVERY_N_FRAMES = 1
 DETECTION_MODE = DetectionMode.Both
 POCKET_STABLE_MAX_DELTA_PX = 1.5
 POCKET_STABLE_REQUIRED_FRAMES = 8
+CONFIG_PATH = Path("../Configuration")
+CONFIG_PATH.mkdir(parents=True, exist_ok=True)
+
 
 # Runtime state
 _controller = None
+_primary_quest_3_ip = None
 _calib = None
 _detector = None
 _Km = None
@@ -56,6 +61,8 @@ _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
 
+
+
 # General helpers
 def _purge_cache():
     import subprocess
@@ -64,7 +71,7 @@ def _purge_cache():
         print("Trying to clean python package cache with 'python -m pip cache purge' to remove GiB worth of cached packets.")
         result = subprocess.run(["python", "-m", "pip", "cache", "purge"], check=True)
         print(result.stdout)
-        # os.system("cls")
+        os.system("cls")
     except subprocess.CalledProcessError as e:
         print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
 
@@ -84,19 +91,67 @@ def _install_dependecies_for_other_projects(sub_folders = ["pix2pockets"]):
                 file.write("Dependecies successfully installed.")      
     _purge_cache()
 
+
+
 # Camera and stream
-def _validate_ip(ip:str):
+def _persist_connection_data(ip: str, port: str, device: str):
+    path = CONFIG_PATH / f"{device}_network_data.json"
+    data = {}
+    if path.exists():
+        try:
+             with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    data[device] = {"ip": ip, "port": port}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    print(f"[INFO] Persisted connection '{device}' -> {ip}:{port}")
+    
+def load_connection_data(device: str):
+    path = CONFIG_PATH / f"{device}_network_data.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get(device)
+    except Exception as e:
+        print(f"[WARN] Failed to load connection data: {e}")
+        return None
+        
+def _validate_ip(ip: str):
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
     return re.match(pattern, ip) is not None
 
-def _setup_connection():
-    ip = input("Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
+def _setup_connection(connect_to_quest: bool = False):
+    key = "quest_3_primary" if connect_to_quest else "droid_cam"
+    cached = load_connection_data(key)
+    if cached:
+        print(f"[INFO] Using cached {key}: {cached['ip']}:{cached['port']}")
+        return cached["ip"], cached["port"]
+    
+    ip = input(
+        "Enter Quest 3 IP address (e.g., 192.168.0.40): "
+        if connect_to_quest else
+        "Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
+        
     while not _validate_ip(ip):
         print("Invalid IP format. Try again.")
-        ip = input("Enter DroidCam IP address: ").strip()
+        if connect_to_quest:
+            ip = input("IP: ").strip()
+            global _primary_quest_3_ip
+            _primary_quest_3_ip = ip
+        else:
+            ip = input("Enter DroidCam IP address: ").strip()
+    port = (
+        input("Enter Quest 3 port [default=5005]: ").strip() or "5005"
+        if connect_to_quest else
+        input("Enter DroidCam port [default=4747]: ").strip() or "4747"
+    )
+    _persist_connection_data(ip, port, key)
         
-    port = input("Enter DroidCam port [default=4747]: ").strip() or "4747"
-    return (ip, port)  
+    return ip, port
 
 def _open_ports(usb_quest_port: int = 5005):
     import subprocess
@@ -119,15 +174,11 @@ def _open_ports(usb_quest_port: int = 5005):
         return False
     return True
 
-def send_config_name_to_quest(config_name: str):
+def send_config_name_to_quest(config_name: str, quest_ip: str, port:str = "5005"):
     _open_ports(5005)
-    sender = UsbTcpSender()
-    print(line_configuration_name(config_name))
+    sender = UsbTcpSender(quest_ip, port)
     sender.send(line_configuration_name(config_name))
-    # Send file name to Quest 3
    
-    # Send file content to 
-
 def open_stream(work_resolution:str = "1920x1080",
          performance_mode: bool = False,
          perf_resoulution: str ="1280x720",
@@ -517,7 +568,6 @@ def main(
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
     # Compute environment and static things, such as pockets.
-    print("HEy")
     env = EnvironmentConfig.__new__(EnvironmentConfig)
     
     if debug:
@@ -525,7 +575,8 @@ def main(
     else:
         config = env.get_environment_config(interactive= True, use_last_known= True)
     if config is not None:
-        send_config_name_to_quest(config.get_json_name_for_unity())
+        quest_ip, port = _setup_connection(True)
+        send_config_name_to_quest(config.get_json_name_for_unity(), quest_ip, port)
     
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
@@ -865,4 +916,3 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Error while executing main loop. Check parameters....Exception: {e}")
             
-    _purge_cache()
