@@ -74,7 +74,6 @@ def _purge_cache():
         os.system("cls")
     except subprocess.CalledProcessError as e:
         print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
-
 def _install_dependecies_for_other_projects(sub_folders = ["pix2pockets"]):
     import subprocess
     import os
@@ -483,10 +482,6 @@ def log_csv_row(writer,
         cuda_available, cuda_version, vram_mb, elapsed_ms
     ]
     writer.writerow(row)
-    
-# Environment helper
-def _mm_to_m(x_mm: float) -> float:
-    return float(x_mm) / 1000.0
 
 # Testing
 def synth_test():
@@ -599,6 +594,8 @@ def main(
         dimensions = work_resolution
         print(f"[debug] Using static image as fake feed: {debug_image_path}.")
         print(f"[debug] Resized debug image to work-res: {dimensions}")
+        del work_w
+        del work_h
     else:
         ip, port = _setup_connection()
         global _controller
@@ -638,6 +635,7 @@ def main(
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     start_time = time.time() if debug else None
+    stable = False
     
     # Main execution loop detection
     while True:
@@ -692,7 +690,7 @@ def main(
                 
         frame = undistort_frame_if_needed(frame) if not debug else frame # Variables change based on camera switching
         
-        # Assuming we have correctly calculated the table.
+        # 1) Detect cloth area (rough)
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
         if table_bounding_box is None or corners is None:
             retry_count += 1
@@ -701,9 +699,29 @@ def main(
                 _pockets_ready = False
                 _detector.reset_pocket_tracking()
             continue
-
+        # 2) Smooth cloth-corners (still useful as a fallback / ROI)
         corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
-        H_new = _detector.homography_mm_to_px(corners, Lmm, Wmm)
+
+        # 3) Compute inner cushion corners (markerless) — THIS IS THE KEY CHANGE
+        inner_corners, edges_dbg = ObjectDetector.detect_inner_cushion_corners(
+            frame_bgr=frame,
+            approx_table_corners_px=corners,
+            roi_expand=0.08,
+            canny1=60,
+            canny2=160,
+            hough_thresh=120,
+            min_line_len_frac=0.35,
+            max_line_gap=35,
+            debug=debug_pocket_display
+        )
+        
+        if inner_corners is None:
+            # Fall back to cloth corners if inner cannot be computed this frame
+            inner_corners = corners
+
+        # 4) Homography based on INNER rectangle
+        H_new = _detector.homography_mm_to_px(inner_corners, Lmm, Wmm)
+
         if H_new is None:
             continue
         
@@ -716,26 +734,47 @@ def main(
             # 3)  Send them to the Quest via the connection and skip the calculation entirely for the rest of the python application execution time.
         
         
-        if (not _pockets_ready) or _force_rescan:
-            if _force_rescan:
-                _detector.reset_pocket_tracking()
-                _pockets_ready = False
-                _force_rescan = False
-                print("[pockets] Re-scan in progress...")
+        if (not _pockets_ready) or _force_rescan and not stable:
             
-            pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+            
+            _detector.reset_pocket_tracking()
+            print("[pockets] Re-scan in progress...")
+
+            # Detect pockets from image evidence in rectified plane
+            pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
+                frame_bgr=frame,
+                corners_px_inner=inner_corners,
+                playfield_L_mm=Lmm,
+                playfield_W_mm=Wmm,
+                v_thresh=70,
+                sat_max=180,
+                roi_frac_corner=0.18,
+                roi_frac_side_w=0.22,
+                roi_frac_side_h=0.16,
+                min_area_px=180,
+                debug=debug_pocket_display
+            )
+
+            # Fallback: if any pockets are missing, fall back to projected pockets_mm for those
+            if pockets_px_raw is None:
+                pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+            else:
+                fallback_px = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+                pockets_px_raw = [
+                    p if (p is not None) else fallback_px[i]
+                    for i, p in enumerate(pockets_px_raw)
+                ]
+
             pockets_px, stable, max_delta_px = _detector.stabilize_pockets(
                 pockets_px_raw,
                 max_delta_px=POCKET_STABLE_MAX_DELTA_PX,
                 required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES
             )
             table_fail_streak = 0
-
-            # Using the detector file (object_detector.py) compute the pockets here and do some stabilisation...
+            print("YOYOYOOY")
             
-            
-            # Once stabilised save the pocket positions in 2D and 3D and send them to the Quest 3 for further processing.
             if stable:
+                print("je stabilno")
                 pockets_xy_m = ObjectDetector.warp_px_to_m(H_new, pockets_px)
                 sent = usb_sender.send(line_pockets(pockets_xy_m))
                 if sent:
@@ -748,17 +787,37 @@ def main(
                 commit_cache(H_new, pockets_px, False, False)
         else:
             H_new = _H_cached
-            pockets_px_raw = _pockets_px_cached        
-        
+            pockets_px_raw = _pockets_px_cached
+
         if debug_pocket_display:
-            labels = ["TL","TR","BM","TM","BL","BR"]   # matches your pocket_mm_positions order
-            for (x,y), name in zip(pockets_px_raw, labels):
-                cv2.circle(frame, (int(x), int(y)), 10, (0,255,255), 2)
-                cv2.putText(frame, name, (int(x)+6, int(y)-6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1)
+            labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
+            for (x, y), name in zip(pockets_px_raw, labels):
+                cv2.circle(frame, (int(x), int(y)), 10, (0, 255, 255), 2)
+                cv2.putText(frame, name, (int(x) + 6, int(y) - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+
+            # Optional: show inner-corner points
+            # ic = np.asarray(inner_corners, np.float32)
+            # for i, p in enumerate(ic):
+            #     cv2.circle(frame, (int(p[0]), int(p[1])), 6, (255, 0, 0), -1)
+            #     cv2.putText(frame, f"IC{i}", (int(p[0]) + 6, int(p[1]) + 6),
+            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
             cv2.imshow("debug", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+    if stable:
+        print("je stabilno")
+        pockets_xy_m = ObjectDetector.warp_px_to_m(H_new, pockets_px)
+        sent = usb_sender.send(line_pockets(pockets_xy_m))
+        if sent:
+            print(f"[pockets] Locked with max delta {max_delta_px:.3f}px and sent to Quest.")
+            commit_cache(H_new, pockets_px, True, False)
+        else:
+            print("[pockets] Stable but failed to send pocket payload. Will retry.")
+            commit_cache(H_new, pockets_px, False, False)
+    else:
+        commit_cache(H_new, pockets_px, False, False)
         #END OF CURRENT  LOCATION
         
         
