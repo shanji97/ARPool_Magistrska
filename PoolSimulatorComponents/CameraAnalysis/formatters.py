@@ -24,13 +24,6 @@ def line_pockets(pockets_xy):
 def line_configuration_name(configuration_name: str):
     return "E " + configuration_name
 
-# def line_table(LWH_m, ball_diameter_m=0.05715, camera_height_m=None):
-    L, W, H = LWH_m
-    s = f"L={_f32(L):.7f}; W={_f32(W):.7f}; H={_f32(H):.7f}; B={_f32(ball_diameter_m):.7f}"
-    if camera_height_m is not None:
-        s += f"; C={_f32(camera_height_m):.7f}"
-    return "t " + s
-
 def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
     # four independent lists (fixes unpack bug)
     eight_parts, cue_parts, st_parts, so_parts = [], [], [], []

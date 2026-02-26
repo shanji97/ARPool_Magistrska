@@ -5,25 +5,25 @@ from datetime import datetime
 import csv
 from enum import Enum
 import json
-import re
 from typing import Optional
-from pathlib import Path
+
 
 # Custom imports
 from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
-from calibration import Calibrator
+from calibration import Calibrator, CALIBRATION_PATTERNS
 from objects_in_environment import EnvironmentConfig
 from connection import UsbTcpSender
 from formatters import build_conf_transfer_block, line_configuration_name, line_pockets, LABEL_MAP
 from detection_mode import DetectionMode
+from helpers import (
+    install_dependecies_for_other_projects,
+    setup_connection,
+    send_config_name_to_quest,
+    open_ports
+)
+from testing import synth_test
 
-PATTERNS = [
-    "20mm_13x9",
-    "25mm_10x7",
-    "30mm_6x8",
-    "35mm_7x4",
-    ]
 
 # Grayscale tresholds
 WHITE_TRESHOLD = 200 # For cue ball and striped balls.
@@ -36,8 +36,7 @@ SEND_EVERY_N_FRAMES = 1
 DETECTION_MODE = DetectionMode.Both
 POCKET_STABLE_MAX_DELTA_PX = 1.5
 POCKET_STABLE_REQUIRED_FRAMES = 8
-CONFIG_PATH = Path("../Configuration")
-CONFIG_PATH.mkdir(parents=True, exist_ok=True)
+
 POCKET_SCAN_INTERVAL_FRAMES = 5
 POCKET_RESEND_INTERVAL_SEC = 2.0
 RESCAN_DEBOUNCE_TIME = 0.75
@@ -45,7 +44,6 @@ RESCAN_DEBOUNCE_TIME = 0.75
 
 # Runtime state
 _controller = None
-_primary_quest_3_ip = None
 _calib = None
 _detector = None
 _Km = None
@@ -60,128 +58,13 @@ _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
 _last_rescan_request_time = 0.0
-_last_pocket_send_time = 0.0
-_pockets_have_been_sent = False
 _frame_index = 0
 _pockets_adjusted = False
 _pockets_px_adjusted_cached = None
 _pockets_xy_m_adjusted_cached = None
 
-# General helpers
-def _purge_cache():
-    import subprocess
-    import os
-    try:
-        print("Trying to clean python package cache with 'python -m pip cache purge' to remove GiB worth of cached packets.")
-        result = subprocess.run(["python", "-m", "pip", "cache", "purge"], check=True)
-        print(result.stdout)
-        os.system("cls")
-    except subprocess.CalledProcessError as e:
-        print(f"Error clearing pip cache: {e}. Try cleaning it manually.")
-def _install_dependecies_for_other_projects(sub_folders = ["pix2pockets"]):
-    import subprocess
-    import os
-    installed_text = "installed.txt"
-    print("Installing dependencies for other projects.....")
-    for folder in sub_folders:
-        if os.path.exists(os.path.join(folder, installed_text)):
-            continue
-        req_file = os.path.join(folder,"requirements.txt")
-        if not subprocess.run(["pip", "install", "-r", req_file], check=True):
-            print(f"Failed to install other project dependencies which are neccessary for this project. Requirements txt: {req_file}.")
-        else:
-            with open(os.path.join(folder, installed_text), "w") as file:
-                file.write("Dependecies successfully installed.")      
-    _purge_cache()
-
-
-
 # Camera and stream
-def _persist_connection_data(ip: str, port: str, device: str):
-    path = CONFIG_PATH / f"{device}_network_data.json"
-    data = {}
-    if path.exists():
-        try:
-             with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            pass
-    data[device] = {"ip": ip, "port": port}
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    print(f"[INFO] Persisted connection '{device}' -> {ip}:{port}")
-    
-def load_connection_data(device: str):
-    path = CONFIG_PATH / f"{device}_network_data.json"
-    if not path.exists():
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data.get(device)
-    except Exception as e:
-        print(f"[WARN] Failed to load connection data: {e}")
-        return None
-        
-def _validate_ip(ip: str):
-    pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
-    return re.match(pattern, ip) is not None
 
-def _setup_connection(connect_to_quest: bool = False):
-    key = "quest_3_primary" if connect_to_quest else "droid_cam"
-    cached = load_connection_data(key)
-    if cached:
-        print(f"[INFO] Using cached {key}: {cached['ip']}:{cached['port']}")
-        return cached["ip"], cached["port"]
-    
-    ip = input(
-        "Enter Quest 3 IP address (e.g., 192.168.0.40): "
-        if connect_to_quest else
-        "Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
-        
-    while not _validate_ip(ip):
-        print("Invalid IP format. Try again.")
-        if connect_to_quest:
-            ip = input("IP: ").strip()
-            global _primary_quest_3_ip
-            _primary_quest_3_ip = ip
-        else:
-            ip = input("Enter DroidCam IP address: ").strip()
-    port = (
-        input("Enter Quest 3 port [default=5005]: ").strip() or "5005"
-        if connect_to_quest else
-        input("Enter DroidCam port [default=4747]: ").strip() or "4747"
-    )
-    _persist_connection_data(ip, port, key)
-        
-    return ip, port
-
-def _open_ports(usb_quest_port: int = 5005):
-    import subprocess
-    # Validate and normalize the provided port value
-    try:
-        port_int = int(usb_quest_port) if usb_quest_port is not None else 5005
-    except Exception:
-        port_int = 5005
-
-    # Clamp to valid TCP port range
-    if port_int <= 0 or port_int > 2 ** 16 - 1:
-        port_int = 5005
-
-    port = str(port_int)
-    result = subprocess.run(["adb", "forward", f"tcp:{port}", f"tcp:{port}"], check=False)
-    if result.returncode != 0:
-        print("Failed to run command mannualy. Ensure the Quest 3 is connected via the USB cable and try again using the MQDH.")
-        print("You have 20 seconds to do this manually.")
-        time.sleep(20)
-        return False
-    return True
-
-def send_config_name_to_quest(config_name: str, quest_ip: str, port:str = "5005"):
-    _open_ports(5005)
-    sender = UsbTcpSender(quest_ip, port)
-    sender.send(line_configuration_name(config_name))
-   
 def open_stream(work_resolution:str = "1920x1080",
          performance_mode: bool = False,
          perf_resoulution: str ="1280x720",
@@ -254,7 +137,7 @@ def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
         _Km = _Knew = _dist = _map1 = _map2 = None
         return
         
-    intr = _calib.get_intrinsics_auto(cam_folder_alias, dimensions, candidates=PATTERNS)
+    intr = _calib.get_intrinsics_auto(cam_folder_alias, dimensions, candidates=CALIBRATION_PATTERNS)
     _Km = intr.K(); 
     _dist = np.array(intr.dist, np.float64)
     w, h = map(int, dimensions.split('x'))
@@ -400,154 +283,6 @@ def check_keys(dimensions: str = "1920x1080"):
         print("[pockets] Re-scan requested (r)")
     return (True, camera_info)
 
-def prepare_log_file():
-    global _detector
-    if _detector is None:
-        print("Ball detector not instantiated properly")
-        return
-    
-    filename = f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    file = open(filename, 'w', newline='')
-    writer = csv.writer(file)
-    cuda_available, cuda_version, vram  = _detector.get_gpu_info()
-    
-    header = [
-        "timestamp", "cloth_H", "cloth_S", "cloth_V",
-        "table_width_px", "table_height_px", "table_width_mm", "table_length_mm",
-        "pocket1_x", "pocket1_y", "pocket2_x", "pocket2_y",
-    ]
-
-    if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
-        for i in range(1, 17):
-            header.extend([f"ball{i}_x", f"ball{i}_y", f"ball{i}_type"])
-
-    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.Both):
-        for i in range(1, 17):
-            header.extend([f"yolo_ball{i}_x", f"yolo_ball{i}_y", f"yolo_ball{i}_type"])
-
-    header.extend([
-        "resolution", "performance_mode", "detection_mode",
-        "cuda_available", "cuda_version", "vram_MB", "proc_time_ms"
-    ])
-    
-    writer.writerow(header)
-    return file, writer, cuda_available, cuda_version, vram
-
-def log_csv_row(writer, 
-                frame,
-                table_mask,
-                pockets,
-                start_time,
-                table_bbox,
-                classical_results,
-                yolo_results,
-                resolution_str: str = "1920x1080",
-                cuda_available = "True",
-                cuda_version = "12.8",
-                vram_mb_int =  0,
-                enviromentInfo: EnvironmentConfig = None
-                ):
-    vram_mb = str(vram_mb_int)
-    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mean_h, mean_s, mean_v, _ = cv2.mean(hsv_frame, mask=table_mask)
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-
-    row = [
-        now,
-        int(mean_h), int(mean_s), int(mean_v)
-    ]
-
-    (length, width) = enviromentInfo.table.playfield_mm
-    if table_bbox:
-        _, _, w, h = table_bbox
-        row += [w, h, width, length]
-    else:
-        row += [None, None, width, length]
-
-    for pt in pockets:
-        if pt is None or pt == (None, None):
-            row += [None, None]
-        else:
-            row += [pt[0], pt[1]]
-            
-    def append_ball_results(results):
-        for i in range(16):
-            if i < len(results):
-                x, y, label = results[i]
-                row.extend([x, y, label])
-            else:
-                row.extend([None, None, None])
-
-    if DETECTION_MODE in (DetectionMode.Tresholding, DetectionMode.Both):
-        append_ball_results(classical_results)
-    if DETECTION_MODE in (DetectionMode.YOLO, DetectionMode.Both):
-        append_ball_results(yolo_results)
-
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
-    row += [
-        resolution_str, "PERFORMANCE_MODE", DETECTION_MODE.name,
-        cuda_available, cuda_version, vram_mb, elapsed_ms
-    ]
-    writer.writerow(row)
-
-# Testing
-def synth_test():
-    from ball_type import BallType
-    usb_sender = UsbTcpSender()
-    usb_sender.connect()
-
-    pockets_xy_m = [
-        (0.0320000, 1.2400000),
-        (2.5080001, 1.2400000),
-        (1.2700000, 0.0600000),
-        (1.2700000, 1.2100000),
-        (0.0320000, 0.0320000),
-        (2.5080001, 0.0320000),
-    ]
-    
-
-    # Synthetic balls — mix of solids, stripes, cue, eight
-    entries = [
-        # EIGHT
-        {"type": BallType.EIGHT.value, "x": 1.2500000, "y": 0.6350000, "number": 8, "confidence": 0.97, "vx": 0.0,  "vy": 0.0},
-        # CUE
-        {"type": BallType.CUE.value,   "x": 1.2700000, "y": 0.4000000, "number": "/", "confidence": 0.92, "vx": 0.15, "vy": -0.10},
-
-        # STRIPES (9–15)
-        {"type": BallType.STRIPE.value,"x": 0.3000000, "y": 0.5000000, "number": 9,  "confidence": 0.88, "vx": 0.20, "vy": -0.05},
-        {"type": BallType.STRIPE.value,"x": 0.4500000, "y": 0.5200000, "number": 10, "confidence": None, "vx": None, "vy": None},
-        {"type": BallType.STRIPE.value,"x": 0.6000000, "y": 0.5400000, "number": 11, "confidence": None, "vx": -0.10,"vy": 0.00},
-        {"type": BallType.STRIPE.value,"x": 0.7500000, "y": 0.5600000, "number": 12, "confidence": 0.66, "vx": 0.00, "vy": 0.00},
-        {"type": BallType.STRIPE.value,"x": 0.9000000, "y": 0.5800000, "number": 13, "confidence": 0.80, "vx": 0.05, "vy": 0.02},
-        {"type": BallType.STRIPE.value,"x": 1.0500000, "y": 0.6000000, "number": 14, "confidence": 0.74, "vx": -0.02,"vy": 0.03},
-        {"type": BallType.STRIPE.value,"x": 1.2000000, "y": 0.6200000, "number": 15, "confidence": 0.60, "vx": None, "vy": 0.00},
-
-        # SOLIDS (1–7)
-        {"type": BallType.SOLID.value, "x": 0.3500000, "y": 0.3000000, "number": 1, "confidence": 0.95, "vx": 0.10, "vy": 0.00},
-        {"type": BallType.SOLID.value, "x": 0.5000000, "y": 0.3200000, "number": 2, "confidence": 0.93, "vx": -0.12,"vy": 0.04},
-        {"type": BallType.SOLID.value, "x": 0.6500000, "y": 0.3400000, "number": 3, "confidence": None, "vx": -0.05,"vy": None},
-        {"type": BallType.SOLID.value, "x": 0.8000000, "y": 0.3600000, "number": 4, "confidence": 0.85, "vx": 0.00, "vy": 0.00},
-        {"type": BallType.SOLID.value, "x": 0.9500000, "y": 0.3800000, "number": 5, "confidence": 0.70, "vx": None, "vy": None},
-        {"type": BallType.SOLID.value, "x": 1.1000000, "y": 0.4000000, "number": 6, "confidence": 0.78, "vx": 0.03, "vy": -0.01},
-        {"type": BallType.SOLID.value, "x": 1.2500000, "y": 0.4200000, "number": 7, "confidence": 0.82, "vx": 0.01, "vy": 0.02},
-        
-        # Unknown sample
-        # {"type": BallType.SOLID.value, "x": 1.2500000, "y": 0.4200000, "number": "/"" "confidence": 0.82, "vx": 0.01, "vy": 0.02},
-        # {"type": BallType.STRIPE.value, "x": 1.2500000, "y": 0.4200000, "number": "/"" "confidence": 0.82, "vx": 0.01, "vy": 0.02},
-    ]
-
-    payload = build_conf_transfer_block(
-        pockets=pockets_xy_m,
-        table_LW_m=(2.5400000, 1.2700000, 0.7850000),
-        ball_diameter_m=0.0571500,
-        camera_height_m=2.5,
-        detection_entries=entries
-    )
-
-    while True:
-        usb_sender.send(payload)
-        time.sleep(0.1)
-
 def main(
          debug_config_name: Optional[str],
          debug_image_path: Optional[str],
@@ -577,7 +312,7 @@ def main(
     else:
         config = env.get_environment_config(interactive= True, use_last_known= True)
     if config is not None:
-        quest_ip, port = _setup_connection(True)
+        quest_ip, port = setup_connection(True)
         send_config_name_to_quest(config.get_json_name_for_unity(), quest_ip, port)
     
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
@@ -604,7 +339,7 @@ def main(
         del work_w
         del work_h
     else:
-        ip, port = _setup_connection()
+        ip, port = setup_connection(False)
         global _controller
         _controller = DroidCamController(ip, port)
         capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
@@ -613,7 +348,6 @@ def main(
             print("Could not open stream.")
             return
 
-    
     if (dimensions is not None) and (not debug):
         try:
             pre = _calib.precompute_all(dimensions, force=False)
@@ -623,9 +357,10 @@ def main(
         except Exception as e:
                 print("Precompute failed:", e)
     
-    usb_sender = UsbTcpSender()
+    quest_ip, q_port = setup_connection(True)
+    usb_sender = UsbTcpSender(host=quest_ip, port=q_port)
     if not usb_sender.connect():
-        _open_ports()
+        open_ports()
         if not usb_sender.connect():
             print("Could not connect to Quest 3. Check port forwarding.")
         exit()
@@ -733,6 +468,7 @@ def main(
             continue
         
         
+        
         # CURRENT LOCATION
         # Detect pockets and get a 2D calculation.
         # If the pockets are not yet calcucated recalculate them and once they are stable enough:
@@ -815,14 +551,8 @@ def main(
                                 (x_left,  y_bottom),  # BL
                                 (x_right, y_bottom),  # BR
                                 ]
-                                _pockets_px_after_adjust_cached = pockets_px_new
                                 _pockets_px_cached = pockets_px_new 
                                 _pockets_adjusted = True
-                                        
-                    
-                    
-                 
-
                 # 2) If pockets READY -> always reuse cached (no recompute)
                 else:
                     H_new = _H_cached if _H_cached is not None else H_new
@@ -837,7 +567,6 @@ def main(
                 if sent:
                     _pockets_have_been_sent = True
                     _last_pocket_send_time = now
-                    print("sent")
 
                 if debug and debug_pocket_display:
                     labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
@@ -865,9 +594,6 @@ def main(
 
 
 
-                   #END OF CURRENT  LOCATION
-        # if H_new is None:
-        #     continue
                 
         # circles = _detector.detect_balls(
         #         frame, 
@@ -935,11 +661,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
     
     # Debug switches
-    parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json",
-                        help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
     
-    parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png",
-                        help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
     
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
     
@@ -948,38 +672,27 @@ if __name__ == "__main__":
     parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     
-    
-    
     # Calibration
-    parser.add_argument("--calibrate-only", action="store_true",
-                        help="Run calibration precompute for a given resolution and exit.")
+    parser.add_argument("--calibrate-only", action="store_true", help="Run calibration precompute for a given resolution and exit.")
     
-    parser.add_argument("--calib-res", type=str, default="1920x1080",
-                        help='Calibration resolution string like "1280x720" or "1920x1080". '
-                             'Defaults to PERFORMANCE_RESOLUTION when omitted.')
+    parser.add_argument("--calib-res", type=str, default="1920x1080",help='Calibration resolution string like "1280x720" or "1920x1080". Defaults to PERFORMANCE_RESOLUTION when omitted.')
     
     # Main settings
-    parser.add_argument("--work-res", type=str, default="1920x1080",
-                        help='Work resolution string like "1280x720" or "1920x1080".')
+    parser.add_argument("--work-res", type=str, default="1920x1080", help='Work resolution string like "1280x720" or "1920x1080".')
     
-    parser.add_argument("--perf-res", type=str, default="1280x720",
-                        help='Performance resolution string like "1280x720" or "1920x1080".')
+    parser.add_argument("--perf-res", type=str, default="1280x720", help='Performance resolution string like "1280x720" or "1920x1080".')
     
-    parser.add_argument("--fallback-res", type=str, default="1280x720",
-                        help='Fallback resolution string like "1280x720" or "1920x1080".')
+    parser.add_argument("--fallback-res", type=str, default="1280x720", help='Fallback resolution string like "1280x720" or "1920x1080".')
     
     parser.add_argument("--performance", action="store_true", help="Uses performance mode.")
     
-    parser.add_argument("--force-calib", action="store_true",
-                        help="Force re-calibration (recompute even if cached).")
+    parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
     
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
-    parser.add_argument("--ball-radius-range", type=str, default="10,30",
-                        help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
+    parser.add_argument("--ball-radius-range", type=str, default="10,30", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
     
-    parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value,
-                        help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
+    parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
     
     args = parser.parse_args()
     
@@ -1002,19 +715,10 @@ if __name__ == "__main__":
         try:
             if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
                 print(f"Chosen detection mode {args.detection_mode}.")
-            _install_dependecies_for_other_projects()
+            install_dependecies_for_other_projects(["pix2pockets"])
             radius_range = tuple(map(int, args.ball_radius_range.split(",")))
-            main(
-                args.debug_conf,
-                args.debug_image,
-                args.debug_pocket_display,
-                args.debug,
-                radius_range,
-                args.work_res,
-                args.performance,
-                args.perf_res,
-                args.fallback_res,
-                args.detection_mode)
+            main(                args.debug_conf,                args.debug_image,                args.debug_pocket_display,
+                args.debug,                 radius_range,                args.work_res,                args.performance,
+                args.perf_res,                args.fallback_res,                args.detection_mode)
         except Exception as e:
             print(f"Error while executing main loop. Check parameters....Exception: {e}")
-            

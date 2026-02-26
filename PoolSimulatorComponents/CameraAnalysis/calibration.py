@@ -15,6 +15,13 @@ from stats_logger import StatsLogger
 MANIFEST_PREFIX = "calibcache_"
 CACHE_PREFIX = "_downscaled_"
 
+CALIBRATION_PATTERNS = [
+    "20mm_13x9",
+    "25mm_10x7",
+    "30mm_6x8",
+    "35mm_7x4",
+    ]
+
 @dataclass
 class Intrinsics:
     fx: float
