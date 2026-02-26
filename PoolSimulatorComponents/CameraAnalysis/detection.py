@@ -16,11 +16,7 @@ from calibration import Calibrator
 from objects_in_environment import EnvironmentConfig
 from connection import UsbTcpSender
 from formatters import build_conf_transfer_block, line_configuration_name, line_pockets, LABEL_MAP
-
-class DetectionMode(Enum):
-    Tresholding = 1
-    YOLO = 2
-    Both = 3
+from detection_mode import DetectionMode
 
 PATTERNS = [
     "20mm_13x9",
@@ -42,6 +38,9 @@ POCKET_STABLE_MAX_DELTA_PX = 1.5
 POCKET_STABLE_REQUIRED_FRAMES = 8
 CONFIG_PATH = Path("../Configuration")
 CONFIG_PATH.mkdir(parents=True, exist_ok=True)
+POCKET_SCAN_INTERVAL_FRAMES = 5
+POCKET_RESEND_INTERVAL_SEC = 2.0
+RESCAN_DEBOUNCE_TIME = 0.75
 
 
 # Runtime state
@@ -60,8 +59,13 @@ _H_new = None
 _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
-
-
+_last_rescan_request_time = 0.0
+_last_pocket_send_time = 0.0
+_pockets_have_been_sent = False
+_frame_index = 0
+_pockets_adjusted = False
+_pockets_px_adjusted_cached = None
+_pockets_xy_m_adjusted_cached = None
 
 # General helpers
 def _purge_cache():
@@ -388,8 +392,11 @@ def check_keys(dimensions: str = "1920x1080"):
     elif key == ord('i'):
        camera_info = send_camera_command("dump_camera_info")  # Camera info.
     elif key == ord('r'):
-        global _force_rescan
-        _force_rescan = True
+        global _force_rescan, _last_rescan_request_time
+        now = time.time()
+        if(now - _last_rescan_request_time) >= RESCAN_DEBOUNCE_TIME:
+            _force_rescan = True
+            _last_rescan_request_time = now
         print("[pockets] Re-scan requested (r)")
     return (True, camera_info)
 
@@ -633,18 +640,18 @@ def main(
     frame_counter = 0
     H_new = None
     
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan,_frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
+    
     start_time = time.time() if debug else None
     stable = False
     
     # Main execution loop detection
     while True:
-        
+        _frame_index+=1
         # Camera switching lock
         if _is_changing_camera:
             print("Changing camera - skipping current frame(s).")
             retry_count = 0
-            _pockets_ready = False
             # Sometime in the future this won't be need, since the pockets are stationary and a loopback from the Quest
             # is going to be available that the pockets have been comnputed.
             continue
@@ -733,96 +740,132 @@ def main(
             # 2) "Compute the 2D position from the pixels to real coordinates in relation to the table (if neede, I can implement some marker system)."
             # 3)  Send them to the Quest via the connection and skip the calculation entirely for the rest of the python application execution time.
         
-        
-        if (not _pockets_ready) or _force_rescan and not stable:
-            
-            
+        if _force_rescan:
             _detector.reset_pocket_tracking()
-            print("[pockets] Re-scan in progress...")
+            _pockets_ready = False
+            _pockets_have_been_sent = False
+            _last_pocket_send_time = 0.0
+            _pockets_px_cached = None
+            _H_cached = None
+            _force_rescan = False
+            print("[pockets] Re-scan started.")
 
-            # Detect pockets from image evidence in rectified plane
-            pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
-                frame_bgr=frame,
-                corners_px_inner=inner_corners,
-                playfield_L_mm=Lmm,
-                playfield_W_mm=Wmm,
-                v_thresh=70,
-                sat_max=180,
-                roi_frac_corner=0.18,
-                roi_frac_side_w=0.22,
-                roi_frac_side_h=0.16,
-                min_area_px=180,
-                debug=debug_pocket_display
-            )
+        # Compute only until locked, and only every N frame
+        should_scan_this_frame = (not _pockets_ready) and ((_frame_index % POCKET_SCAN_INTERVAL_FRAMES) == 0)
+        
+        
+        if not _pockets_ready:
+            if should_scan_this_frame:
+                # Detect pockets from image evidence in rectified plane
+                pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
+                    frame_bgr=frame,
+                    corners_px_inner=inner_corners,
+                    playfield_L_mm=Lmm,
+                    playfield_W_mm=Wmm,
+                    v_thresh=70,
+                    sat_max=180,
+                    roi_frac_corner=0.18,
+                    roi_frac_side_w=0.22,
+                    roi_frac_side_h=0.16,
+                    min_area_px=180,
+                    debug=debug_pocket_display
+                )
 
-            # Fallback: if any pockets are missing, fall back to projected pockets_mm for those
-            if pockets_px_raw is None:
-                pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
-            else:
-                fallback_px = _detector.warp_mm_points_to_px(H_new, pockets_mm)
-                pockets_px_raw = [
-                    p if (p is not None) else fallback_px[i]
-                    for i, p in enumerate(pockets_px_raw)
-                ]
+                # Fallback: if any pockets are missing, fall back to projected pockets_mm for those
+                if pockets_px_raw is None:
+                    pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+                else:
+                    fallback_px = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+                    pockets_px_raw = [
+                        p if (p is not None) else fallback_px[i]
+                        for i, p in enumerate(pockets_px_raw)
+                    ]
 
-            pockets_px, stable, max_delta_px = _detector.stabilize_pockets(
-                pockets_px_raw,
-                max_delta_px=POCKET_STABLE_MAX_DELTA_PX,
-                required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES
-            )
-            table_fail_streak = 0
-            print("YOYOYOOY")
-            
-            if stable:
-                print("je stabilno")
-                pockets_xy_m = ObjectDetector.warp_px_to_m(H_new, pockets_px)
+                # Stabilize
+                pockets_px, stable, max_delta_px = _detector.stabilize_pockets(
+                    pockets_px_raw,
+                    max_delta_px=POCKET_STABLE_MAX_DELTA_PX,
+                    required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES
+                )
+
+                # Cache the latest *attempt* so debug drawing can still work
+                _pockets_px_cached = pockets_px
+                _H_cached = H_new
+
+                if stable:
+                    # LOCK NOW (independent of sending)
+                    _pockets_ready = True
+                    _pockets_have_been_sent = False
+                    _last_pocket_send_time = 0.0
+                    print(f"[pockets] Locked (max delta {max_delta_px:.3f}px).")
+                    if (not _pockets_adjusted) and (_pockets_px_cached is not None):
+                            _pockets_px_before_adjust_cached = [tuple(p) if p is not None else None for p in _pockets_px_cached]
+                            TL, TR, BM, TM, BL, BR = _pockets_px_before_adjust_cached
+                            if (TL is not None) and (TR is not None) and (BL is not None) and (BR is not None) and (TM is not None) and (BM is not None):
+                                x_left  = min(TL[0], BL[0])
+                                x_right = max(TR[0], BR[0])
+                                y_top    = min(TL[1], TM[1], TR[1])
+                                y_bottom = max(BL[1], BM[1], BR[1])
+                                x_mid = 0.5 * (x_left + x_right)
+                                pockets_px_new = [
+                                (x_left,  y_top),     # TL
+                                (x_right, y_top),     # TR
+                                (x_mid,   y_bottom),  # BM
+                                (x_mid,   y_top),     # TM
+                                (x_left,  y_bottom),  # BL
+                                (x_right, y_bottom),  # BR
+                                ]
+                                _pockets_px_after_adjust_cached = pockets_px_new
+                                _pockets_px_cached = pockets_px_new 
+                                _pockets_adjusted = True
+                                        
+                    
+                    
+                 
+
+                # 2) If pockets READY -> always reuse cached (no recompute)
+                else:
+                    H_new = _H_cached if _H_cached is not None else H_new
+                    pockets_px_raw = _pockets_px_cached
+
+        # 3) Sending cached pockets (cheap, independent of computing)
+        if _pockets_ready and (_H_cached is not None) and (_pockets_px_cached is not None):
+            now = time.time()
+            if (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC):
+                pockets_xy_m = ObjectDetector.warp_px_to_m(_H_cached, _pockets_px_cached)
                 sent = usb_sender.send(line_pockets(pockets_xy_m))
                 if sent:
-                    print(f"[pockets] Locked with max delta {max_delta_px:.3f}px and sent to Quest.")
-                    commit_cache(H_new, pockets_px, True, False)
-                else:
-                    print("[pockets] Stable but failed to send pocket payload. Will retry.")
-                    commit_cache(H_new, pockets_px, False, False)
-            else:
-                commit_cache(H_new, pockets_px, False, False)
-        else:
-            H_new = _H_cached
-            pockets_px_raw = _pockets_px_cached
+                    _pockets_have_been_sent = True
+                    _last_pocket_send_time = now
+                    print("sent")
 
-        if debug_pocket_display:
-            labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
-            for (x, y), name in zip(pockets_px_raw, labels):
-                cv2.circle(frame, (int(x), int(y)), 10, (0, 255, 255), 2)
-                cv2.putText(frame, name, (int(x) + 6, int(y) - 6),
+                if debug and debug_pocket_display:
+                    labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
+
+                    # Draw OLD (yellow) if we have it
+                    if _pockets_px_before_adjust_cached is not None:
+                        for i, p in enumerate(_pockets_px_before_adjust_cached):
+                            if p is None:
+                                continue
+                            x, y = p
+                            cv2.circle(frame, (int(x), int(y)), 14, (0, 255, 255), 2)
+                    if _pockets_px_cached is not None:
+                         for i, p in enumerate(_pockets_px_cached):
+                            if p is None:
+                                continue
+                            x, y = p
+                            xm, ym = pockets_xy_m[i]
+                            cv2.circle(frame, (int(x), int(y)), 9, (0, 255, 0), -1)  # filled green
+                            text = f"SEND:{labels[i]} ({xm:.3f}m,{ym:.3f}m)"
+                            cv2.putText(frame, text, (int(x) + 8, int(y) - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                    cv2.imshow("debug",frame)
+                    if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                        break
 
-            # Optional: show inner-corner points
-            # ic = np.asarray(inner_corners, np.float32)
-            # for i, p in enumerate(ic):
-            #     cv2.circle(frame, (int(p[0]), int(p[1])), 6, (255, 0, 0), -1)
-            #     cv2.putText(frame, f"IC{i}", (int(p[0]) + 6, int(p[1]) + 6),
-            #                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
-            cv2.imshow("debug", frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-    if stable:
-        print("je stabilno")
-        pockets_xy_m = ObjectDetector.warp_px_to_m(H_new, pockets_px)
-        sent = usb_sender.send(line_pockets(pockets_xy_m))
-        if sent:
-            print(f"[pockets] Locked with max delta {max_delta_px:.3f}px and sent to Quest.")
-            commit_cache(H_new, pockets_px, True, False)
-        else:
-            print("[pockets] Stable but failed to send pocket payload. Will retry.")
-            commit_cache(H_new, pockets_px, False, False)
-    else:
-        commit_cache(H_new, pockets_px, False, False)
-        #END OF CURRENT  LOCATION
-        
-        
-        
-        
+
+                   #END OF CURRENT  LOCATION
         # if H_new is None:
         #     continue
                 

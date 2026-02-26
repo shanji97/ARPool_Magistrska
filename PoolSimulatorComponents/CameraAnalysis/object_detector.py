@@ -372,6 +372,32 @@ class ObjectDetector:
             out.append((mmx / 1000.0, mmy / 1000.0))
         return out
 
+
+    @staticmethod
+    def warp_m_to_px(H, points_m):
+        """Project points from table-plane meters (m) to image pixels (px).
+
+        Args:
+            H: 3x3 homography that maps table-plane millimeters (mm) -> image pixels (px).
+            points_m: Iterable of (x_m, y_m) tuples in meters.
+
+        Returns:
+            List of (x_px, y_px) tuples as floats. If H is None, returns (None, None) for each point.
+        """
+        if H is None:
+            return [(None, None) for _ in points_m]
+        out = []
+        for (xm, ym) in points_m:
+            if xm is None or ym is None:
+                out.append((None, None))
+                continue
+            mmx = float(xm) * 1000.0
+            mmy = float(ym) * 1000.0
+            v = np.array([mmx, mmy, 1.0], np.float32)
+            q = H @ v
+            out.append((float(q[0] / q[2]), float(q[1] / q[2])))
+        return out
+
     # -----------------------------
     # Markerless pocket detection in rectified plane
     # -----------------------------
