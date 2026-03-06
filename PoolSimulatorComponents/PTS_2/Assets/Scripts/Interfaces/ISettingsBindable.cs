@@ -1,5 +1,3 @@
-
-
 public interface ISettingsBindable
 {
     public void LoadFromSettings(UserSettings settings);

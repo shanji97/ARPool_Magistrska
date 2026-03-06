@@ -21,12 +21,8 @@ def _fmt_num_or_backslash(v):
 def line_pockets(pockets_xy):
     return "p " + ";".join(_fmt2(x, y) for (x, y) in pockets_xy)
 
-def line_table(LWH_m, ball_diameter_m=0.05715, camera_height_m=None):
-    L, W, H = LWH_m
-    s = f"L={_f32(L):.7f}; W={_f32(W):.7f}; H={_f32(H):.7f}; B={_f32(ball_diameter_m):.7f}"
-    if camera_height_m is not None:
-        s += f"; C={_f32(camera_height_m):.7f}"
-    return "t " + s
+def line_configuration_name(configuration_name: str):
+    return "E " + configuration_name
 
 def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
     # four independent lists (fixes unpack bug)
@@ -66,8 +62,26 @@ def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
     st_line    = f"{BallType.STRIPE.value} " + "; ".join(st_parts)
     so_line    = f"{BallType.SOLID.value} "  + "; ".join(so_parts)
     return [eight_line, cue_line, st_line, so_line]
-        
-def build_transfer_block(
+
+def type_to_str(t: int) -> str:
+    if t == 0: return "ST"
+    if t == 1: return "SO"
+    if t == 2: return "C"
+    if t == 3: return "8"
+    return "U"
+
+def p2p_classification_to_balltype(ball_id: int) -> int:
+    if ball_id == 0:
+        return BallType.STRIPE.value
+    elif ball_id == 1: 
+        return BallType.SOLID.value
+    elif ball_id == 2: 
+        return BallType.CUE.value
+    elif ball_id == 3: 
+        return BallType.EIGHT.value
+    return BallType.UNKNOWN.value
+
+def build_conf_transfer_block(
     pockets,
     table_LW_m,
     ball_diameter_m=0.05715,
@@ -77,5 +91,5 @@ def build_transfer_block(
     lines = [line_pockets(pockets)]
     for f in (ball_lines):
         if f: lines.append(f)
-    lines.append(line_table(table_LW_m, ball_diameter_m, camera_height_m))
-    return "\n".join(lines) + "\n\n"
+    # lines.append(line_table(table_LW_m, ball_diameter_m, camera_height_m))
+    return "\n".join(lines) + "\n"

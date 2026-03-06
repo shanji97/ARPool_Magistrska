@@ -72,9 +72,24 @@ public class Ball
 
     public void MoveToOriginalPosition()
     {
-        UserModified = false;
-        CorrectedPosition = null;
         // Set to original position
+
+
+        /*
+         * Option 1: Convert both positions to Vector3
+                     Set the visual to LERP to OG position
+                     Set the corrected position to null.
+                    (separation of concerns)
+
+        1
+        */
+        /* Option 2: Despawn the ball at the corrected position.
+         *           Spawn the ball to OG position.
+         *           (separation of concerns)
+         *      
+        */
+        CorrectedPosition = null;
+        UserModified = false;
     }
 
 

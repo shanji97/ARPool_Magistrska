@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 1772ef2b08b3a934cbffb061c69f61db
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 229569
+  packageName: Link & Sync
+  packageVersion: 3.0
+  assetPath: Packages/com.kybernetik.link-and-sync/ReadMe.md
+  uploadId: 518890

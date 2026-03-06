@@ -25,7 +25,7 @@ public class TableService : MonoBehaviour
     public bool IsTableHeightSet() => TableY > 0;
 
     public Vector2 TableSize = new(-1, -1);
-    public bool Is2DTableSet() => TableSize != null && TableSize.x > 0 && TableSize.y > 0;
+    public bool Is2DTableSet() => TableSize.x > 0 && TableSize.y > 0;
 
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
@@ -43,8 +43,7 @@ public class TableService : MonoBehaviour
     public bool IsBallCircumferenceSet() => BallCircumferenceM > 0;
 
     public bool AreBallPropertiesSet() => IsBallDiameterSet() && IsBallCircumferenceSet();
-
-    public bool AreProperstiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet() && AreBallPropertiesSet();
+    public bool ArePropertiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet() && AreBallPropertiesSet();
 
     private bool _enviromentSaved = false;
 
@@ -54,21 +53,33 @@ public class TableService : MonoBehaviour
 
     private GameObject[] _markers;
     public readonly byte MaxPocketCount = 6;
+
     public const byte StripeCount = 7;
     public byte[] StripedBalls = new byte[] { 9, 10, 11, 12, 13, 14, 15 };
+
     public const byte SolidCount = 7;
     public byte[] SolidBalls = new byte[StripeCount] { 1, 2, 3, 4, 5, 6, 7 };
+
     public const byte MaxBallCount = SolidCount + StripeCount + 2;
-    private List<Vector3Float> _balls = new(MaxBallCount); // 0 - 6 solids, 7 eight, 8 - 14, cue 15
+
+    // 0 - 6 solids, 7 eight, 8 - 14 stripes, cue 15
+    private List<Vector3Float> _balls = new(MaxBallCount);
 
     private List<TableStateEntry> _tableStateEntries = null;
+
+    // UPDATED: one-time warning guard
+    private bool _warnedMissingBallSpec = false;
 
     public void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+
         _tableStateEntries = new();
+
+        // UPDATED: make sure _balls is always safe to index (even before any ball messages arrive)
+        EnsureBallBufferSize();
     }
 
     public void LateUpdate()
@@ -106,6 +117,7 @@ public class TableService : MonoBehaviour
     {
         if (IsLockedToJitter) return;
         if (pocketXZ?.Length != MaxPocketCount) return;
+
         float ballCenterY = GetDefaultBallHeight(tableY);
         TableY = tableY;
 
@@ -114,15 +126,31 @@ public class TableService : MonoBehaviour
         for (byte i = 0; i < MaxPocketCount; i++)
         {
             PocketPositions[i] = new Vector3(pocketXZ[i].x, ballCenterY, pocketXZ[i].z);
-            _markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
         }
+        // Wait until we have read the 2(or 4 markers with known positions and set all the pockets, compute the marker position, get the offes
+        //_markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
+
+        Debug.Log("Pockets placed.");
     }
 
-    /// <summary>
-    /// Sets all six pockets in XZ (meters) and a table Y (meters).
-    /// Order: TL, TR, ML, MR, BL, BR. X->Unity X, Z->Unity Z.
-    /// Ignored if locked.
-    /// </summary>
+    //public void DetectMarker()
+    public void SetMarkersBasedOnQRDetections()
+    {
+        // Safeguard the pocket positions
+        if (PocketPositions?.Any(pp => pp == null) != false || PocketPositions.Length != 6)
+        {
+            Debug.Log("The pockets have not yet been calculated.");
+            return;
+        }
+
+        EnsureMarkers();
+        float ballCenterY = GetDefaultBallHeight(TableY);
+
+        for (byte i = 0; i < MaxPocketCount; i++)
+            _markers[i].transform.position = new Vector3(PocketPositions[i].x, ballCenterY + SurfaceLift, PocketPositions[i].z);
+
+    }
+
     public void SetPocketsXZ((float x, float y)[] pocketXZ) => SetPocketsXZ(pocketXZ, TableY);
 
     public void EnsureMarkers()
@@ -152,6 +180,7 @@ public class TableService : MonoBehaviour
             go.name = $"PocketMarker_{i}";
             _markers[i] = go;
         }
+
         ApplyLockStateToMarkers();
 
         if (_lastMarkerPosition == null || _lastMarkerPosition.Length != 6)
@@ -159,7 +188,13 @@ public class TableService : MonoBehaviour
         for (int i = 0; i < 6; i++) _lastMarkerPosition[i] = _markers[i].transform.position;
     }
 
-    public void SetBallDiameter(float ballDiameter) => BallDiameterM = ballDiameter > 0f ? ballDiameter : BallDiameterM;
+    public void SetBallDiameter(float ballDiameter)
+    {
+        BallDiameterM = ballDiameter > 0f ? ballDiameter : BallDiameterM;
+        // UPDATED: if we already have table height, we can now safely apply ball height
+        SetBallHeight();
+    }
+
     public void SetBallCircumference(float ballCircumference) => BallCircumferenceM = ballCircumference > 0f ? ballCircumference : BallCircumferenceM;
     public void SetTableLenght(float length) => SetTable(length, TableSize.y, TableY);
     public void SetTableWidth(float width) => SetTable(TableSize.x, width, TableY);
@@ -167,29 +202,36 @@ public class TableService : MonoBehaviour
     public void SetTable(Vector2 widthAndLength, float height) => SetTable(widthAndLength.x, widthAndLength.y, height);
     public void SetTable(Vector3 tableDimensions) => SetTable(tableDimensions.x, tableDimensions.z, tableDimensions.y);
     public void SetTable(Vector3Float tableDimensions) => SetTable(tableDimensions.X, tableDimensions.Z, tableDimensions.Y);
-    public void SetTable(EnvironmentInfo env) => SetTable(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m);
+    public void SetTable(EnvironmentInfo env) => SetTable(env.Table.Length, env.Table.Width, env.Table.Height);
+
     public void SetTable(float length, float width, float newTableY)
     {
         if (IsLockedToJitter) return;
 
         TableSize = new Vector2(length > 0 ? length : TableSize.x, width > 0 ? width : TableSize.y);
+
+        // If height changes, pockets might need lifting (but ReapplyPockets is now safe-guarded)
         if (newTableY > 0 && newTableY != TableY)
-            ReapplyPockets();
+            ReapplyPockets(newTableY);
+
         TableY = newTableY;
 
+        // UPDATED: safe even if _balls wasn't populated yet
         SetBallHeight();
     }
+
     public void SetLocked(bool locked)
     {
         IsLockedToJitter = locked;
         ApplyLockStateToMarkers();
     }
+
     public void SetCamera(float cameraHeightFromFloor) => CameraHeightFromFloor = cameraHeightFromFloor;
+
     public void FinalizeLocked()
     {
         SetLocked(true);
         LockFinalized = true;
-
         _lastMarkerPosition = null;
     }
 
@@ -199,18 +241,22 @@ public class TableService : MonoBehaviour
 
         var info = new EnvironmentInfo()
         {
-            PoolTable = new EnvironmentInfo.Table()
+            Table = new Table(
+                (short)(TableSize.x > TableSize.y ? TableSize.x : TableSize.y),
+                (short)(TableSize.x > TableSize.y ? TableSize.y : TableSize.x),
+                (short)TableY
+            ),
+
+            // UPDATED: these were swapped before
+            BallSpec = new BallSpec()
             {
-                // Ensuring the width and height are saved correclty saved regardles of
-                L_m = TableSize.x > TableSize.y ? TableSize.x : TableSize.y,
-                W_m = TableSize.x > TableSize.y ? TableSize.y : TableSize.x,
-                H_m = TableY,
-                BallCircumference_m = BallCircumferenceM,
-                BallDiameter_m = BallDiameterM
+                DiameterM = BallDiameterM,
+                BallCircumferenceM = BallCircumferenceM
             },
-            CameraCharacteristics = new EnvironmentInfo.Camera()
+
+            CameraData = new CameraData()
             {
-                HFromFloor_m = CameraHeightFromFloor
+                HeightFromFloorM = CameraHeightFromFloor
             }
         };
 
@@ -284,18 +330,30 @@ public class TableService : MonoBehaviour
 
         // Create a buffer for a fluid system of tracking each ball for multiple points.
     }
-
     public void ReapplyPockets(float tableY)
     {
-        if (PocketPositions == null || PocketPositions.Length == 0 || _markers == null || _markers.Length != MaxPocketCount)
+        if (tableY <= 0f) return;
+
+        // if ball diameter isn't known, pocket markers shouldn't be lifted to "ball center"
+        if (BallDiameterM <= 0f)
+        {
+            if (!_warnedMissingBallSpec)
+            {
+                Debug.LogWarning("[TableService] ReapplyPockets skipped: BallDiameterM is not set yet.");
+                _warnedMissingBallSpec = true;
+            }
             return;
+        }
+
+        // If we never created markers / pockets, do nothing.
+        if (_markers == null || _markers.Length != MaxPocketCount) return;
+        if (PocketCount == 0) return;
 
         bool wasLocked = IsLockedToJitter;
         if (wasLocked) IsLockedToJitter = false;
 
         TableY = tableY;
         var ballCenterY = tableY + (BallDiameterM * 0.5f);
-
 
         for (int i = 0; i < PocketPositions.Length; i++)
         {
@@ -353,27 +411,18 @@ public class TableService : MonoBehaviour
         float topZ = 0.5f * (TR.z + MR.z);
         float bottomZ = 0.5f * (BL.z + ML.z);
 
-        // If a specific corner moved, treat its axis as the source of truth:
         switch (moved)
         {
-            case 0: // TL moved: update leftX & topZ
-                leftX = TL.x; topZ = TL.z; break;
-            case 1: // TR moved
-                rightX = TR.x; topZ = TR.z; break;
-            case 4: // BL moved
-                leftX = BL.x; bottomZ = BL.z; break;
-            case 5: // BR moved
-                rightX = BR.x; bottomZ = BR.z; break;
-            case 2: // ML (bottom mid) moved along rail: update bottomZ or centerX
-                bottomZ = ML.z; break;
-            case 3: // MR (top mid) moved
-                topZ = MR.z; break;
+            case 0: leftX = TL.x; topZ = TL.z; break;
+            case 1: rightX = TR.x; topZ = TR.z; break;
+            case 4: leftX = BL.x; bottomZ = BL.z; break;
+            case 5: rightX = BR.x; bottomZ = BR.z; break;
+            case 2: bottomZ = ML.z; break;
+            case 3: topZ = MR.z; break;
         }
 
-        // Reconstruct perfect rectangle:
         float centerX = 0.5f * (leftX + rightX);
 
-        // Corners
         TL = new Vector3(leftX, TableY, topZ);
         TR = new Vector3(rightX, TableY, topZ);
         BL = new Vector3(leftX, TableY, bottomZ);
@@ -381,28 +430,22 @@ public class TableService : MonoBehaviour
         ML = new Vector3(centerX, TableY, bottomZ);
         MR = new Vector3(centerX, TableY, topZ);
 
-        // Apply back
         _markers[0].transform.position = new Vector3(TL.x, TableY + SurfaceLift, TL.z);
         _markers[1].transform.position = new Vector3(TR.x, TableY + SurfaceLift, TR.z);
         _markers[2].transform.position = new Vector3(ML.x, TableY + SurfaceLift, ML.z);
         _markers[3].transform.position = new Vector3(MR.x, TableY + SurfaceLift, MR.z);
         _markers[4].transform.position = new Vector3(BL.x, TableY + SurfaceLift, BL.z);
         _markers[5].transform.position = new Vector3(BR.x, TableY + SurfaceLift, BR.z);
-        // Refresh cache
+
         for (sbyte i = 0; i < 6; i++)
             _lastMarkerPosition[i] = _markers[i].transform.position;
     }
 
-    private float GetDefaultBallHeight(float tableY) => tableY + (BallDiameterM * 0.5f);
-
-    private float GetDefaultBallHeight()
+    private float GetDefaultBallHeight(float tableY)
     {
-        if (TableY == 0)
-        {
-            Debug.LogError("Table Y should not be 0 or less when this function is called.");
-            return TableY;
-        }
-        return GetDefaultBallHeight(TableY);
+        if (tableY <= 0f) return tableY;
+        if (BallDiameterM <= 0f) return tableY;
+        return tableY + (BallDiameterM * 0.5f);
     }
 
     private void ApplyLockStateToMarkers()
@@ -417,15 +460,33 @@ public class TableService : MonoBehaviour
         }
     }
 
+    private void EnsureBallBufferSize()
+    {
+        if (_balls == null)
+            _balls = new List<Vector3Float>(MaxBallCount);
+
+        while (_balls.Count < MaxBallCount)
+            _balls.Add(null);
+
+        if (_balls.Count > MaxBallCount)
+            _balls.RemoveRange(MaxBallCount, _balls.Count - MaxBallCount);
+    }
+
     private void SetBallHeight()
     {
+        EnsureBallBufferSize();
+
+        if (TableY <= 0f || BallDiameterM <= 0f)
+            return;
+
+        float h = GetDefaultBallHeight(TableY);
+
         for (byte i = 0; i < MaxBallCount; i++)
         {
             if (_balls[i] == null)
-                _balls[i] = new Vector3Float(GetDefaultBallHeight());
+                _balls[i] = new Vector3Float(h);
             else
-                _balls[i].SetHeight(GetDefaultBallHeight());
+                _balls[i].SetHeight(h);
         }
     }
-
 }

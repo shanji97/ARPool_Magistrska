@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
@@ -18,11 +19,14 @@ public class UsbSocketReceiver : MonoBehaviour
     private volatile bool _running = false;
     private readonly ConcurrentQueue<string> _blocks = new();
     private TableService svc = TableService.Instance;
+    private (float, float)[] pocketsXZ = null;
 
     // parsed state (XZ pairs in TL,TR,ML,MR,BL,BR order)
     public void Start()
     {
         EnsureSvc();
+        pocketsXZ ??= new (float, float)[6];
+
         var environmentInfo = AppSettings.Instance.Settings.EnviromentInfo;
         if (environmentInfo != null)
             ApplyEnvironment(environmentInfo);
@@ -38,7 +42,6 @@ public class UsbSocketReceiver : MonoBehaviour
     {
         if (svc == null) return;
 
-        var pocketsXZ = new (float, float)[6];
         while (_blocks.TryDequeue(out var block))
         {
             try { ParseBlock(block, pocketsXZ, svc.LockFinalized); } catch (Exception e) { Debug.LogWarning(e); }
@@ -87,19 +90,25 @@ public class UsbSocketReceiver : MonoBehaviour
                 using var stream = client.GetStream();
                 var buf = new byte[4096];
                 int read; string tail = "";
-                while (_running && client.Connected && (read = stream.Read(buf, 0, buf.Length)) > 0)
+                ulong totalBytes = 0;
+                while (_running && (read = stream.Read(buf, 0, buf.Length)) > 0)
                 {
+                    totalBytes += (ulong)read;
+                    Debug.Log($"[USB] Read {read} bytes (total {totalBytes})");
+                    Debug.Log($"[USB] Chunk: '{Encoding.UTF8.GetString(buf, 0, read)}'");
+
                     string chunk = Encoding.UTF8.GetString(buf, 0, read);
                     string data = tail + chunk;
                     int idx;
-                    while ((idx = data.IndexOf("\n\n", StringComparison.Ordinal)) >= 0)
+                    while ((idx = data.IndexOf('\n')) >= 0)
                     {
-                        var one = data[..idx];
+                        var one = data[..idx].TrimEnd('\r');
                         EnqueueBlock(one);
-                        data = data[(idx + 2)..];
+                        data = data[(idx + 1)..];
                     }
                     tail = data;
                 }
+                Debug.Log($"[USB] Read loop ended. totalBytes={totalBytes}");
                 if (VerboseLogs) Debug.Log("[USB] Client disconnected.");
             }
         }
@@ -152,7 +161,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
                 if (svc == null) continue;
 
-                if (svc.HasAllPockets() && svc.AreProperstiesParsed() && isLockFinalized && BallTypeWire.TryParseToken(token, out var ballType))
+                if (svc.HasAllPockets() && svc.ArePropertiesParsed() && isLockFinalized && BallTypeWire.TryParseToken(token, out var ballType))
                 {
                     // Tries to save the table. Only one table currently supported.
                     if (svc.TrySaveEnviroment())
@@ -165,6 +174,8 @@ public class UsbSocketReceiver : MonoBehaviour
 
                 if (!isLockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
                 {
+                    pocketsXZ ??= new (float x, float z)[6];
+                            
                     for (byte i = 0; i < svc.MaxPocketCount; i++)
                     {
                         if (body.IsEmpty) break;
@@ -193,78 +204,76 @@ public class UsbSocketReceiver : MonoBehaviour
                     if (svc.HasAllPockets())
                         svc.SetPocketsXZ(pocketsXZ);
                 }
-                else if (!isLockFinalized && !svc.AreProperstiesParsed() && token.SequenceEqual("t"))
+                else if (!isLockFinalized && !svc.ArePropertiesParsed() && token.SequenceEqual("E"))
                 {
-                    // Expect body like: "L=2.540; W=1.270; H=0.800; name=9ft (tournament); ..."
-                    // We'll scan sequentially, split by ';', then split each into "key=value".
-                    float playfieldHeight = 0;
-                    float playFieldLength = 0;
-                    float playFieldWidth = 0;
-                    float ballDiameter = 0;
-                    float cameraHeightFromFloor = 0;
-                    float ballCircumference = 0;
+                    // Python sends: "E predator_9ft.json"
+                    var environmentJsonData = body.ToString().Trim().Replace(".json", string.Empty);
 
-                    while (!body.IsEmpty)
+                    var resourcePath = $"TableConfigurations/{environmentJsonData}";
+                    var jsonAsset = Resources.Load<TextAsset>(resourcePath);
+
+                    if (jsonAsset == null)
                     {
-                        playfieldHeight = svc.IsTableHeightSet() ? svc.TableY : -1f;
-                        (playFieldLength, playFieldWidth) = svc.Is2DTableSet() ? (svc.TableSize.x, svc.TableSize.y) : (-1f, -1f);
-                        ballDiameter = svc.IsBallDiameterSet() ? svc.BallDiameterM : -1f;
-                        cameraHeightFromFloor = svc.IsCameraFromFloorSet() ? svc.CameraHeightFromFloor : -1f;
-                        ballCircumference = svc.IsBallCircumferenceSet() ? svc.BallCircumferenceM : -1f;
-                        if (!TryNextToken(ref body, ';', out ReadOnlySpan<char> pair)) break;
-                        pair = pair.Trim();
-                        if (pair.IsEmpty) continue;
-
-                        int eq = pair.IndexOf('=');
-                        if (eq <= 0) continue;
-
-                        var key = pair[..eq].Trim();
-                        var val = pair[(eq + 1)..].Trim();
-
-                        // Only pull what we actually need in Unity right now:
-                        switch (key)
+                        Debug.LogError($"[Unity] JSON resource not found at Resources/{resourcePath}.json");
+                        // Do NOT break the outer parsing loop; just ignore this line.
+                        // (Pockets and balls should still work.)
+                    }
+                    else
+                    {
+                        var data = jsonAsset.text;
+                        if (string.IsNullOrWhiteSpace(data))
                         {
-                            case var k when k.SequenceEqual("L"):
-                                TryParseFloat(val, out playFieldLength);
-                                break;
+                            Debug.LogError($"[Unity] JSON is empty at Resources/{resourcePath}.json");
+                        }
+                        else
+                        {
+                            try
+                            {
+                                var env = JsonConvert.DeserializeObject<EnvironmentInfo>(data);
+                                if (env == null)
+                                {
+                                    Debug.LogError($"[Unity] Failed to deserialize EnvironmentInfo from {resourcePath}.json");
+                                }
+                                else
+                                {
+                                    // TODO: If this enviromnet is already loaded in, skip the application.
 
-                            case var k when k.SequenceEqual("W"):
-                                TryParseFloat(val, out playFieldWidth);
-                                break;
-
-                            case var k when k.SequenceEqual("H"):
-                                TryParseFloat(val, out playfieldHeight);
-                                break;
-
-                            case var k when k.SequenceEqual("BD"):
-                                TryParseFloat(val, out ballDiameter);
-                                break;
-
-                            case var k when k.SequenceEqual("C"):
-                                TryParseFloat(val, out cameraHeightFromFloor);
-                                break;
-
-                            case var k when k.SequenceEqual("BC"):
-                                TryParseFloat(val, out ballCircumference);
-                                break;
+                                    if (ApplyEnvironment(env))
+                                    {
+                                        // Now properties are parsed -> subsequent env parsing will be skipped by your existing guards.
+                                        AppSettings.Instance.Settings.EnviromentInfo = env;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogError($"[Unity] JSON deserialize failed for {resourcePath}.json: {ex}");
+                            }
                         }
                     }
 
-                    ApplyEnvironment(playFieldLength, playFieldWidth, playfieldHeight, ballDiameter, ballCircumference, cameraHeightFromFloor);
+                    continue; // done handling this line
                 }
+
+
+
+                
             }
             if (newLine < 0) break;
             start += newLine + 1;
         }
     }
 
-    private void ApplyEnvironment(float playfieldLength = -1,
+    private bool ApplyEnvironment(float playfieldLength = -1,
                                   float playfieldWidth = -1,
                                   float playfieldHeight = -1,
                                   float ballDiameter = -1,
                                   float ballCircumference = -1,
                                   float cameraHeightFromFloor = -1)
     {
+        if (svc.ArePropertiesParsed())
+            return true;
+
         // Width and length of the table.
         svc.SetTableLenght(playfieldLength);
         svc.SetTableWidth(playfieldWidth);
@@ -289,14 +298,17 @@ public class UsbSocketReceiver : MonoBehaviour
             $" BC={ballCircumference}m,\r\n" +
             $" C={cameraHeightFromFloor}m,\r\n");
         }
+
+        return svc.ArePropertiesParsed();
     }
 
-    private void ApplyEnvironment(EnvironmentInfo env)
+    private bool ApplyEnvironment(EnvironmentInfo env)
     {
         if (env != null)
-            ApplyEnvironment(env.PoolTable.L_m, env.PoolTable.W_m, env.PoolTable.H_m, env.PoolTable.BallDiameter_m, env.PoolTable.BallCircumference_m, env.CameraCharacteristics.HFromFloor_m);
+            return ApplyEnvironment(env.Table.Length, env.Table.Width, env.Table.Height, env.BallSpec.DiameterM, env.BallSpec.BallCircumferenceM, env.CameraData.HeightFromFloorM);
         else
             Debug.LogError("Enviroment info not properly cached or corrupted.");
+        return false;
     }
 
     private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
@@ -336,12 +348,14 @@ public class UsbSocketReceiver : MonoBehaviour
         }
 
         const string block =
+            "E predator_9ft_virtual_debug.json\n" +
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
             "e 1.2500000,0.6350000,8,0.97,0.00,0.00\n" +
             "c 1.2700000,0.4000000,/,0.92,0.15,-0.10\n" +
             "st 0.3000000,0.5000000,9,0.88,0.20,-0.05; 0.4500000,0.5200000,10,0.91,\"\",''; 0.6000000,0.5400000,11,\\,-0.10,0.00; 0.7500000,0.5600000,12,0.66,0.00,0.00; 0.9000000,0.5800000,13,0.80,0.05,0.02; 1.0500000,0.6000000,14,0.74,-0.02,0.03; 1.2000000,0.6200000,15,0.60,\\,0.00\n" +
             "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n" +
             "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n";
+
         ParseBlock(block, pocketsXZ, false);
     }
 #endif

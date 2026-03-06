@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: aa54f677896306b43b7bf7f8862c12a0
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 229569
+  packageName: Link & Sync
+  packageVersion: 3.0
+  assetPath: Packages/com.kybernetik.link-and-sync/ChangeLog.md
+  uploadId: 518890
