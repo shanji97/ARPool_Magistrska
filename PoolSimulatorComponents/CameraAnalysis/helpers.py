@@ -4,10 +4,8 @@ import time
 
 from connection import UsbTcpSender
 from formatters import(
-    
     line_configuration_name
 )
-
 
 CONFIG_PATH = Path("../Configuration")
 CONFIG_PATH.mkdir(parents=True, exist_ok=True)
@@ -66,20 +64,19 @@ def _load_connection_data(device: str):
         print(f"[WARN] Failed to load connection data: {e}")
         return None
     
-          
 def _validate_ip(ip: str):
     import re
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
     return re.match(pattern, ip) is not None
 
-def setup_connection(connect_to_quest: bool = False):
-    key = "quest_3_primary" if connect_to_quest else "droid_cam"
+def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = False ) -> tuple[str, str]: 
+    key: str = "quest_3_primary" if connect_to_quest else "droid_cam"
     cached = _load_connection_data(key)
     if cached:
         print(f"[INFO] Using cached {key}: {cached['ip']}:{cached['port']}")
         return cached["ip"], cached["port"]
     
-    ip = input(
+    ip: str = input(
         "Enter Quest 3 IP address (e.g., 192.168.0.40): "
         if connect_to_quest else
         "Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
@@ -88,17 +85,18 @@ def setup_connection(connect_to_quest: bool = False):
         print("Invalid IP format. Try again.")
         if connect_to_quest:
             ip = input("IP: ").strip()
-            global _primary_quest_3_ip
-            _primary_quest_3_ip = ip
         else:
             ip = input("Enter DroidCam IP address: ").strip()
-    port = (
+    port:str = (
         input("Enter Quest 3 port [default=5005]: ").strip() or "5005"
         if connect_to_quest else
         input("Enter DroidCam port [default=4747]: ").strip() or "4747"
     )
     _persist_connection_data(ip, port, key)
-        
+    
+    if connect_to_quest and is_editor_build:
+        ip = "127.0.0.1"
+    
     return ip, port
 
 def open_ports(usb_quest_port: int = 5005):
