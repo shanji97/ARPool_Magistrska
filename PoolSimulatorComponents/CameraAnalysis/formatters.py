@@ -64,21 +64,21 @@ def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
     return [eight_line, cue_line, st_line, so_line]
 
 def type_to_str(t: int) -> str:
-    if t == 0: return "CUE"
-    if t == 1: return "8"
-    if t == 2: return "SO"
-    if t == 3: return "ST"
+    if t == 0: return "ST"
+    if t == 1: return "SO"
+    if t == 2: return "C"
+    if t == 3: return "8"
     return "U"
 
 def p2p_classification_to_balltype(ball_id: int) -> int:
     if ball_id == 0:
-        return BallType.CUE.value
-    elif ball_id == 1: 
-        return BallType.EIGHT.value
-    elif ball_id == 2: 
-        return BallType.SOLID.value
-    elif ball_id == 3: 
         return BallType.STRIPE.value
+    elif ball_id == 1: 
+        return BallType.SOLID.value
+    elif ball_id == 2: 
+        return BallType.CUE.value
+    elif ball_id == 3: 
+        return BallType.EIGHT.value
     return BallType.UNKNOWN.value
 
 def build_conf_transfer_block(

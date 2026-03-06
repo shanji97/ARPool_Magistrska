@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-
+import warnings
 
 # Custom imports
 from droid_cam_controller import DroidCamController
@@ -201,6 +201,7 @@ def main(
          debug_config_name: Optional[str],
          debug_image_path: Optional[str],
          debug_pocket_display: bool = False,
+         debug_static: bool = False,
          debug: bool = False,
          ball_radius_range_px = (10,30), 
          work_resolution: str = "1920x1080",
@@ -241,7 +242,7 @@ def main(
     
     # Set up connection and open stream 
     
-    if debug and debug_image_path:
+    if debug_static and debug_image_path:
         debug_frame = cv2.imread(debug_image_path, cv2.IMREAD_COLOR) if debug_image_path else None
         if debug_frame is None:
             raise FileNotFoundError(f"[debug] Could not read debug image: {debug_image_path}")
@@ -281,8 +282,6 @@ def main(
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
-    # if _detector.yolo:
-    #     _detector.load_pix2pockets_classifier(frame)
     _detector.reset_pocket_tracking()
 
     retry_count = 0
@@ -292,6 +291,7 @@ def main(
     H_new = None
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
+    global _map1, _map2
     pocketed_distance_m = float(ball_diameter_m) * float(POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER)
     pockets_xy_m = None
     
@@ -310,9 +310,9 @@ def main(
             # is going to be available that the pockets have been comnputed.
             continue
             
-        if not debug:
+        if not debug_static:
             ret, frame = capture.read()
-        elif debug and debug_image_path:
+        elif debug_static and debug_image_path:
             ret, frame = True, debug_frame.copy() 
         
         # Frame error lock
@@ -344,8 +344,8 @@ def main(
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
                 
-        frame = _calib.undistort_frame_if_needed(frame) if not debug else frame # Variables change based on camera switching
-        
+        frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame 
+
         # 1) Detect cloth area (rough)
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
         if table_bounding_box is None or corners is None:
@@ -359,7 +359,7 @@ def main(
         corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
 
         # 3) Compute inner cushion corners (markerless)
-        inner_corners, edges_dbg = ObjectDetector.detect_inner_cushion_corners(
+        inner_corners, edges_dbg = _detector.detect_inner_cushion_corners(
             frame_bgr=frame,
             approx_table_corners_px=corners,
             roi_expand=0.08,
@@ -393,6 +393,9 @@ def main(
 
         # Compute only until locked, and only every N frame
         should_scan_this_frame = (not _pockets_ready) and ((_frame_index % POCKET_SCAN_INTERVAL_FRAMES) == 0)
+        
+        raw_frame = frame
+        dbg_frame = raw_frame.copy() if (debug and (debug_pocket_display or True)) else None
         
         if not _pockets_ready:
             if should_scan_this_frame:
@@ -462,7 +465,7 @@ def main(
         if _pockets_ready and (_H_cached is not None) and (_pockets_px_cached is not None):
             now = time.time()
             if (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC):
-                pockets_xy_m = ObjectDetector.warp_px_to_m(_H_cached, _pockets_px_cached)
+                pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)
                 sent = usb_sender.send(line_pockets(pockets_xy_m))
                 if sent:
                     _pockets_have_been_sent = True
@@ -477,28 +480,25 @@ def main(
                             if p is None:
                                 continue
                             x, y = p
-                            cv2.circle(frame, (int(x), int(y)), 14, (0, 255, 255), 2)
+                            cv2.circle(raw_frame, (int(x), int(y)), 14, (0, 255, 255), 2)
                     if _pockets_px_cached is not None:
                          for i, p in enumerate(_pockets_px_cached):
                             if p is None:
                                 continue
                             x, y = p
                             xm, ym = pockets_xy_m[i]
-                            cv2.circle(frame, (int(x), int(y)), 9, (0, 255, 0), -1)  # filled green
+                            cv2.circle(raw_frame, (int(x), int(y)), 9, (0, 255, 0), -1)  # filled green
                             text = f"SEND:{labels[i]} ({xm:.3f}m,{ym:.3f}m)"
-                            cv2.putText(frame, text, (int(x) + 8, int(y) - 8),
+                            cv2.putText(raw_frame, text, (int(x) + 8, int(y) - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-                    cv2.imshow("debug",frame)
+                    cv2.imshow("debug",raw_frame)
                     if (cv2.waitKey(1) & 0xFF) == ord("q"):
                         break
-                    # time.sleep(10)
 
         if not _pockets_ready or (_H_cached is None) or (_pockets_px_cached is None):
             continue
         
         # BALL DETECTION and DETERMINATION IF THEY SHOULD BE CONSIDERED
-        print("recimo da crkne po tem")
-        
         yolo_detections = []
         try:
             yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame,img_size=960)
@@ -515,20 +515,23 @@ def main(
         for det, (xm, ym) in zip(yolo_detections, centers_m):
             if xm is None or ym is None:
                 continue
-                        # Filter out of bounds / pocketed (pocket positions are in meters)
-            if not _detector.is_in_table_bounds(xm, ym, pockets_xy_m, float(ball_diameter_m)):
-                continue
-            if _detector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
-                continue
+            # Maybe do this on Quest 3
+            # Filter out of bounds / pocketed (pocket positions are in meters)
+            # if not _detector.is_in_table_bounds(xm, ym, pockets_xy_m, float(ball_diameter_m)):
+            #     continue
+            # if _detector.is_in_playfield_bounds_xy(xm, ym, pockets_xy_m, float(ball_diameter_m)):
+            #     continue
+            # if _detector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
+            #     continue
             
             entries.append({
                 "type": p2p_classification_to_balltype(int(det.get("cls", -1))),
                 "x": float(xm),
                 "y": float(ym),
-                "c": float(det.get("confidence", 0.0)),
+                "conf": float(det.get("confidence", 0.0)),
             })
     
-        if debug:
+        if debug_static:
         # UPDATED: cv2-only debug overlay (no matplotlib).
             for det in yolo_detections:
                 x1 = int(det["x1"]); y1 = int(det["y1"]); x2 = int(det["x2"]); y2 = int(det["y2"])
@@ -536,10 +539,10 @@ def main(
                 cls_id = int(det.get("cls", -1))
                 conf = float(det.get("confidence", 0.0))
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)  # cyan
-                cv2.circle(frame, (cx, cy), 3, (255, 255, 0), -1)
+                cv2.rectangle(raw_frame (x1, y1), (x2, y2), (255, 255, 0), 2)  # cyan
+                cv2.circle(raw_frame, (cx, cy), 3, (255, 255, 0), -1)
                 cv2.putText(
-                    frame,
+                    raw_frame,
                     f"{type_to_str(cls_id)} {conf:.2f}",
                     (x1, max(0, y1 - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -548,93 +551,9 @@ def main(
                     1
                 )
 
-            cv2.imshow("debug-detections", frame)
+            cv2.imshow("debug-detections", raw_frame)
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 break
-            time.sleep(10)
-        
-        
-        # expected_r_px = None
-        # try:
-        #     # corners/inner_corners are expected ordered [TL, TR, BL, BR] by the detector.
-        #     # Using inner rectangle is more stable against cloth edge noise.
-        #     if inner_corners is not None and len(inner_corners) == 4:
-        #         tl, tr, bl, br = np.asarray(inner_corners, dtype=np.float32)
-        #         width_px = float(np.linalg.norm(tr - tl))
-        #         length_px = float(np.linalg.norm(bl - tl))
-        #         width_m = float(Wmm) / 1000.0
-        #         length_m = float(Lmm) / 1000.0
-        #         if width_px > 1 and length_px > 1 and width_m > 0.1 and length_m > 0.1:
-        #             px_per_m = 0.5 * (width_px / width_m + length_px / length_m)
-        #             expected_r_px = (float(ball_diameter_m) * 0.5) * px_per_m
-        # except Exception:
-        #     expected_r_px = None
-
-        # # if expected_r_px is None:
-        # #     # Fallback to user-provided range.
-        # #     min_r = int(ball_radius_range_px[0])
-        # #     max_r = int(ball_radius_range_px[1])
-        # # else:
-        # #     # CHANGED: dynamic range around expected radius.
-        # #     min_r = int(max(2, expected_r_px * 0.75))
-        # #     max_r = int(max(min_r + 1, expected_r_px * 1.25))
-    
-        # # Detect Hough circles
-        # circles = _detector.detect_balls(
-        #         frame, 
-        #         table_mask,
-        #         ball_radius_range_px[0],
-        #         ball_radius_range_px[1]
-        #     )
-        
-        # yolo_px = []
-        # try:
-        #     yolo_px = _detector.classify_balls_pix2pockets(frame)
-        # except Exception as e:
-        #     print("[pix2pockets] classification failed:", e)
-        # yolo_centers = [(float(x), float(y), int(t), float(conf)) for (x, y, t, conf) in yolo_px]
-         
-        # match_dist_px = None
-        # if expected_r_px is None:
-        #     match_dist_px = float(expected_r_px) * float(YOLO_CIRCLE_MATCH_DIST_MULTIPLIER)
-        # else:
-        #     match_dist_px = 40.0
-       
-        # centers_px = [(int(c[0]), int(c[1])) for c in circles]
-        # centers_m = ObjectDetector.warp_px_to_m(_H_cached, centers_px)
-        # entries = []
-        # for circle, (xm, ym) in zip(circles, centers_m):
-        #     if xm is None or ym is None:
-        #         continue
-        #     # Filter out of bounds
-        #     if not ObjectDetector.is_in_table_bounds(xm,ym, pockets_xy_m, float(ball_diameter_m)):
-        #         continue
-        #     if ObjectDetector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
-        #         continue
-            
-        #     cx_px = float(circle[0])
-        #     cy_py = float(circle[1])
-            
-        #     yolo_match = ObjectDetector.nearest_yolo_type(cx_px,cy_py,yolo_centers, match_dist_px)
-        #     if yolo_match is None:
-        #         t = ObjectDetector.classify_balls(frame,circle, WHITE_TRESHOLD, EIGHTBALL_TRESHOLD, STRIPE_WHITE_RATIO)
-        #         conf = None
-        
-        # if debug:
-        #     # Draw pix2pockets classifier outputs (cyan dots)
-        #     print(yolo_centers)
-        #     for (x, y, t, conf) in yolo_centers:
-        #         cv2.circle(frame, (int(x), int(y)), 4, (255, 255, 0), -1)
-        #         cv2.putText(frame, f"{type_to_str(int(t))} {float(conf):.2f}",
-        #                     (int(x) + 6, int(y) - 6),
-        #                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)      
-        #     cv2.imshow("debug",frame)
-        #     if (cv2.waitKey(1) & 0xFF) == ord("q"):
-        #         break
-                
-        #     time.sleep(10)
-
-       
     if debug:
         # log_file.close()
         cv2.destroyAllWindows()
@@ -645,6 +564,9 @@ def main(
     
 if __name__ == "__main__":
     import argparse
+    
+    # Supress warnings
+    warnings.filterwarnings("ignore", category=FutureWarning, message=".*autocast.*")  
     
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
     
@@ -697,7 +619,8 @@ if __name__ == "__main__":
             main(args.debug_conf,
                  args.debug_image,
                  args.debug_pocket_display,
-                 args.debug,                 
+                 args.debug_static,
+                 args.debug,
                  radius_range,                
                  args.work_res,                
                  args.performance,               

@@ -21,7 +21,6 @@ class ObjectDetector:
         self._max_det = int(self.MAX_DET)
         self.label_map = label_map
         self._yolov5_model = None
-
         self._corner_ema = None
         self._pocket_ema = None
         self._last_stable_pockets = None
@@ -70,9 +69,7 @@ class ObjectDetector:
             self._local_repo_added_to_syspath = False
         
         model = None
-        print("HOj")
         try:
-            
             model = torch.hub.load(local_repo, "custom", path=weights_path, source="local")
         except Exception as e:
             raise RuntimeError(
@@ -116,7 +113,6 @@ class ObjectDetector:
         model = getattr(self, "_yolov5_model", None)
         
         if model is None:
-            print("model not loaded")
             return []
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         try:
@@ -149,118 +145,6 @@ class ObjectDetector:
     def classify_balls_pix2pockets(self, frame):
         dets = self.detect_balls_yolov5(frame_bgr=frame, img_size=640)  # UPDATED: central implementation
         return [(d["cx"], d["cy"], d["cls"], d["confidence"]) for d in dets]
-    # -----------------------------
-    # YOLO
-    # -----------------------------
-    # def load_yolo(self):
-    #     self._get_yolov5_model()
-    #     # if YOLO is None:
-    #     #     print("[YOLO] ultralytics not installed; YOLO path disabled.")
-    #     # else:
-    #     #     try:
-    #     #         weights = self.YOLO_MODEL_NAME
-    #     #         self.yolo = YOLO(weights)
-    #     #         print(f"[YOLO] Loaded '{weights}' on {self.device}")
-    #     #     except Exception as e:
-    #     #         print(f"[YOLO] Failed to load model: {e}")
-    #     #         self._yolo = None
-        
-    # def load_yoloV5(self):
-    #     with open("./pix2pockets/roboflow.json", "r") as f:
-    #         roboflow_api_key = json.load(f)
-    #     rf = Roboflow(api_key=roboflow_api_key["ROBOFLOW_KEY"])
-    #     project = rf.workspace("bachelorthesis").project("8-ball-pool")
-    #     project.version(3).download("yolov5")
-
-    # def _ensure_yolo(self):
-    #     if self.yolo is None:
-    #         self.load_yolo()
-    
-    # def _get_yolov5_model(self):
-    #     """
-    #     CHANGED: YOLOv5 loader for pix2pockets weights.
-    #     Loads once and caches the model on the detector instance.
-    #     """
-    #     if hasattr(self, "_yolov5_model") and self._yolov5_model is not None:
-    #         return self._yolov5_model
-
-    #     weights_path = os.path.abspath(os.path.join(".", "pix2pockets", "detection_model_weight", "detection_model.pt"))
-    #     if not os.path.isfile(weights_path):
-    #         raise FileNotFoundError(f"YOLOv5 weights not found: {weights_path}")
-
-    #     local_repo = os.path.abspath(os.path.join(".", "pix2pockets", "yolov5"))
-    #     if not os.path.isdir(local_repo):
-    #         raise FileNotFoundError(
-    #             f"Local YOLOv5 repo not found at: {local_repo}\n"
-    #             f"Run: git clone https://github.com/ultralytics/yolov5.git pix2pockets/yolov5"
-    #         )
-
-    #     # Ensure local YOLOv5 repo is importable for torch.hub local load.
-    #     if local_repo not in sys.path:
-    #         sys.path.insert(0, local_repo)
-
-    #     # Load YOLOv5 model from local repo (no internet).
-    #     model = torch.hub.load(local_repo, "custom", path=weights_path, source="local")
-
-    #     # Device selection (keep it simple + stable)
-    #     device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    #     model.to(device)
-
-    #     # Reasonable defaults (you can tune later)
-    #     model.conf = 0.25
-    #     model.iou = 0.45
-    #     model.max_det = 300
-
-    #     self._yolov5_model = model  # CHANGED: cache
-    #     return self._yolov5_model
-        
-    # def classify_balls_pix2pockets(self, frame):
-        # if self.yolo is not None:
-        #     return
-        
-        # if YOLO is None:
-        #     print("[pix2pockets] ultralytics not installed; cannot load classifier.")
-        #     self.yolo = None
-        #     return
-        
-        # candidates = ["./pix2pockets/detection_model_weight/detection_model.pt"]
-        # weights = None
-        # for p in candidates:
-        #     if os.path.exists(p):
-        #         weights = p
-        #         break
-            
-        # if weights is None:
-        #     raise FileNotFoundError(
-        #     "[Pix2pockets] Could not find pix2pockets weights.\n"
-        #     "Expected one of:\n"
-        #     + "\n".join(candidates))
-            
-        # self.yolo = YOLO(weights)
-        # print(f"[pix2pockets] Loaded classifier weights: {weights}")
-        
-        # try:
-        #     if frame is None:
-        #         return []
-        #     model = self._get_yolov5_model()
-        #     results = model(frame, size = 640)
-        #     predictions = results.xyxy[0]
-
-        #     if predictions is None or len(predictions) == 0:
-        #         return []
-            
-        #     predictions = predictions.detach().float().cpu().numpy()
-            
-        #     out = []
-        #     for x1, y1, x2, y2, conf, cls in predictions:
-        #         cx = float((x1 + x2) * 0.5)
-        #         cy = float((y1 + y2) * 0.5)
-        #         out.append((cx, cy, int(cls), float(conf)))
-                    
-        #     return out
-        # except Exception as e:
-        #     print("[pix2pockets] classification failed:", e)
-        #     return []
 
     def get_gpu_info(self):
         cuda_version = "N/A"
@@ -906,6 +790,15 @@ class ObjectDetector:
         return False    
         
     @staticmethod
+    def is_in_playfield_bounds_xy(xm: float, ym: float, table_LW_m, ball_diamter_m:float) -> bool:
+        if xm is None or ym is None:
+            return False
+        L = float(table_LW_m[0])
+        W = float(table_LW_m[1])
+        r = float(ball_diamter_m) * .5
+        return (0.0 + r) <= float(xm) <= (L - r) and (0.0 + r) <= float(ym) <= (W - r)
+
+    @staticmethod
     def is_in_table_bounds(x_m: float, y_m: float, pockets_xy_m, ball_diameter_m = 0.05715) -> bool:
         # Axis-aligned bounds from pocket locations (good enough for now).
         xs = [p[0] for p in pockets_xy_m if (p is not None and p[0] is not None)]
@@ -927,28 +820,3 @@ class ObjectDetector:
                 best_d2 = d2
                 best = (t, conf)
         return best
-    
-    # def classify_balls_pix2pockets(self, frame):
-    #     self.load_pix2pockets_classifier(self)
-    #     if self.yolo is None:
-    #         return []
-    #     results = self.yolo.predict(
-    #         source=frame,
-    #         conf=self.CONFIDENCE,
-    #         iou = self.IOU,
-    #         maxt_det = self.MAX_DET,
-    #         verbose = False
-    #     )
-        
-    #     dets = []
-    #     for r in results:
-    #         if r.boxes is None:
-    #             continue
-    #         for b in r.boxes:
-    #             x1, y1, x2, y2 = b.xyxy[0].tolist()
-    #             cx = 0.5 * (float(x1) + float(x2))
-    #             cy = 0.5 * (float(y1) + float(y2))
-    #             cls = int(b.cls[0].item())
-    #             conf = float(b.conf[0].item())
-    #             dets.append((cx, cy, cls, conf))
-    #     return dets
