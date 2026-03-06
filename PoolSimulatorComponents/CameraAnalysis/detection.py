@@ -2,9 +2,7 @@ import cv2
 import numpy as np
 import time
 from datetime import datetime
-import csv
 from enum import Enum
-import json
 from typing import Optional
 
 
@@ -14,13 +12,12 @@ from object_detector import ObjectDetector
 from calibration import Calibrator, CALIBRATION_PATTERNS
 from objects_in_environment import EnvironmentConfig
 from connection import UsbTcpSender
-from formatters import build_conf_transfer_block, line_configuration_name, line_pockets, LABEL_MAP
+from formatters import build_conf_transfer_block, line_configuration_name, line_pockets,type_to_str, p2p_classification_to_balltype, LABEL_MAP
 from detection_mode import DetectionMode
 from helpers import (
     install_dependecies_for_other_projects,
     setup_connection,
     send_config_name_to_quest,
-    open_ports
 )
 from testing import synth_test
 
@@ -40,12 +37,13 @@ POCKET_STABLE_REQUIRED_FRAMES = 8
 POCKET_SCAN_INTERVAL_FRAMES = 5
 POCKET_RESEND_INTERVAL_SEC = 2.0
 RESCAN_DEBOUNCE_TIME = 0.75
+POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER = .85
+YOLO_CIRCLE_MATCH_DIST_MULTIPLIER = 1.75
 
 
 # Runtime state
 _controller = None
 _calib = None
-_detector = None
 _Km = None
 _Knew = None
 _dist = None
@@ -53,7 +51,6 @@ _map1 = None
 _map2 = None
 _use_undistorted_view = False
 _is_changing_camera = False
-_H_new = None
 _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
@@ -75,7 +72,9 @@ def open_stream(work_resolution:str = "1920x1080",
     if debug and debug_static_image_present:
         return (None, None)
     
+    global _controller
     if _controller is None:
+        _controller = DroidCamController(setup_connection())
         print("Controller is not initialized; cannot open stream.")
         return (None, None)
     if not _controller.is_host_reachable(2):
@@ -87,11 +86,11 @@ def open_stream(work_resolution:str = "1920x1080",
     
     resolution = work_resolution if performance_mode is False else perf_resoulution
         
-    capture = cv2.VideoCapture(send_camera_command("get_stream_url", resolution))
+    capture = cv2.VideoCapture(_controller.send_camera_command("get_stream_url", resolution))
     
     if not capture.isOpened():
         print(f"Failed to open stream with {resolution} resolution, trying with {fallback_resoulution}...")
-        capture = cv2.VideoCapture(send_camera_command("get_stream_url", fallback_resoulution))
+        capture = cv2.VideoCapture(_controller.send_camera_command("get_stream_url", fallback_resoulution))
         if not capture.isOpened():
             print(f"Failed to open stream with {fallback_resoulution} resolution.")
             return (None, None)
@@ -103,31 +102,15 @@ def open_stream(work_resolution:str = "1920x1080",
     
     return (capture, resolution)
 
-# Calibration part
-def run_calibration_only(dimensions: str = "1920x1080"):
-    calib = Calibrator(dimensions)
-    summary = {}
-    try:
-        for cam_key in calib.CAMERA_FOLDERS.keys():
-            patterns = calib.available_patterns(cam_key) or [""]
-            rows = []
-            for pattern in patterns:
-                intr = calib.get_intrinsics(cam_key, dimensions, pattern=pattern)
-                rows.append((pattern or "<root>", intr.rms))
-            summary[cam_key] = rows
-    except Exception as e:
-        print(f"Error: {e}")
-        
-    finally:
-        print_precompute_results(summary)
-
 def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
     
     global _Km, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
     
     if _controller is None:
-        print("Controller is not initialized, so no intrinsics can be loaded. Aborting...")
-        return
+        _controller = DroidCamController(setup_connection())
+        if _controller is None:
+            print("Controller is not initialized, so no intrinsics can be loaded. Aborting...")
+            return
     
     meta = _controller.CAMERA_MAP[_controller.current_camera]
     _use_undistorted_view = (meta or {}).get("lens_correction_on", False) # If lens correction on device is off (lens_correction_on is True in the JSON), then correct it (for UW and front camera).
@@ -156,27 +139,6 @@ def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
             print("[K (distorted)]\n", _Km)
             print("[dist] ", _dist.ravel())
     
-def undistort_frame_if_needed(frame):
-    if _use_undistorted_view and _map1 is not None:
-        return cv2.remap(frame, _map1, _map2, cv2.INTER_LINEAR)
-    return frame
-
-def undistort_points(points_xy):
-    if _Km is None:
-        return points_xy
-    points = np.asarray(points_xy, dtype=np.float32).reshape(-1, 1, 2)
-    undistorted_points = cv2.undistortPoints(points, _Km, _dist, P=_Knew)
-    return undistorted_points.reshape(-1, 2)
-
-def print_precompute_results(precompute_results: dict):
-    print("\n=== Calibration summary (per camera · per pattern) ===")
-    for cam in sorted(precompute_results.keys()):
-        print(f"\n[{cam}]")
-        rows = sorted(precompute_results[cam], key=lambda x: x[0].lower())  # (pattern, rms)
-        for pattern, rms in rows:
-            print(f"  - {pattern:<14}  RMS={rms:.4f}")
-    print("\nDone.\n")
-    
 def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
     global _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
     _H_cached = homography_new
@@ -196,84 +158,36 @@ def reset_pocket_globals():
     return
 
 # Camera control part
-def send_camera_command(command: str, *args):
-    global _controller
-    
-    if _controller is None:
-        print("No controller initialited, no command will be set.")
-        return None
-    if command == "toggle_torch":
-        _controller.toggle_torch()
-    elif command == "reset_torch":
-        _controller.reset_all_torch_states()
-    elif command == "set_focus_mode":
-        if args:
-            _controller.set_focus_mode(args[0])
-    elif command == "set_manual_focus_value":
-        if args:
-            _controller.set_manual_focus_value(args[0])
-    elif command == "set_zoom":
-        if args:
-            _controller.set_zoom(args[0])
-    elif command == "set_exposure":
-        if args:
-            _controller.set_exposure(args[0])
-    elif command == "set_white_balance":
-        if args:
-            _controller.set_white_balance(args[0])
-    elif command == "sync_all_locks":
-        _controller.sync_all_locks()
-    elif command == "apply_defaults":
-        _controller.apply_default_settings()
-    elif command == "select_camera":
-        if args:
-            global _is_changing_camera, _H_new, _pockets_px_cached, _pockets_ready
-            _is_changing_camera = True
-            _controller.select_camera(args[0])   
-            _load_intrinsics_for_camera(args[1])
-            reset_pocket_globals()
-    elif command == "get_stream_url":
-            return _controller.get_stream_url(args[0])
-    elif command == "dump_camera_info":
-            info = _controller.get_camera_info()
-            if info:
-                print(json.dumps(info, indent=2))
-                return info
-            else:
-                print("Failed to get camera info.")
-                return None
-    else:
-        print(f"Unknown command: {command}")
-        
 def check_keys(dimensions: str = "1920x1080"):
-    global _controller
+    global _controller, _is_changing_camera
     if _controller is None:
-        print("No controller initialized. Aborting....")
+        ip, port = setup_connection()
+        _controller = DroidCamController(ip, port)
     
-    camera_info = send_camera_command("dump_camera_info")
+    camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
     key = cv2.waitKey(1)
     if key == ord('q'):
         return (False, camera_info)
     elif key == ord('t'):
-        send_camera_command("toggle_torch")
+        _controller.send_camera_command("toggle_torch")
     elif key == ord('f'):
-        send_camera_command("set_focus_mode", 2)  # Manual focus mode
-        send_camera_command("set_manual_focus_value", 0.5)
+        _controller.send_camera_command("set_focus_mode", 2)  # Manual focus mode
+        _controller.send_camera_command("set_manual_focus_value", 0.5)
     elif key == ord('z'):
-        send_camera_command("set_zoom", 2.0)
+        _controller.send_camera_command("set_zoom", 2.0)
     elif key == ord('e'):
-        send_camera_command("set_exposure", 1.0)
+        _controller.send_camera_command("set_exposure", 1.0)
     elif key == ord('c'):
         # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
         next_cam = (_controller.current_camera + 1) % len(_controller.CAMERA_MAP)
-        send_camera_command("select_camera", next_cam, dimensions)
-        camera_info = send_camera_command("dump_camera_info")
+        _, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("select_camera", next_cam, dimensions)
+        camera_info = _controller.send_camera_command("dump_camera_info")
     elif key in [ord('0'), ord('1'), ord('2'), ord('3')]:
         camera_number = int(chr(key))
-        send_camera_command("select_camera", camera_number, dimensions)
-        camera_info = send_camera_command("dump_camera_info")
+        _controller.send_camera_command("select_camera", camera_number, dimensions)
+        camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
     elif key == ord('i'):
-       camera_info = send_camera_command("dump_camera_info")  # Camera info.
+       camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")  # Camera info.
     elif key == ord('r'):
         global _force_rescan, _last_rescan_request_time
         now = time.time()
@@ -290,10 +204,11 @@ def main(
          debug: bool = False,
          ball_radius_range_px = (10,30), 
          work_resolution: str = "1920x1080",
-         performance_mode: str = False,
+         performance_mode: bool = False,
          perf_resoulution: str ="1280x720",
          fallback_resoulution: str ="1280x720",
-         detection_mode: Enum = DetectionMode.YOLO
+         detection_mode: Enum = DetectionMode.YOLO,
+         is_editor_build: bool = False
          ):
 
     debug_frame = None
@@ -307,12 +222,12 @@ def main(
     # Compute environment and static things, such as pockets.
     env = EnvironmentConfig.__new__(EnvironmentConfig)
     
-    if debug:
+    if debug and debug_config_name:
         config = env.get_debug_env_config(debug_config_name)
     else:
         config = env.get_environment_config(interactive= True, use_last_known= True)
     if config is not None:
-        quest_ip, port = setup_connection(True)
+        quest_ip, port = setup_connection(True, is_editor_build)
         send_config_name_to_quest(config.get_json_name_for_unity(), quest_ip, port)
     
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
@@ -320,7 +235,6 @@ def main(
     (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
     Lmm, Wmm, Hmm = config.table.playfield_mm
     ball_diameter_m = config.ball_spec.diameter_m
-    camera_height_m = config.camera.height_from_floor_m
     expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future. Regardless of this, the 
     
     del config
@@ -339,7 +253,7 @@ def main(
         del work_w
         del work_h
     else:
-        ip, port = setup_connection(False)
+        ip, port = setup_connection(False, False)
         global _controller
         _controller = DroidCamController(ip, port)
         capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
@@ -360,13 +274,15 @@ def main(
     quest_ip, q_port = setup_connection(True)
     usb_sender = UsbTcpSender(host=quest_ip, port=q_port)
     if not usb_sender.connect():
-        open_ports()
-        if not usb_sender.connect():
-            print("Could not connect to Quest 3. Check port forwarding.")
+        # open_ports()
+        # if not usb_sender.connect():
+        print("Could not connect to Quest 3. Check port forwarding.")
         exit()
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
+    # if _detector.yolo:
+    #     _detector.load_pix2pockets_classifier(frame)
     _detector.reset_pocket_tracking()
 
     retry_count = 0
@@ -375,7 +291,10 @@ def main(
     frame_counter = 0
     H_new = None
     
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan,_frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
+    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
+    pocketed_distance_m = float(ball_diameter_m) * float(POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER)
+    pockets_xy_m = None
+    
     
     start_time = time.time() if debug else None
     stable = False
@@ -409,12 +328,7 @@ def main(
                 break
 
             capture.release()
-            capture, dimensions = open_stream(
-                work_resolution,
-                performance_mode,
-                perf_resoulution,
-                fallback_resoulution
-            )
+            capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
 
             ret, frame = capture.read()
             if not ret or frame is None:
@@ -430,7 +344,7 @@ def main(
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
                 
-        frame = undistort_frame_if_needed(frame) if not debug else frame # Variables change based on camera switching
+        frame = _calib.undistort_frame_if_needed(frame) if not debug else frame # Variables change based on camera switching
         
         # 1) Detect cloth area (rough)
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
@@ -444,7 +358,7 @@ def main(
         # 2) Smooth cloth-corners (still useful as a fallback / ROI)
         corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
 
-        # 3) Compute inner cushion corners (markerless) — THIS IS THE KEY CHANGE
+        # 3) Compute inner cushion corners (markerless)
         inner_corners, edges_dbg = ObjectDetector.detect_inner_cushion_corners(
             frame_bgr=frame,
             approx_table_corners_px=corners,
@@ -467,15 +381,6 @@ def main(
         if H_new is None:
             continue
         
-        
-        
-        # CURRENT LOCATION
-        # Detect pockets and get a 2D calculation.
-        # If the pockets are not yet calcucated recalculate them and once they are stable enough:
-            # 1) "Finalize them"
-            # 2) "Compute the 2D position from the pixels to real coordinates in relation to the table (if neede, I can implement some marker system)."
-            # 3)  Send them to the Quest via the connection and skip the calculation entirely for the rest of the python application execution time.
-        
         if _force_rescan:
             _detector.reset_pocket_tracking()
             _pockets_ready = False
@@ -488,7 +393,6 @@ def main(
 
         # Compute only until locked, and only every N frame
         should_scan_this_frame = (not _pockets_ready) and ((_frame_index % POCKET_SCAN_INTERVAL_FRAMES) == 0)
-        
         
         if not _pockets_ready:
             if should_scan_this_frame:
@@ -518,11 +422,7 @@ def main(
                     ]
 
                 # Stabilize
-                pockets_px, stable, max_delta_px = _detector.stabilize_pockets(
-                    pockets_px_raw,
-                    max_delta_px=POCKET_STABLE_MAX_DELTA_PX,
-                    required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES
-                )
+                pockets_px, stable, max_delta_px = _detector.stabilize_pockets(pockets_px_raw, max_delta_px=POCKET_STABLE_MAX_DELTA_PX, required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES)
 
                 # Cache the latest *attempt* so debug drawing can still work
                 _pockets_px_cached = pockets_px
@@ -567,7 +467,7 @@ def main(
                 if sent:
                     _pockets_have_been_sent = True
                     _last_pocket_send_time = now
-
+                    
                 if debug and debug_pocket_display:
                     labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
 
@@ -591,62 +491,149 @@ def main(
                     cv2.imshow("debug",frame)
                     if (cv2.waitKey(1) & 0xFF) == ord("q"):
                         break
+                    # time.sleep(10)
 
+        if not _pockets_ready or (_H_cached is None) or (_pockets_px_cached is None):
+            continue
+        
+        # BALL DETECTION and DETERMINATION IF THEY SHOULD BE CONSIDERED
+        print("recimo da crkne po tem")
+        
+        yolo_detections = []
+        try:
+            yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame,img_size=960)
+        except Exception as e:
+            print("[yolov5] ball detection failed:", e)
+            yolo_detections = []
+            
+        # Convert detections from pixels -> meters using the current homography.
+        centers_px = [(int(d["cx"]), int(d["cy"])) for d in yolo_detections]
+        centers_m  = _detector.warp_px_to_m(_H_cached, centers_px)
+        
+        entries = []
+        
+        for det, (xm, ym) in zip(yolo_detections, centers_m):
+            if xm is None or ym is None:
+                continue
+                        # Filter out of bounds / pocketed (pocket positions are in meters)
+            if not _detector.is_in_table_bounds(xm, ym, pockets_xy_m, float(ball_diameter_m)):
+                continue
+            if _detector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
+                continue
+            
+            entries.append({
+                "type": p2p_classification_to_balltype(int(det.get("cls", -1))),
+                "x": float(xm),
+                "y": float(ym),
+                "c": float(det.get("confidence", 0.0)),
+            })
+    
+        if debug:
+        # UPDATED: cv2-only debug overlay (no matplotlib).
+            for det in yolo_detections:
+                x1 = int(det["x1"]); y1 = int(det["y1"]); x2 = int(det["x2"]); y2 = int(det["y2"])
+                cx = int(det["cx"]); cy = int(det["cy"])
+                cls_id = int(det.get("cls", -1))
+                conf = float(det.get("confidence", 0.0))
 
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)  # cyan
+                cv2.circle(frame, (cx, cy), 3, (255, 255, 0), -1)
+                cv2.putText(
+                    frame,
+                    f"{type_to_str(cls_id)} {conf:.2f}",
+                    (x1, max(0, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 0),
+                    1
+                )
 
-                
+            cv2.imshow("debug-detections", frame)
+            if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                break
+            time.sleep(10)
+        
+        
+        # expected_r_px = None
+        # try:
+        #     # corners/inner_corners are expected ordered [TL, TR, BL, BR] by the detector.
+        #     # Using inner rectangle is more stable against cloth edge noise.
+        #     if inner_corners is not None and len(inner_corners) == 4:
+        #         tl, tr, bl, br = np.asarray(inner_corners, dtype=np.float32)
+        #         width_px = float(np.linalg.norm(tr - tl))
+        #         length_px = float(np.linalg.norm(bl - tl))
+        #         width_m = float(Wmm) / 1000.0
+        #         length_m = float(Lmm) / 1000.0
+        #         if width_px > 1 and length_px > 1 and width_m > 0.1 and length_m > 0.1:
+        #             px_per_m = 0.5 * (width_px / width_m + length_px / length_m)
+        #             expected_r_px = (float(ball_diameter_m) * 0.5) * px_per_m
+        # except Exception:
+        #     expected_r_px = None
+
+        # # if expected_r_px is None:
+        # #     # Fallback to user-provided range.
+        # #     min_r = int(ball_radius_range_px[0])
+        # #     max_r = int(ball_radius_range_px[1])
+        # # else:
+        # #     # CHANGED: dynamic range around expected radius.
+        # #     min_r = int(max(2, expected_r_px * 0.75))
+        # #     max_r = int(max(min_r + 1, expected_r_px * 1.25))
+    
+        # # Detect Hough circles
         # circles = _detector.detect_balls(
         #         frame, 
         #         table_mask,
         #         ball_radius_range_px[0],
         #         ball_radius_range_px[1]
-        #     ) or []
-       
-        # centers_px = [(int(c[0]), int(c[1])) for c in circles]
-        # centers_m = ObjectDetector.warp_px_to_m(H_new, centers_px)
-
-        # entries = []
-        # for circle, (xm, ym) in zip(circles, centers_m):
-        #     # Skip until homography is available
-        #     if xm is None or ym is None:
-        #         continue
-        #     entry = _detector.circle_to_entry(
-        #         frame,
-        #         circle,
-        #         (xm, ym),                # pass center in meters
-        #         WHITE_TRESHOLD,
-        #         EIGHTBALL_TRESHOLD,
-        #         STRIPE_WHITE_RATIO
         #     )
-        #     entries.append(entry)
         
         # yolo_px = []
-        # yolo_entries = []
-        # if detection_mode in (DetectionMode.YOLO.value, DetectionMode.Both.value):
-        #     if _detector.yolo is None:
-        #       _detector.load_yolo()
-        #       try: 
-        #         yolo_px = _detector.detect_balls_yolo(frame)
-        #         Hinv = lambda pts: ObjectDetector.warp_px_to_m(H_new, pts)
-        #         yolo_entries = _detector.yolo_to_entries(yolo_px, Hinv)
-        #       except Exception as e:
-        #           print("[YOLO] detection error:", e)
-        #           yolo_px = []
-        #           yolo_entries = []
-                     
-        # entries_to_send = entries
-        # # entries_to_send = yolo_entries
-        # if(frame_counter % SEND_EVERY_N_FRAMES) == 0: # Modulus is expensive
-        #     usb_sender.send(
-        #         build_transfer_block(
-        #             [(_mm_to_m(x), _mm_to_m(y)) for (x, y) in pockets_mm],
-        #             (_mm_to_m(Lmm), _mm_to_m(Wmm), _mm_to_m(Hmm)),
-        #             ball_diameter_m,
-        #             camera_height_m,
-        #             entries_to_send
-        #         )
-        #     )
-        # frame_counter += 1
+        # try:
+        #     yolo_px = _detector.classify_balls_pix2pockets(frame)
+        # except Exception as e:
+        #     print("[pix2pockets] classification failed:", e)
+        # yolo_centers = [(float(x), float(y), int(t), float(conf)) for (x, y, t, conf) in yolo_px]
+         
+        # match_dist_px = None
+        # if expected_r_px is None:
+        #     match_dist_px = float(expected_r_px) * float(YOLO_CIRCLE_MATCH_DIST_MULTIPLIER)
+        # else:
+        #     match_dist_px = 40.0
+       
+        # centers_px = [(int(c[0]), int(c[1])) for c in circles]
+        # centers_m = ObjectDetector.warp_px_to_m(_H_cached, centers_px)
+        # entries = []
+        # for circle, (xm, ym) in zip(circles, centers_m):
+        #     if xm is None or ym is None:
+        #         continue
+        #     # Filter out of bounds
+        #     if not ObjectDetector.is_in_table_bounds(xm,ym, pockets_xy_m, float(ball_diameter_m)):
+        #         continue
+        #     if ObjectDetector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
+        #         continue
+            
+        #     cx_px = float(circle[0])
+        #     cy_py = float(circle[1])
+            
+        #     yolo_match = ObjectDetector.nearest_yolo_type(cx_px,cy_py,yolo_centers, match_dist_px)
+        #     if yolo_match is None:
+        #         t = ObjectDetector.classify_balls(frame,circle, WHITE_TRESHOLD, EIGHTBALL_TRESHOLD, STRIPE_WHITE_RATIO)
+        #         conf = None
+        
+        # if debug:
+        #     # Draw pix2pockets classifier outputs (cyan dots)
+        #     print(yolo_centers)
+        #     for (x, y, t, conf) in yolo_centers:
+        #         cv2.circle(frame, (int(x), int(y)), 4, (255, 255, 0), -1)
+        #         cv2.putText(frame, f"{type_to_str(int(t))} {float(conf):.2f}",
+        #                     (int(x) + 6, int(y) - 6),
+        #                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)      
+        #     cv2.imshow("debug",frame)
+        #     if (cv2.waitKey(1) & 0xFF) == ord("q"):
+        #         break
+                
+        #     time.sleep(10)
+
        
     if debug:
         # log_file.close()
@@ -654,6 +641,7 @@ def main(
     if capture is not None:
         capture.release()
     usb_sender.close()
+    _detector.dispose()
     
 if __name__ == "__main__":
     import argparse
@@ -662,36 +650,25 @@ if __name__ == "__main__":
     
     # Debug switches
     parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
-    
     parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
-    
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
-    
+    parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
     parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
-    
     parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     
     # Calibration
     parser.add_argument("--calibrate-only", action="store_true", help="Run calibration precompute for a given resolution and exit.")
-    
     parser.add_argument("--calib-res", type=str, default="1920x1080",help='Calibration resolution string like "1280x720" or "1920x1080". Defaults to PERFORMANCE_RESOLUTION when omitted.')
     
     # Main settings
     parser.add_argument("--work-res", type=str, default="1920x1080", help='Work resolution string like "1280x720" or "1920x1080".')
-    
     parser.add_argument("--perf-res", type=str, default="1280x720", help='Performance resolution string like "1280x720" or "1920x1080".')
-    
     parser.add_argument("--fallback-res", type=str, default="1280x720", help='Fallback resolution string like "1280x720" or "1920x1080".')
-    
     parser.add_argument("--performance", action="store_true", help="Uses performance mode.")
-    
     parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
-    
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
-    
-    parser.add_argument("--ball-radius-range", type=str, default="10,30", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
-    
+    parser.add_argument("--ball-radius-range", type=str, default="6,80", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
     parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
     
     args = parser.parse_args()
@@ -701,12 +678,12 @@ if __name__ == "__main__":
     if (not args.debug_static and not args.debug_phone) and args.debug:
         print("Either static image analysis or live capture must be enabled while running in debug mode.")
     
-    
     if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
         calib_dims = args.calib_res or args.perf_res or args.fallback_res
         print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
-        run_calibration_only(calib_dims)
+        calibrator = Calibrator(calib_dims)
+        calibrator.run_calibration_only(calib_dims)
         print("Done.")
     if args.synthetic:
         print("Testing synthetic data to verify table object drawing function.")
@@ -717,8 +694,16 @@ if __name__ == "__main__":
                 print(f"Chosen detection mode {args.detection_mode}.")
             install_dependecies_for_other_projects(["pix2pockets"])
             radius_range = tuple(map(int, args.ball_radius_range.split(",")))
-            main(                args.debug_conf,                args.debug_image,                args.debug_pocket_display,
-                args.debug,                 radius_range,                args.work_res,                args.performance,
-                args.perf_res,                args.fallback_res,                args.detection_mode)
+            main(args.debug_conf,
+                 args.debug_image,
+                 args.debug_pocket_display,
+                 args.debug,                 
+                 radius_range,                
+                 args.work_res,                
+                 args.performance,               
+                 args.perf_res,                
+                 args.fallback_res,                
+                 args.detection_mode,
+                 args.debug_editor)
         except Exception as e:
             print(f"Error while executing main loop. Check parameters....Exception: {e}")

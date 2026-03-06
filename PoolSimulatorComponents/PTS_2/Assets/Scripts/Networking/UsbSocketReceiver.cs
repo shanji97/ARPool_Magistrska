@@ -19,11 +19,14 @@ public class UsbSocketReceiver : MonoBehaviour
     private volatile bool _running = false;
     private readonly ConcurrentQueue<string> _blocks = new();
     private TableService svc = TableService.Instance;
+    private (float, float)[] pocketsXZ = null;
 
     // parsed state (XZ pairs in TL,TR,ML,MR,BL,BR order)
     public void Start()
     {
         EnsureSvc();
+        pocketsXZ ??= new (float, float)[6];
+
         var environmentInfo = AppSettings.Instance.Settings.EnviromentInfo;
         if (environmentInfo != null)
             ApplyEnvironment(environmentInfo);
@@ -39,7 +42,6 @@ public class UsbSocketReceiver : MonoBehaviour
     {
         if (svc == null) return;
 
-        var pocketsXZ = new (float, float)[6];
         while (_blocks.TryDequeue(out var block))
         {
             try { ParseBlock(block, pocketsXZ, svc.LockFinalized); } catch (Exception e) { Debug.LogWarning(e); }
@@ -100,9 +102,9 @@ public class UsbSocketReceiver : MonoBehaviour
                     int idx;
                     while ((idx = data.IndexOf('\n')) >= 0)
                     {
-                        var one = data.Substring(0, idx).TrimEnd('\r');
+                        var one = data[..idx].TrimEnd('\r');
                         EnqueueBlock(one);
-                        data = data.Substring(idx + 1);
+                        data = data[(idx + 1)..];
                     }
                     tail = data;
                 }
@@ -172,8 +174,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
                 if (!isLockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
                 {
-                    if (pocketsXZ == null)
-                        pocketsXZ = new (float x, float z)[6];
+                    pocketsXZ ??= new (float x, float z)[6];
                             
                     for (byte i = 0; i < svc.MaxPocketCount; i++)
                     {
@@ -210,8 +211,6 @@ public class UsbSocketReceiver : MonoBehaviour
 
                     var resourcePath = $"TableConfigurations/{environmentJsonData}";
                     var jsonAsset = Resources.Load<TextAsset>(resourcePath);
-
-                    Debug.Log("environment data");
 
                     if (jsonAsset == null)
                     {
@@ -258,67 +257,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
 
 
-                else if (!isLockFinalized && !svc.ArePropertiesParsed() && token.SequenceEqual("t") )
-                {
-                    // Expect body like: "L=2.540; W=1.270; H=0.800; name=9ft (tournament); ..."
-                    // We'll scan sequentially, split by ';', then split each into "key=value".
-                    float playfieldHeight = 0;
-                    float playFieldLength = 0;
-                    float playFieldWidth = 0;
-                    float ballDiameter = 0;
-                    float cameraHeightFromFloor = 0;
-                    float ballCircumference = 0;
-
-                    while (!body.IsEmpty)
-                    {
-                        if (!TryNextToken(ref body, ';', out ReadOnlySpan<char> pair)) break;
-
-                        if (pair.IsEmpty) continue;
-                        pair = pair.Trim();
-
-                        int eq = pair.IndexOf('=');
-                        if (eq <= 0) continue;
-
-                        var key = pair[..eq].Trim();
-                        var val = pair[(eq + 1)..].Trim();
-
-                        playfieldHeight = svc.IsTableHeightSet() ? svc.TableY : -1f;
-                        (playFieldLength, playFieldWidth) = svc.Is2DTableSet() ? (svc.TableSize.x, svc.TableSize.y) : (-1f, -1f);
-                        ballDiameter = svc.IsBallDiameterSet() ? svc.BallDiameterM : -1f;
-                        cameraHeightFromFloor = svc.IsCameraFromFloorSet() ? svc.CameraHeightFromFloor : -1f;
-                        ballCircumference = svc.IsBallCircumferenceSet() ? svc.BallCircumferenceM : -1f;
-
-                        switch (key)
-                        {
-                            case var k when k.SequenceEqual("L"):
-                                TryParseFloat(val, out playFieldLength);
-                                break;
-
-                            case var k when k.SequenceEqual("W"):
-                                TryParseFloat(val, out playFieldWidth);
-                                break;
-
-                            case var k when k.SequenceEqual("H"):
-                                TryParseFloat(val, out playfieldHeight);
-                                break;
-
-                            case var k when k.SequenceEqual("BD"):
-                                TryParseFloat(val, out ballDiameter);
-                                break;
-
-                            case var k when k.SequenceEqual("C"):
-                                TryParseFloat(val, out cameraHeightFromFloor);
-                                break;
-
-                            case var k when k.SequenceEqual("BC"):
-                                TryParseFloat(val, out ballCircumference);
-                                break;
-                        }
-                    }
-
-                   if(ApplyEnvironment(playFieldLength, playFieldWidth, playfieldHeight, ballDiameter, ballCircumference, cameraHeightFromFloor))
-                        break;
-                }
+                
             }
             if (newLine < 0) break;
             start += newLine + 1;

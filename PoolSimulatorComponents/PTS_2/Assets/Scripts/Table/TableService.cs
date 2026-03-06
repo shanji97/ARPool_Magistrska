@@ -118,7 +118,6 @@ public class TableService : MonoBehaviour
         if (IsLockedToJitter) return;
         if (pocketXZ?.Length != MaxPocketCount) return;
 
-        // UPDATED: safe even if BallDiameterM isn't set yet
         float ballCenterY = GetDefaultBallHeight(tableY);
         TableY = tableY;
 
@@ -127,8 +126,29 @@ public class TableService : MonoBehaviour
         for (byte i = 0; i < MaxPocketCount; i++)
         {
             PocketPositions[i] = new Vector3(pocketXZ[i].x, ballCenterY, pocketXZ[i].z);
-            _markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
         }
+        // Wait until we have read the 2(or 4 markers with known positions and set all the pockets, compute the marker position, get the offes
+        //_markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
+
+        Debug.Log("Pockets placed.");
+    }
+
+    //public void DetectMarker()
+    public void SetMarkersBasedOnQRDetections()
+    {
+        // Safeguard the pocket positions
+        if (PocketPositions?.Any(pp => pp == null) != false || PocketPositions.Length != 6)
+        {
+            Debug.Log("The pockets have not yet been calculated.");
+            return;
+        }
+
+        EnsureMarkers();
+        float ballCenterY = GetDefaultBallHeight(TableY);
+
+        for (byte i = 0; i < MaxPocketCount; i++)
+            _markers[i].transform.position = new Vector3(PocketPositions[i].x, ballCenterY + SurfaceLift, PocketPositions[i].z);
+
     }
 
     public void SetPocketsXZ((float x, float y)[] pocketXZ) => SetPocketsXZ(pocketXZ, TableY);
@@ -176,7 +196,6 @@ public class TableService : MonoBehaviour
     }
 
     public void SetBallCircumference(float ballCircumference) => BallCircumferenceM = ballCircumference > 0f ? ballCircumference : BallCircumferenceM;
-
     public void SetTableLenght(float length) => SetTable(length, TableSize.y, TableY);
     public void SetTableWidth(float width) => SetTable(TableSize.x, width, TableY);
     public void SetTableHeight(float height) => SetTable(TableSize.x, TableSize.y, height);
@@ -310,7 +329,7 @@ public class TableService : MonoBehaviour
         }
 
         // Create a buffer for a fluid system of tracking each ball for multiple points.
-    } 
+    }
     public void ReapplyPockets(float tableY)
     {
         if (tableY <= 0f) return;
