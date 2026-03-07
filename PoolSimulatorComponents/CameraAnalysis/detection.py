@@ -69,9 +69,11 @@ def open_stream(work_resolution:str = "1920x1080",
     
     global _controller
     if _controller is None:
-        _controller = DroidCamController(setup_connection())
-        print("Controller is not initialized; cannot open stream.")
-        return (None, None)
+        ip, port = setup_connection()
+        _controller = DroidCamController(ip, port)
+        if _controller is None:
+            print("Controller is not initialized; cannot open stream.")
+            return (None, None)
     if not _controller.is_host_reachable(2):
         try:
             print(f"Device at {_controller.ip}:{_controller.port} is not reachable. Check network settings. Exiting.")
@@ -102,7 +104,8 @@ def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
     global _Km, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
     
     if _controller is None:
-        _controller = DroidCamController(setup_connection())
+        ip, port = setup_connection()
+        _controller = DroidCamController(ip, port)
         if _controller is None:
             print("Controller is not initialized, so no intrinsics can be loaded. Aborting...")
             return

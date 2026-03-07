@@ -3,7 +3,7 @@ import os
 import json
 import socket
 from enum import Enum
-from typing import Tuple
+from typing import Tuple, Optional
 
 from calibration import Calibrator
 
@@ -226,7 +226,7 @@ class DroidCamController:
         except(socket.timeout, socket.error):
             return False
     
-    def send_camera_command(self, command: str, *args, calibratior: Calibrator):
+    def send_camera_command(self, command: str, *args, calibrator: Optional[Calibrator] = None):
     
         is_changing_camera = False
         reset_pocket_globals = False
@@ -255,10 +255,10 @@ class DroidCamController:
         elif command == "apply_defaults":
             self.apply_default_settings()
         elif command == "select_camera":
-            if args:
+            if args and calibrator is not None:
                 is_changing_camera = True
                 self.select_camera(args[0])   
-                calibratior._load_intrinsics_for_camera(args[1])
+                calibrator._load_intrinsics_for_camera(args[1])
                 reset_pocket_globals = True
                 reset_pocket_globals()
         elif command == "get_stream_url":
@@ -273,3 +273,4 @@ class DroidCamController:
                     return None, info, is_changing_camera, reset_pocket_globals
         else:
             print(f"Unknown command: {command}")
+            return None, is_changing_camera, reset_pocket_globals
