@@ -12,14 +12,9 @@ from object_detector import ObjectDetector
 from calibration import Calibrator, CALIBRATION_PATTERNS
 from objects_in_environment import EnvironmentConfig
 from connection import UsbTcpSender
-from formatters import build_conf_transfer_block, line_configuration_name, line_pockets,type_to_str, p2p_classification_to_balltype, LABEL_MAP
-from detection_mode import DetectionMode
-from helpers import (
-    install_dependecies_for_other_projects,
-    setup_connection,
-    send_config_name_to_quest,
-)
-from testing import synth_test
+from formatters import build_transfer_block, LABEL_MAP
+from connection import UsbTcpSender
+from formatters import build_transfer_block
 
 
 # Grayscale tresholds
@@ -285,7 +280,9 @@ def main(
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
-    _detector.reset_pocket_tracking()
+    
+    usb_sender = UsbTcpSender()
+    usb_sender.connect()
 
     retry_count = 0
     pockets_px_raw = None
@@ -591,7 +588,11 @@ if __name__ == "__main__":
     parser.add_argument("--perf-res", type=str, default="1280x720", help='Performance resolution string like "1280x720" or "1920x1080".')
     parser.add_argument("--fallback-res", type=str, default="1280x720", help='Fallback resolution string like "1280x720" or "1920x1080".')
     parser.add_argument("--performance", action="store_true", help="Uses performance mode.")
-    parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
+    
+    parser.add_argument("--force-calib", action="store_true",
+                        help="Force re-calibration (recompute even if cached).")
+    parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
+    
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     parser.add_argument("--ball-radius-range", type=str, default="6,80", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
     parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
