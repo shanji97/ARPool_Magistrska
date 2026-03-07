@@ -573,7 +573,8 @@ class Calibrator:
             
         finally:
             self.print_precompute_results(summary)
-        
+            
+    @staticmethod
     def undistort_frame_if_needed(frame, _use_undistorted_view, map1, map2):
         if _use_undistorted_view and map1 is not None:
             return cv2.remap(frame, map1, map2, cv2.INTER_LINEAR)
