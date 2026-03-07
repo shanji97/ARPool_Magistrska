@@ -11,11 +11,23 @@ from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator, CALIBRATION_PATTERNS
 from objects_in_environment import EnvironmentConfig
+from detection_mode import DetectionMode
+from helpers import (
+    setup_connection,
+    send_config_name_to_quest,
+    install_dependecies_for_other_projects,
+    open_ports
+)
 from connection import UsbTcpSender
-from formatters import build_transfer_block, LABEL_MAP
-from connection import UsbTcpSender
-from formatters import build_transfer_block
+from formatters import (
+    LABEL_MAP,
+    type_to_str,
+    p2p_classification_to_balltype,
+    line_pockets,
+    build_conf_transfer_block
+)
 
+from testing import synth_test
 
 # Grayscale tresholds
 WHITE_TRESHOLD = 200 # For cue ball and striped balls.
@@ -207,7 +219,8 @@ def main(
          perf_resoulution: str ="1280x720",
          fallback_resoulution: str ="1280x720",
          detection_mode: Enum = DetectionMode.YOLO,
-         is_editor_build: bool = False
+         is_editor_build: bool = False,
+         debug_detection: bool = False
          ):
 
     debug_frame = None
@@ -234,12 +247,12 @@ def main(
     (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
     Lmm, Wmm, Hmm = config.table.playfield_mm
     ball_diameter_m = config.ball_spec.diameter_m
-    expected_aspect_ratio = Lmm / Wmm     # Consider the units in the future. Regardless of this, the 
+    expected_aspect_ratio = Lmm / Wmm    # Consider the units in the future. Regardless of this, the 
+    camera_height_m = config.camera.height_from_floor_m
     
     del config
     
     # Set up connection and open stream 
-    
     if debug_static and debug_image_path:
         debug_frame = cv2.imread(debug_image_path, cv2.IMREAD_COLOR) if debug_image_path else None
         if debug_frame is None:
@@ -269,21 +282,21 @@ def main(
                 print_precompute_results(pre)
         except Exception as e:
                 print("Precompute failed:", e)
+    if(debug):
+        print("Launch the app. You have 10 seconds to do so.")
+        time.sleep(10)
     
-    quest_ip, q_port = setup_connection(True)
+    quest_ip, q_port = setup_connection(True, is_editor_build)
     usb_sender = UsbTcpSender(host=quest_ip, port=q_port)
     if not usb_sender.connect():
-        # open_ports()
-        # if not usb_sender.connect():
-        print("Could not connect to Quest 3. Check port forwarding.")
+        open_ports(is_editor_build)
+        if not usb_sender.connect():
+            print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
         exit()
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
     
-    usb_sender = UsbTcpSender()
-    usb_sender.connect()
-
     retry_count = 0
     pockets_px_raw = None
     table_fail_streak = 0
@@ -293,8 +306,8 @@ def main(
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
     global _map1, _map2
     pocketed_distance_m = float(ball_diameter_m) * float(POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER)
+    _pockets_have_been_sent = False
     pockets_xy_m = None
-    
     
     start_time = time.time() if debug else None
     stable = False
@@ -397,7 +410,7 @@ def main(
         raw_frame = frame
         dbg_frame = raw_frame.copy() if (debug and (debug_pocket_display or True)) else None
         
-        if not _pockets_ready:
+        if not _pockets_ready and not _pockets_have_been_sent:
             if should_scan_this_frame:
                 # Detect pockets from image evidence in rectified plane
                 pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
@@ -455,6 +468,7 @@ def main(
                                 (x_right, y_bottom),  # BR
                                 ]
                                 _pockets_px_cached = pockets_px_new 
+                                
                                 _pockets_adjusted = True
                 # 2) If pockets READY -> always reuse cached (no recompute)
                 else:
@@ -469,7 +483,6 @@ def main(
                 sent = usb_sender.send(line_pockets(pockets_xy_m))
                 if sent:
                     _pockets_have_been_sent = True
-                    _last_pocket_send_time = now
                     
                 if debug and debug_pocket_display:
                     labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
@@ -523,15 +536,22 @@ def main(
             #     continue
             # if _detector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
             #     continue
-            
             entries.append({
                 "type": p2p_classification_to_balltype(int(det.get("cls", -1))),
                 "x": float(xm),
                 "y": float(ym),
                 "conf": float(det.get("confidence", 0.0)),
             })
-    
-        if debug_static:
+
+        
+        # Convert entries to to current format in issues 64 and 70.    
+        data = build_conf_transfer_block(None, None, ball_diameter_m, camera_height_m, entries)
+        sent = usb_sender.send(data)
+        
+        # are pretty much aligned 6 with max Y, 6 with min Y, 6 pairs have the same X value per pair (i don't know how these marks are called). Just parse values and create a new line for them..Cleanup
+        # (alignment are going to be handled by Quest 3 once they are all 24 (max) parsed. Sent only once.
+          
+        if debug_detection:
         # UPDATED: cv2-only debug overlay (no matplotlib).
             for det in yolo_detections:
                 x1 = int(det["x1"]); y1 = int(det["y1"]); x2 = int(det["x2"]); y2 = int(det["y2"])
@@ -539,7 +559,7 @@ def main(
                 cls_id = int(det.get("cls", -1))
                 conf = float(det.get("confidence", 0.0))
 
-                cv2.rectangle(raw_frame (x1, y1), (x2, y2), (255, 255, 0), 2)  # cyan
+                cv2.rectangle(raw_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)  # cyan
                 cv2.circle(raw_frame, (cx, cy), 3, (255, 255, 0), -1)
                 cv2.putText(
                     raw_frame,
@@ -554,7 +574,8 @@ def main(
             cv2.imshow("debug-detections", raw_frame)
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 break
-    if debug:
+
+    if debug_detection or debug_static or debug_pocket_display or debug:
         # log_file.close()
         cv2.destroyAllWindows()
     if capture is not None:
@@ -571,13 +592,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
     
     # Debug switches
-    parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
-    parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
-    parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
-    parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
     parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
-    parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
+    parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-detection", action="store_true", help="If true, the script assumes you are displaying detections results on a 2D static image.")
+    parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
+    parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
+    parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
+    parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
     
     # Calibration
     parser.add_argument("--calibrate-only", action="store_true", help="Run calibration precompute for a given resolution and exit.")
@@ -589,11 +611,9 @@ if __name__ == "__main__":
     parser.add_argument("--fallback-res", type=str, default="1280x720", help='Fallback resolution string like "1280x720" or "1920x1080".')
     parser.add_argument("--performance", action="store_true", help="Uses performance mode.")
     
-    parser.add_argument("--force-calib", action="store_true",
-                        help="Force re-calibration (recompute even if cached).")
+    parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
-    parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     parser.add_argument("--ball-radius-range", type=str, default="6,80", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
     parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
     
@@ -631,6 +651,7 @@ if __name__ == "__main__":
                  args.perf_res,                
                  args.fallback_res,                
                  args.detection_mode,
-                 args.debug_editor)
+                 args.debug_editor,
+                 args.debug_detection)
         except Exception as e:
             print(f"Error while executing main loop. Check parameters....Exception: {e}")

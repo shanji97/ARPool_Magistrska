@@ -19,6 +19,8 @@ def _fmt_num_or_backslash(v):
     return "\\" if v is None else str(v)
 
 def line_pockets(pockets_xy):
+    if pockets_xy is None:
+        return ""
     return "p " + ";".join(_fmt2(x, y) for (x, y) in pockets_xy)
 
 def line_configuration_name(configuration_name: str):
@@ -26,7 +28,7 @@ def line_configuration_name(configuration_name: str):
 
 def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
     # four independent lists (fixes unpack bug)
-    eight_parts, cue_parts, st_parts, so_parts = [], [], [], []
+    eight_parts, cue_parts, st_parts, so_parts, edge_d_parts = [], [], [], [], []
 
     for ball in entries_px or []:
         t   = ball.get("type")
@@ -41,7 +43,7 @@ def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
         else:
             num = ball.get("number",  LABEL_MAP[BallType.UNKNOWN.value][1])
 
-        conf = _fmt_num_or_backslash(ball.get("confidence", None))
+        conf = _fmt_num_or_backslash(ball.get("conf", None))
         vx   = _fmt_num_or_backslash(ball.get("vx", None))
         vy   =  _fmt_num_or_backslash(ball.get("vy", None))
 
@@ -55,13 +57,26 @@ def _serialize_all_balls(entries_px: List[Dict]) -> List[str]:
             st_parts.append(token)
         elif t == BallType.SOLID.value:
             so_parts.append(token)
+        elif t == BallType.UNKNOWN.value: # Currently edge diamons are abusing this feature.
+            edge_d_parts.append(token)
 
     # correct default cue backslash
     eight_line = f"{BallType.EIGHT.value} " + (eight_parts[0] if eight_parts else f"0.0000000,0.0000000,{LABEL_MAP[BallType.EIGHT.value][1]},\\,\\,\\")
     cue_line   = f"{BallType.CUE.value} "   + (cue_parts[0]   if cue_parts   else f"0.0000000,0.0000000,{LABEL_MAP[BallType.CUE.value][1]},\\,\\,\\")
     st_line    = f"{BallType.STRIPE.value} " + "; ".join(st_parts)
     so_line    = f"{BallType.SOLID.value} "  + "; ".join(so_parts)
-    return [eight_line, cue_line, st_line, so_line]
+    edge_d_line = f"{"d"} " + "; ".join(edge_d_parts) # TODO: proper handling of diamond edges.
+    return [eight_line, cue_line, st_line, so_line, edge_d_line]
+
+def line_diamonds(diamond_entries: List[Dict]) -> str:
+    parts = []
+    for item in diamond_entries or []:
+        x = _f32(float(item["x"]))
+        y = _f32(float(item["y"]))
+        idx = int(item["index"])
+        conf = _f32(float(item.get("conf", 0.0)))
+        parts.append(f"{x:.7f},{y:.7f},{idx},{conf:.4f}")
+    return "d " + "; ".join(parts)
 
 def type_to_str(t: int) -> str:
     if t == 0: return "ST"
@@ -82,8 +97,8 @@ def p2p_classification_to_balltype(ball_id: int) -> int:
     return BallType.UNKNOWN.value
 
 def build_conf_transfer_block(
-    pockets,
-    table_LW_m,
+    pockets = None,
+    table_LW_m = None,
     ball_diameter_m=0.05715,
     camera_height_m=2.5,
     detection_entries: List[Dict] = None):

@@ -99,9 +99,11 @@ def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = Fal
     
     return ip, port
 
-def open_ports(usb_quest_port: int = 5005):
+def open_ports(usb_quest_port: int = 5005, is_editor_build: bool = False):
+    if not is_editor_build:
+        print("No ports to be forwarded, the app is not running in the editor.")
+        return
     import subprocess
-    # Validate and normalize the provided port value
     try:
         port_int = int(usb_quest_port) if usb_quest_port is not None else 5005
     except Exception:

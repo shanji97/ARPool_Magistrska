@@ -91,7 +91,6 @@ class ObjectDetector:
         except:
             pass
         self._yolov5_model = model
-
         return self._yolov5_model
         
     def detect_balls_yolov5(self,frame_bgr, img_size: int = 640):
