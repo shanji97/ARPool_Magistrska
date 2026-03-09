@@ -9,8 +9,9 @@ public class TableService : MonoBehaviour
     [Header("Visuals")]
     public GameObject PocketMarkerPrefab;
     public Transform MarkersParent;
-    public int PocketCount { get; private set; } = 0;
-    public bool HasAllPockets() => PocketCount == MaxPocketCount;
+    public byte PocketCount { get; private set; } = 0;
+    public byte DiamondCount { get; private set; } = 0;
+    public bool HasAllPockets() => PocketCount == MAX_POCKET_COUNT;
 
     [Tooltip("Offset above table surface to avoid z-fighting")]
     public float SurfaceLift = 0.01f;
@@ -19,13 +20,15 @@ public class TableService : MonoBehaviour
     public float DefaultSphereScale = 0.03f;
 
     [Header("State (read-only)")]
-    public readonly Vector3[] PocketPositions = new Vector3[6];  // TL,TR,ML,MR,BL,BR
+    public Vector3[] PocketPositions { get; private set; }  // TL,TR,ML,MR,BL,BR
+
+    private List<DiamondMarkerData> _diamondMarkerData = new();
 
     public float TableY { get; private set; } = -1f;
     public bool IsTableHeightSet() => TableY > 0;
 
     public Vector2 TableSize = new(-1, -1);
-    public bool Is2DTableSet() => TableSize.x > 0 && TableSize.y > 0;
+    public bool Is2DTableSet() => TableSize.x > -1 && TableSize.y > -1;
 
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
@@ -43,16 +46,46 @@ public class TableService : MonoBehaviour
     public bool IsBallCircumferenceSet() => BallCircumferenceM > 0;
 
     public bool AreBallPropertiesSet() => IsBallDiameterSet() && IsBallCircumferenceSet();
-    public bool ArePropertiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet() && AreBallPropertiesSet();
+    public bool ArePropertiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet();
+
+    public string[] QR_CODE_MARKER_VALUES =
+    {
+        "ARPOOL_MARKER_01",
+        "ARPOOL_MARKER_02",
+        "ARPOOL_MARKER_03",
+        "ARPOOL_MARKER_04",
+        "ARPOOL_MARKER_05",
+        "ARPOOL_MARKER_06",
+        "ARPOOL_MARKER_07",
+        "ARPOOL_MARKER_08",
+        "ARPOOL_MARKER_09",
+        "ARPOOL_MARKER_10",
+        "ARPOOL_MARKER_11",
+        "ARPOOL_MARKER_12"
+    };
+
+    public const float QR_CODE_WHOLE_PAPER_SIZE_M = 0.019f;
+
+    public bool AreDiamondsParsed() => DiamondCount == MAX_DIAMOND_COUNT;
+
+    private bool VerboseDiamondLogs()
+    {
+#if UNITY_EDITOR
+        return true;
+#else
+            return false;
+#endif
+    }
 
     private bool _enviromentSaved = false;
 
-    public byte MarkerCount = 2;
+    public byte QR_MARKER_COUNT = 2;
 
     private const float movingTreshold = .0005f;
 
     private GameObject[] _markers;
-    public readonly byte MaxPocketCount = 6;
+    public readonly byte MAX_POCKET_COUNT = 6;
+    public readonly byte MAX_DIAMOND_COUNT = 18;
 
     public const byte StripeCount = 7;
     public byte[] StripedBalls = new byte[] { 9, 10, 11, 12, 13, 14, 15 };
@@ -76,6 +109,7 @@ public class TableService : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
+        PocketPositions = new Vector3[MAX_POCKET_COUNT];
         _tableStateEntries = new();
 
         // UPDATED: make sure _balls is always safe to index (even before any ball messages arrive)
@@ -84,7 +118,7 @@ public class TableService : MonoBehaviour
 
     public void LateUpdate()
     {
-        if (!LockFinalized || !MaintainRectangleWhenLocked || _markers is null) return;
+        if (LockFinalized || !MaintainRectangleWhenLocked || _markers is null) return;
 
         // Detect which marker moved the most this frame.
         HandlePocketMarkers();
@@ -102,10 +136,195 @@ public class TableService : MonoBehaviour
             AppSettings.Instance.AddTableStateEntries(_tableStateEntries);
     }
 
-    public void IncrementPocketCount()
+    public void IncrementSuccessfullyParsedPocketCount()
     {
-        if (PocketCount == 6) return;
+        if (PocketCount == MAX_POCKET_COUNT) return;
         PocketCount++;
+    }
+
+    public void IncrementSuccessfullyParsedDiamondEdgeCount()
+    {
+        if (DiamondCount == MAX_DIAMOND_COUNT) return;
+        DiamondCount++;
+    }
+
+    private void PrivateSetEdgeDiamonds((float x, float z, byte i, float c)[] diamonds, float tableY)
+    {
+        if (IsLockedToJitter) return;
+        if (diamonds?.Length != MAX_DIAMOND_COUNT) return;
+
+        _diamondMarkerData = ProcessDiamonds(diamonds);
+    }
+    private byte CopyRailWithAssignedIndices(List<(float x, float z, byte i, float c)> source, (float x, float z, byte i, float c)[] target, byte startIndex)
+    {
+        for (int i = 0; i < source.Count; i++)
+        {
+            byte assignedIndex = (byte)(startIndex + i);
+            var entry = source[i];
+
+            // MODIFIED: the parsed incoming index is intentionally ignored.
+            target[startIndex + i] = (entry.x, entry.z, assignedIndex, entry.c);
+        }
+
+        return (byte)(startIndex + source.Count);
+    }
+
+    private List<DiamondMarkerData> ProcessDiamonds(List<DiamondMarkerData> diamondMarkerData)
+    {
+        (float x, float z, byte i, float c)[] diamonds = diamondMarkerData.Select(dmd => (
+            x: dmd.XZ.X,
+            z: dmd.XZ.Y,
+            i: dmd.Index,
+            c: dmd.Confidence
+        )).ToArray();
+
+        return ProcessDiamonds(diamonds);
+    }
+
+    private List<DiamondMarkerData> ProcessDiamonds((float x, float z, byte i, float c)[] diamonds)
+    {
+        if (diamonds == null || diamonds.Length != MAX_DIAMOND_COUNT)
+        {
+            Debug.LogWarning("[TableService] ProcessDiamonds received invalid input.");
+            return null;
+        }
+
+        if (PocketPositions == null || PocketPositions.Length != MAX_POCKET_COUNT)
+        {
+            Debug.LogWarning("[TableService] ProcessDiamonds requires six pocket positions.");
+            return null;
+        }
+
+        // Pocket order in this project:
+        // 0 TL, 1 TR, 2 ML, 3 MR, 4 BL, 5 BR
+        Vector3 tl = PocketPositions[0];
+        Vector3 tr = PocketPositions[1];
+        Vector3 ml = PocketPositions[2];
+        Vector3 mr = PocketPositions[3];
+        Vector3 bl = PocketPositions[4];
+        Vector3 br = PocketPositions[5];
+
+        float leftX = 0.5f * (tl.x + bl.x);
+        float rightX = 0.5f * (tr.x + br.x);
+        float topZ = 0.5f * (tl.z + tr.z);
+        float bottomZ = 0.5f * (bl.z + br.z);
+
+        var bottomRail = new List<(float x, float z, byte i, float c)>(6);
+        var rightRail = new List<(float x, float z, byte i, float c)>(3);
+        var topRail = new List<(float x, float z, byte i, float c)>(6);
+        var leftRail = new List<(float x, float z, byte i, float c)>(3);
+
+        for (int d = 0; d < diamonds.Length; d++)
+        {
+            var current = diamonds[d];
+
+            float distanceToLeft = Mathf.Abs(current.x - leftX);
+            float distanceToRight = Mathf.Abs(current.x - rightX);
+            float distanceToTop = Mathf.Abs(current.z - topZ);
+            float distanceToBottom = Mathf.Abs(current.z - bottomZ);
+
+            float minDistance = distanceToLeft;
+            TableRail closestRail = TableRail.Left;
+
+            if (distanceToRight < minDistance)
+            {
+                minDistance = distanceToRight;
+                closestRail = TableRail.Right;
+            }
+
+            if (distanceToTop < minDistance)
+            {
+                minDistance = distanceToTop;
+                closestRail = TableRail.Top;
+            }
+
+            if (distanceToBottom < minDistance)
+            {
+                minDistance = distanceToBottom;
+                closestRail = TableRail.Bottom;
+            }
+
+            switch (closestRail)
+            {
+                case TableRail.Bottom:
+                    bottomRail.Add(current);
+                    break;
+
+                case TableRail.Right:
+                    rightRail.Add(current);
+                    break;
+
+                case TableRail.Top:
+                    topRail.Add(current);
+                    break;
+
+                case TableRail.Left:
+                    leftRail.Add(current);
+                    break;
+            }
+        }
+
+        // MODIFIED: deterministic canonical clockwise ordering.
+        bottomRail = bottomRail.OrderBy(d => d.x).ToList();      // left -> right
+        rightRail = rightRail.OrderBy(d => d.z).ToList();        // bottom -> top
+        topRail = topRail.OrderByDescending(d => d.x).ToList();  // right -> left
+        leftRail = leftRail.OrderByDescending(d => d.z).ToList(); // top -> bottom
+
+        if (bottomRail.Count != 6 || rightRail.Count != 3 || topRail.Count != 6 || leftRail.Count != 3)
+        {
+            Debug.LogWarning(
+                "[TableService] Unexpected diamond rail split. " +
+                $"Bottom={bottomRail.Count}, Right={rightRail.Count}, Top={topRail.Count}, Left={leftRail.Count}. " +
+                "Using fallback global ordering."
+            );
+
+            // Fallback: preserve deterministic output even if the rail classification is imperfect.
+            var fallback = diamonds
+                .OrderBy(d => d.z)
+                .ThenBy(d => d.x)
+                .ToArray();
+
+            for (byte i = 0; i < fallback.Length; i++)
+                fallback[i] = (fallback[i].x, fallback[i].z, i, fallback[i].c);
+
+            List<DiamondMarkerData> fallBackData = new();
+
+            for (byte i = 0; i < fallback.Length; i++)
+            {
+                fallBackData.Add(
+                    new DiamondMarkerData()
+                    {
+                        XZ = new Vector2Float(fallback[i].x, fallback[i].z),
+                        Index = fallback[i].i,
+                        Confidence = fallback[i].c,
+                    });
+            }
+
+            return fallBackData;
+        }
+
+        var ordered = new (float x, float z, byte i, float c)[MAX_DIAMOND_COUNT];
+        byte index = 0;
+
+        index = CopyRailWithAssignedIndices(bottomRail, ordered, index);
+        index = CopyRailWithAssignedIndices(rightRail, ordered, index);
+        index = CopyRailWithAssignedIndices(topRail, ordered, index);
+        index = CopyRailWithAssignedIndices(leftRail, ordered, index);
+
+        List<DiamondMarkerData> orderedData = new();
+
+        for (byte i = 0; i < ordered.Length; i++)
+        {
+            orderedData.Add(
+                new DiamondMarkerData()
+                {
+                    XZ = new Vector2Float(ordered[i].x, ordered[i].z),
+                    Index = ordered[i].i,
+                    Confidence = ordered[i].c,
+                });
+        }
+
+        return orderedData;
     }
 
     /// <summary>
@@ -113,52 +332,78 @@ public class TableService : MonoBehaviour
     /// Order: TL, TR, ML, MR, BL, BR. X->Unity X, Z->Unity Z.
     /// Ignored if locked.
     /// </summary>
-    public void SetPocketsXZ((float x, float z)[] pocketXZ, float tableY)
+    private void PrivateSetPocketsXZ((float x, float z)[] pocketXZ, float tableY)
     {
         if (IsLockedToJitter) return;
-        if (pocketXZ?.Length != MaxPocketCount) return;
+        if (pocketXZ?.Length != MAX_POCKET_COUNT) return;
+        if (tableY <= 0f)
+        {
+            Debug.LogWarning("[TableService] PrivateSetPocketsXZ ignored because tableY is not valid yet.");
+            return;
+        }
 
-        float ballCenterY = GetDefaultBallHeight(tableY);
         TableY = tableY;
 
         EnsureMarkers();
 
-        for (byte i = 0; i < MaxPocketCount; i++)
-        {
-            PocketPositions[i] = new Vector3(pocketXZ[i].x, ballCenterY, pocketXZ[i].z);
-        }
-        // Wait until we have read the 2(or 4 markers with known positions and set all the pockets, compute the marker position, get the offes
-        //_markers[i].transform.position = new Vector3(pocketXZ[i].x, ballCenterY + SurfaceLift, pocketXZ[i].z);
+        float markerY = GetPocketMarkerY(tableY);
 
-        Debug.Log("Pockets placed.");
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            Vector3 worldPocketPosition = new Vector3(
+                pocketXZ[i].x,
+                markerY,
+                pocketXZ[i].z
+            );
+
+            // MODIFIED: logical cache and visible marker stay identical.
+            UpdatePocketPositionCache(i, worldPocketPosition);
+            SetMarkerWorldPose(i, worldPocketPosition);
+        }
+
+        if (_lastMarkerPosition == null || _lastMarkerPosition.Length != MAX_POCKET_COUNT)
+            _lastMarkerPosition = new Vector3[MAX_POCKET_COUNT];
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            _lastMarkerPosition[i] = _markers[i] != null
+                ? _markers[i].transform.position
+                : PocketPositions[i];
+        }
+
+        Debug.Log($"[TableService] Pockets placed at markerY={markerY:F4}, TableY={TableY:F4}, BallDiameterM={BallDiameterM:F4}");
     }
 
     //public void DetectMarker()
     public void SetMarkersBasedOnQRDetections()
     {
-        // Safeguard the pocket positions
-        if (PocketPositions?.Any(pp => pp == null) != false || PocketPositions.Length != 6)
+        if (PocketPositions?.Any(pp => pp == default) != false || PocketPositions.Length != MAX_POCKET_COUNT)
         {
             Debug.Log("The pockets have not yet been calculated.");
             return;
         }
 
         EnsureMarkers();
-        float ballCenterY = GetDefaultBallHeight(TableY);
 
-        for (byte i = 0; i < MaxPocketCount; i++)
-            _markers[i].transform.position = new Vector3(PocketPositions[i].x, ballCenterY + SurfaceLift, PocketPositions[i].z);
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            SetMarkerWorldPose(i, PocketPositions[i]);
+        }
 
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            _lastMarkerPosition[i] = _markers[i].transform.position;
+        }
     }
 
-    public void SetPocketsXZ((float x, float y)[] pocketXZ) => SetPocketsXZ(pocketXZ, TableY);
-
+    public void SetEdgeDiamonds((float x, float z, byte i, float c)[] diamonds) => PrivateSetEdgeDiamonds(diamonds, TableY);
+    public void SetPocketsXZ((float x, float z)[] pocketXZ) => PrivateSetPocketsXZ(pocketXZ, TableY);
     public void EnsureMarkers()
     {
-        if (_markers?.Length == MaxPocketCount) return;
-        _markers = new GameObject[6];
+        if (_markers?.Length == MAX_POCKET_COUNT) return;
+        _markers = new GameObject[MAX_POCKET_COUNT];
 
-        for (byte i = 0; i < MaxPocketCount; i++)
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
         {
             GameObject go;
             if (PocketMarkerPrefab != null)
@@ -175,7 +420,10 @@ public class TableService : MonoBehaviour
 
             if (!go.TryGetComponent<XZOnlyConstraint>(out var constraint))
                 constraint = go.AddComponent<XZOnlyConstraint>();
-            constraint.Initialize();
+
+            // MODIFIED: initialize from the current world pose, but this baseline
+            // will be refreshed again whenever TableService sets the real pocket pose.
+            constraint.Initialize(go.transform.position, go.transform.rotation);
 
             go.name = $"PocketMarker_{i}";
             _markers[i] = go;
@@ -183,15 +431,22 @@ public class TableService : MonoBehaviour
 
         ApplyLockStateToMarkers();
 
-        if (_lastMarkerPosition == null || _lastMarkerPosition.Length != 6)
-            _lastMarkerPosition = new Vector3[6];
-        for (int i = 0; i < 6; i++) _lastMarkerPosition[i] = _markers[i].transform.position;
+        if (_lastMarkerPosition == null || _lastMarkerPosition.Length != MAX_POCKET_COUNT)
+            _lastMarkerPosition = new Vector3[MAX_POCKET_COUNT];
+
+        for (int i = 0; i < MAX_POCKET_COUNT; i++)
+            _lastMarkerPosition[i] = _markers[i] != null
+                ? _markers[i].transform.position
+              : Vector3.zero;
     }
 
     public void SetBallDiameter(float ballDiameter)
     {
         BallDiameterM = ballDiameter > 0f ? ballDiameter : BallDiameterM;
-        // UPDATED: if we already have table height, we can now safely apply ball height
+
+        if (TableY > 0f && HasAllPockets())
+            ReapplyPockets(TableY);
+
         SetBallHeight();
     }
 
@@ -202,21 +457,31 @@ public class TableService : MonoBehaviour
     public void SetTable(Vector2 widthAndLength, float height) => SetTable(widthAndLength.x, widthAndLength.y, height);
     public void SetTable(Vector3 tableDimensions) => SetTable(tableDimensions.x, tableDimensions.z, tableDimensions.y);
     public void SetTable(Vector3Float tableDimensions) => SetTable(tableDimensions.X, tableDimensions.Z, tableDimensions.Y);
-    public void SetTable(EnvironmentInfo env) => SetTable(env.Table.Length, env.Table.Width, env.Table.Height);
+    public void SetTable(EnvironmentInfo env)
+    {
+        if (env?.Table == null) return;
+
+
+        SetTable(env.Table.Length / 1000, env.Table.Width / 1000, env.Table.Height / 1000);
+    }
 
     public void SetTable(float length, float width, float newTableY)
     {
         if (IsLockedToJitter) return;
 
-        TableSize = new Vector2(length > 0 ? length : TableSize.x, width > 0 ? width : TableSize.y);
+        TableSize = new Vector2(
+            length > 0 ? length : TableSize.x,
+            width > 0 ? width : TableSize.y
+        );
 
-        // If height changes, pockets might need lifting (but ReapplyPockets is now safe-guarded)
-        if (newTableY > 0 && newTableY != TableY)
-            ReapplyPockets(newTableY);
+        bool tableHeightChanged = newTableY > 0f && !Mathf.Approximately(newTableY, TableY);
 
-        TableY = newTableY;
+        if (newTableY > 0f)
+            TableY = newTableY;
 
-        // UPDATED: safe even if _balls wasn't populated yet
+        if (tableHeightChanged)
+            ReapplyPockets(TableY);
+
         SetBallHeight();
     }
 
@@ -233,6 +498,7 @@ public class TableService : MonoBehaviour
         SetLocked(true);
         LockFinalized = true;
         _lastMarkerPosition = null;
+        ProcessDiamonds(_diamondMarkerData);
     }
 
     public bool TrySaveEnviroment()
@@ -247,7 +513,6 @@ public class TableService : MonoBehaviour
                 (short)TableY
             ),
 
-            // UPDATED: these were swapped before
             BallSpec = new BallSpec()
             {
                 DiameterM = BallDiameterM,
@@ -334,7 +599,6 @@ public class TableService : MonoBehaviour
     {
         if (tableY <= 0f) return;
 
-        // if ball diameter isn't known, pocket markers shouldn't be lifted to "ball center"
         if (BallDiameterM <= 0f)
         {
             if (!_warnedMissingBallSpec)
@@ -345,28 +609,27 @@ public class TableService : MonoBehaviour
             return;
         }
 
-        // If we never created markers / pockets, do nothing.
-        if (_markers == null || _markers.Length != MaxPocketCount) return;
+        if (_markers == null || _markers.Length != MAX_POCKET_COUNT) return;
         if (PocketCount == 0) return;
 
         bool wasLocked = IsLockedToJitter;
         if (wasLocked) IsLockedToJitter = false;
 
         TableY = tableY;
-        var ballCenterY = tableY + (BallDiameterM * 0.5f);
+        float markerY = GetPocketMarkerY(tableY);
 
-        for (int i = 0; i < PocketPositions.Length; i++)
+        for (byte i = 0; i < PocketPositions.Length; i++)
         {
-            var p3 = PocketPositions[i];
-            p3.y = ballCenterY;
-            PocketPositions[i] = p3;
+            Vector3 p = PocketPositions[i];
+            p.y = markerY;
 
-            if (_markers[i] != null)
-            {
-                var mPos = _markers[i].transform.position;
-                mPos.y = ballCenterY + SurfaceLift;
-                _markers[i].transform.position = mPos;
-            }
+            UpdatePocketPositionCache(i, p);
+            SetMarkerWorldPose(i, p);
+        }
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            _lastMarkerPosition[i] = _markers[i].transform.position;
         }
 
         if (wasLocked) IsLockedToJitter = true;
@@ -383,6 +646,7 @@ public class TableService : MonoBehaviour
     {
         sbyte moved = -1;
         float maxDelta = 0f;
+
         for (sbyte i = 0; i < _markers.Length; i++)
         {
             float distance = Vector3.Distance(_markers[i].transform.position, _lastMarkerPosition[i]);
@@ -392,9 +656,10 @@ public class TableService : MonoBehaviour
                 moved = i;
             }
         }
+
         if (moved < 0 || maxDelta < movingTreshold)
         {
-            for (sbyte i = 0; i < 6; i++)
+            for (sbyte i = 0; i < MAX_POCKET_COUNT; i++)
                 _lastMarkerPosition[i] = _markers[i].transform.position;
             return;
         }
@@ -422,22 +687,30 @@ public class TableService : MonoBehaviour
         }
 
         float centerX = 0.5f * (leftX + rightX);
+        float markerY = GetPocketMarkerY(TableY);
 
-        TL = new Vector3(leftX, TableY, topZ);
-        TR = new Vector3(rightX, TableY, topZ);
-        BL = new Vector3(leftX, TableY, bottomZ);
-        BR = new Vector3(rightX, TableY, bottomZ);
-        ML = new Vector3(centerX, TableY, bottomZ);
-        MR = new Vector3(centerX, TableY, topZ);
+        TL = new Vector3(leftX, markerY, topZ);
+        TR = new Vector3(rightX, markerY, topZ);
+        BL = new Vector3(leftX, markerY, bottomZ);
+        BR = new Vector3(rightX, markerY, bottomZ);
+        ML = new Vector3(centerX, markerY, bottomZ);
+        MR = new Vector3(centerX, markerY, topZ);
 
-        _markers[0].transform.position = new Vector3(TL.x, TableY + SurfaceLift, TL.z);
-        _markers[1].transform.position = new Vector3(TR.x, TableY + SurfaceLift, TR.z);
-        _markers[2].transform.position = new Vector3(ML.x, TableY + SurfaceLift, ML.z);
-        _markers[3].transform.position = new Vector3(MR.x, TableY + SurfaceLift, MR.z);
-        _markers[4].transform.position = new Vector3(BL.x, TableY + SurfaceLift, BL.z);
-        _markers[5].transform.position = new Vector3(BR.x, TableY + SurfaceLift, BR.z);
+        SetMarkerWorldPose(0, TL);
+        SetMarkerWorldPose(1, TR);
+        SetMarkerWorldPose(2, ML);
+        SetMarkerWorldPose(3, MR);
+        SetMarkerWorldPose(4, BL);
+        SetMarkerWorldPose(5, BR);
 
-        for (sbyte i = 0; i < 6; i++)
+        UpdatePocketPositionCache(0, TL);
+        UpdatePocketPositionCache(1, TR);
+        UpdatePocketPositionCache(2, ML);
+        UpdatePocketPositionCache(3, MR);
+        UpdatePocketPositionCache(4, BL);
+        UpdatePocketPositionCache(5, BR);
+
+        for (sbyte i = 0; i < MAX_POCKET_COUNT; i++)
             _lastMarkerPosition[i] = _markers[i].transform.position;
     }
 
@@ -446,6 +719,36 @@ public class TableService : MonoBehaviour
         if (tableY <= 0f) return tableY;
         if (BallDiameterM <= 0f) return tableY;
         return tableY + (BallDiameterM * 0.5f);
+    }
+
+    private float GetPocketMarkerY(float tableY) => GetDefaultBallHeight(tableY) + SurfaceLift;
+
+
+    private void SetMarkerWorldPose(byte index, Vector3 worldPosition)
+    {
+        if (_markers == null || index < 0 || index >= _markers.Length)
+            return;
+
+        GameObject marker = _markers[index];
+        if (marker == null)
+            return;
+
+        if (marker.TryGetComponent<XZOnlyConstraint>(out var constraint))
+        {
+            constraint.SetConstrainedWorldPose(worldPosition, Quaternion.identity);
+        }
+        else
+        {
+            marker.transform.SetPositionAndRotation(worldPosition, Quaternion.identity);
+        }
+    }
+
+    private void UpdatePocketPositionCache(byte index, Vector3 worldPosition)
+    {
+        if (PocketPositions == null || index < 0 || index >= PocketPositions.Length)
+            return;
+
+        PocketPositions[index] = worldPosition;
     }
 
     private void ApplyLockStateToMarkers()
@@ -462,8 +765,7 @@ public class TableService : MonoBehaviour
 
     private void EnsureBallBufferSize()
     {
-        if (_balls == null)
-            _balls = new List<Vector3Float>(MaxBallCount);
+        _balls ??= new List<Vector3Float>(MaxBallCount);
 
         while (_balls.Count < MaxBallCount)
             _balls.Add(null);
@@ -489,4 +791,11 @@ public class TableService : MonoBehaviour
                 _balls[i].SetHeight(h);
         }
     }
+    private static short MToRoundedMm(float valueM) // UPDATED: save meters back into *_mm JSON fields correctly
+    {
+        int mm = Mathf.RoundToInt(valueM * 1000f);
+        mm = Mathf.Clamp(mm, short.MinValue, short.MaxValue);
+        return (short)mm;
+    }
+
 }

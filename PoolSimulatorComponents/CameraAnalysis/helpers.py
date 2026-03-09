@@ -72,9 +72,12 @@ def _validate_ip(ip: str):
 def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = False ) -> tuple[str, str]: 
     key: str = "quest_3_primary" if connect_to_quest else "droid_cam"
     cached = _load_connection_data(key)
-    if cached:
+    if cached and not is_editor_build:
         print(f"[INFO] Using cached {key}: {cached['ip']}:{cached['port']}")
         return cached["ip"], cached["port"]
+    if connect_to_quest and is_editor_build:
+        return "127.0.0.1","5005"
+        
     
     ip: str = input(
         "Enter Quest 3 IP address (e.g., 192.168.0.40): "
@@ -92,16 +95,13 @@ def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = Fal
         if connect_to_quest else
         input("Enter DroidCam port [default=4747]: ").strip() or "4747"
     )
+    
     _persist_connection_data(ip, port, key)
-    
-    if connect_to_quest and is_editor_build:
-        ip = "127.0.0.1"
-    
     return ip, port
 
 def open_ports(usb_quest_port: int = 5005, is_editor_build: bool = False):
     if not is_editor_build:
-        print("No ports to be forwarded, the app is not running in the editor.")
+        print("[INFO] No ports to be forwarded, the app is not running in the editor.")
         return
     import subprocess
     try:
@@ -121,8 +121,3 @@ def open_ports(usb_quest_port: int = 5005, is_editor_build: bool = False):
         time.sleep(2)
         return False
     return True
-
-def send_config_name_to_quest(config_name: str, quest_ip: str, port:str = "5005"):
-    open_ports(5005)
-    sender = UsbTcpSender(quest_ip, port)
-    sender.send(line_configuration_name(config_name))

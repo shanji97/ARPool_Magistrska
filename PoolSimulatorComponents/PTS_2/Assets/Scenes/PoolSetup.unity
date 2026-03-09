@@ -1881,6 +1881,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   AutoStart: 1
   VerboseLogs: 1
+  MaxBlocksPerFrame: 32
+  logSocketTraffic: 0
 --- !u!4 &1586150832
 Transform:
   m_ObjectHideFlags: 0
@@ -2153,7 +2155,20 @@ MonoBehaviour:
   MaintainRectangleWhenLocked: 1
   BallDiameterM: -1
   BallCircumferenceM: -1
-  MarkerCount: 2
+  QR_CODE_MARKER_VALUES:
+  - ARPOOL_MARKER_01
+  - ARPOOL_MARKER_02
+  - ARPOOL_MARKER_03
+  - ARPOOL_MARKER_04
+  - ARPOOL_MARKER_05
+  - ARPOOL_MARKER_06
+  - ARPOOL_MARKER_07
+  - ARPOOL_MARKER_08
+  - ARPOOL_MARKER_09
+  - ARPOOL_MARKER_10
+  - ARPOOL_MARKER_11
+  - ARPOOL_MARKER_12
+  QR_MARKER_COUNT: 2
   StripedBalls: 090a0b0c0d0e0f
   SolidBalls: 01020304050607
 --- !u!1 &1857997943

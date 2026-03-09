@@ -14,7 +14,6 @@ from objects_in_environment import EnvironmentConfig
 from detection_mode import DetectionMode
 from helpers import (
     setup_connection,
-    send_config_name_to_quest,
     install_dependecies_for_other_projects,
     open_ports
 )
@@ -24,7 +23,8 @@ from formatters import (
     type_to_str,
     p2p_classification_to_balltype,
     line_pockets,
-    build_conf_transfer_block
+    build_conf_transfer_block,
+    line_configuration_name
 )
 
 from testing import synth_test
@@ -42,7 +42,7 @@ POCKET_STABLE_MAX_DELTA_PX = 1.5
 POCKET_STABLE_REQUIRED_FRAMES = 8
 
 POCKET_SCAN_INTERVAL_FRAMES = 5
-POCKET_RESEND_INTERVAL_SEC = 2.0
+POCKET_RESEND_INTERVAL_SEC = 10.0
 RESCAN_DEBOUNCE_TIME = 0.75
 POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER = .85
 YOLO_CIRCLE_MATCH_DIST_MULTIPLIER = 1.75
@@ -220,9 +220,11 @@ def main(
          fallback_resoulution: str ="1280x720",
          detection_mode: Enum = DetectionMode.YOLO,
          is_editor_build: bool = False,
-         debug_detection: bool = False
-         ):
+         debug_detection: bool = False):
 
+    print("Open Unity application. After 10 seconds the application is going to continue.")
+    time.sleep(10)
+    
     debug_frame = None
     dimensions = None
     capture = None
@@ -231,16 +233,22 @@ def main(
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
+    q_ip, q_port = setup_connection(True, is_editor_build)
+    usb_sender = UsbTcpSender(q_ip, q_port)
+    if not usb_sender.connect():
+        open_ports(5005, is_editor_build)
+        if not usb_sender.connect():
+            print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
+        exit()
+    
     # Compute environment and static things, such as pockets.
+    
     env = EnvironmentConfig.__new__(EnvironmentConfig)
     
     if debug and debug_config_name:
         config = env.get_debug_env_config(debug_config_name)
     else:
         config = env.get_environment_config(interactive= True, use_last_known= True)
-    if config is not None:
-        quest_ip, port = setup_connection(True, is_editor_build)
-        send_config_name_to_quest(config.get_json_name_for_unity(), quest_ip, port)
     
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
@@ -250,7 +258,14 @@ def main(
     expected_aspect_ratio = Lmm / Wmm    # Consider the units in the future. Regardless of this, the 
     camera_height_m = config.camera.height_from_floor_m
     
+    if config is not None:
+        if not usb_sender.send(line_configuration_name(config.get_json_name_for_unity())):
+            print("[USB] Failed to send environment name on persistent connection.")
+    else:
+        return
+        
     del config
+    del env
     
     # Set up connection and open stream 
     if debug_static and debug_image_path:
@@ -286,13 +301,7 @@ def main(
         print("Launch the app. You have 10 seconds to do so.")
         time.sleep(10)
     
-    quest_ip, q_port = setup_connection(True, is_editor_build)
-    usb_sender = UsbTcpSender(host=quest_ip, port=q_port)
-    if not usb_sender.connect():
-        open_ports(is_editor_build)
-        if not usb_sender.connect():
-            print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
-        exit()
+    
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
@@ -305,9 +314,9 @@ def main(
     
     global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
     global _map1, _map2
-    pocketed_distance_m = float(ball_diameter_m) * float(POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER)
     _pockets_have_been_sent = False
     pockets_xy_m = None
+    _pockets_px_before_adjust_cached = None
     
     start_time = time.time() if debug else None
     stable = False
@@ -410,7 +419,7 @@ def main(
         raw_frame = frame
         dbg_frame = raw_frame.copy() if (debug and (debug_pocket_display or True)) else None
         
-        if not _pockets_ready and not _pockets_have_been_sent:
+        if not _pockets_ready:
             if should_scan_this_frame:
                 # Detect pockets from image evidence in rectified plane
                 pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
@@ -478,11 +487,17 @@ def main(
         # 3) Sending cached pockets (cheap, independent of computing)
         if _pockets_ready and (_H_cached is not None) and (_pockets_px_cached is not None):
             now = time.time()
-            if (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC):
+            should_send_pockets = (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC)
+            if should_send_pockets:
+                if debug:
+                    print("Sending pockets")
                 pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)
-                sent = usb_sender.send(line_pockets(pockets_xy_m))
-                if sent:
+                
+                if usb_sender.send(line_pockets(pockets_xy_m)):
                     _pockets_have_been_sent = True
+                    _last_pocket_send_time = now
+                else:
+                    _pockets_have_been_sent = False
                     
                 if debug and debug_pocket_display:
                     labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
@@ -547,6 +562,8 @@ def main(
         # Convert entries to to current format in issues 64 and 70.    
         data = build_conf_transfer_block(None, None, ball_diameter_m, camera_height_m, entries)
         sent = usb_sender.send(data)
+        if not sent and debug:
+            print("[USB] Ball transfer failed. The sender will retry on the next send.")
         
         # are pretty much aligned 6 with max Y, 6 with min Y, 6 pairs have the same X value per pair (i don't know how these marks are called). Just parse values and create a new line for them..Cleanup
         # (alignment are going to be handled by Quest 3 once they are all 24 (max) parsed. Sent only once.

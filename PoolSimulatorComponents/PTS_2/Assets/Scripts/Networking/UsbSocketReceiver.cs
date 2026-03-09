@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -12,7 +13,8 @@ public class UsbSocketReceiver : MonoBehaviour
 {
     public const int Port = 5005;
     public bool AutoStart = true;
-    public bool VerboseLogs = true;
+    public bool VerboseLogs = false;
+    public const short RECEIVERBUFFER = 4096;
 
     private TcpListener _listener;
     private Thread _listenerThread;
@@ -20,6 +22,15 @@ public class UsbSocketReceiver : MonoBehaviour
     private readonly ConcurrentQueue<string> _blocks = new();
     private TableService svc = TableService.Instance;
     private (float, float)[] pocketsXZ = null;
+
+
+    [SerializeField] private byte MaxBlocksPerFrame = 32;
+    [SerializeField] private bool logSocketTraffic = false;
+    private readonly byte _queuedBlocksWarningThreshold = 128;
+
+    private int _connectionSequence = 0;
+    private string _lastAppliedEnvironmentKey = null;
+    private bool _loggedEnvironmentSummaryThisSession = false;
 
     // parsed state (XZ pairs in TL,TR,ML,MR,BL,BR order)
     public void Start()
@@ -40,31 +51,59 @@ public class UsbSocketReceiver : MonoBehaviour
 
     public void Update()
     {
-        if (svc == null) return;
-
-        while (_blocks.TryDequeue(out var block))
+        if (svc == null)
         {
-            try { ParseBlock(block, pocketsXZ, svc.LockFinalized); } catch (Exception e) { Debug.LogWarning(e); }
+            EnsureSvc();
+            if (svc == null) return;
         }
+        byte processedThisFrame = 0;
+        while (processedThisFrame < MaxBlocksPerFrame && _blocks.TryDequeue(out var block))
+        {
+            try
+            {
+                ParseBlock(block, pocketsXZ);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning(e);
+            }
+            processedThisFrame++;
+        }
+
     }
 
     public void StartServer()
     {
         if (_running) return;
+
         _running = true;
         _listener = new TcpListener(IPAddress.Any, Port);
+        _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         _listener.Start();
-        _listenerThread = new Thread(AcceptLoop) { IsBackground = true };
+
+        _listenerThread = new Thread(AcceptLoop)
+        {
+            IsBackground = true,
+            Name = "UsbSocketReceiver_AcceptLoop"
+        };
         _listenerThread.Start();
-        if (VerboseLogs) Debug.Log($"[USB] TcpListener started :{Port}");
+
+        if (VerboseLogs)
+            Debug.Log($"[USB] TcpListener started on :{Port}");
     }
+
     public void StopServer()
     {
         _running = false;
+
         try { _listener?.Stop(); } catch { }
-        try { _listenerThread?.Join(200); } catch { }
-        _listener = null; _listenerThread = null;
-        if (VerboseLogs) Debug.Log("[USB] TcpListener stopped.");
+        try { _listenerThread?.Join(500); } catch { }
+
+        _listener = null;
+        _listenerThread = null;
+
+        if (VerboseLogs)
+            Debug.Log("[USB] TcpListener stopped.");
     }
 
     private void EnsureSvc()
@@ -81,44 +120,109 @@ public class UsbSocketReceiver : MonoBehaviour
 
     private void AcceptLoop()
     {
-        try
+        while (_running)
         {
-            while (_running)
+            TcpClient client = null;
+
+            try
             {
-                var client = _listener.AcceptTcpClient();
-                if (VerboseLogs) Debug.Log("[USB] Client connected.");
-                using var stream = client.GetStream();
-                var buf = new byte[4096];
-                int read; string tail = "";
-                ulong totalBytes = 0;
-                while (_running && (read = stream.Read(buf, 0, buf.Length)) > 0)
+                client = _listener.AcceptTcpClient();
+            }
+            catch (SocketException se)
+            {
+                if (_running)
+                    Debug.LogWarning($"[USB] Accept failed: {se.Message}");
+                continue;
+            }
+            catch (Exception e)
+            {
+                if (_running)
+                    Debug.LogWarning($"[USB] Unexpected accept failure: {e}");
+                continue;
+            }
+
+            int connectionId = Interlocked.Increment(ref _connectionSequence);
+
+            try
+            {
+                client.NoDelay = true;
+                try
                 {
+                    client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                }
+                catch { }
+
+                if (VerboseLogs)
+                    Debug.Log($"[USB] Client #{connectionId} connected from {client.Client.RemoteEndPoint}");
+
+                using var stream = client.GetStream();
+
+                var buf = new byte[RECEIVERBUFFER];
+                string tail = string.Empty;
+                ulong totalBytes = 0;
+
+                while (_running)
+                {
+                    int read;
+
+                    try
+                    {
+                        read = stream.Read(buf, 0, buf.Length);
+                    }
+                    catch (IOException ioEx)
+                    {
+                        if (_running)
+                            Debug.LogWarning($"[USB] Client #{connectionId} read failed: {ioEx.Message}");
+                        break;
+                    }
+                    catch (SocketException se)
+                    {
+                        if (_running)
+                            Debug.LogWarning($"[USB] Client #{connectionId} socket error: {se.Message}");
+                        break;
+                    }
+
+                    if (read <= 0)
+                        break;
+
                     totalBytes += (ulong)read;
-                    Debug.Log($"[USB] Read {read} bytes (total {totalBytes})");
-                    Debug.Log($"[USB] Chunk: '{Encoding.UTF8.GetString(buf, 0, read)}'");
 
                     string chunk = Encoding.UTF8.GetString(buf, 0, read);
+
+                    if (logSocketTraffic && VerboseLogs)
+                    {
+                        Debug.Log($"[USB] Client #{connectionId} read {read} bytes (total {totalBytes})");
+                        Debug.Log($"[USB] Client #{connectionId} chunk: '{chunk}'");
+                    }
+
                     string data = tail + chunk;
                     int idx;
+
                     while ((idx = data.IndexOf('\n')) >= 0)
                     {
                         var one = data[..idx].TrimEnd('\r');
                         EnqueueBlock(one);
                         data = data[(idx + 1)..];
                     }
+
                     tail = data;
                 }
-                Debug.Log($"[USB] Read loop ended. totalBytes={totalBytes}");
-                if (VerboseLogs) Debug.Log("[USB] Client disconnected.");
+
+                if (logSocketTraffic && VerboseLogs)
+                    Debug.Log($"[USB] Client #{connectionId} read loop ended. totalBytes={totalBytes}");
             }
-        }
-        catch (SocketException se)
-        {
-            if (_running) Debug.LogWarning($"[USB] {se.Message}");
-        }
-        catch (Exception e)
-        {
-            if (_running) Debug.LogWarning($"[USB] {e}");
+            catch (Exception e)
+            {
+                if (_running)
+                    Debug.LogWarning($"[USB] Client #{connectionId} handler failed: {e}");
+            }
+            finally
+            {
+                try { client?.Close(); } catch { }
+
+                if (VerboseLogs)
+                    Debug.Log($"[USB] Client #{connectionId} disconnected.");
+            }
         }
     }
 
@@ -126,7 +230,11 @@ public class UsbSocketReceiver : MonoBehaviour
     {
         block = block.Replace("\r\n", "\n").Trim('\r', '\n');
         if (string.IsNullOrWhiteSpace(block)) return;
+
         _blocks.Enqueue(block + "\n");
+
+        if (VerboseLogs && _blocks.Count > _queuedBlocksWarningThreshold)
+            Debug.LogWarning($"[USB] Receiver backlog growing: {_blocks.Count} queued blocks.");
     }
 
     private static bool TryNextToken(ref ReadOnlySpan<char> s, char sep, out ReadOnlySpan<char> tok)
@@ -139,75 +247,88 @@ public class UsbSocketReceiver : MonoBehaviour
     private static bool TryParseFloat(ReadOnlySpan<char> span, out float value) =>
         float.TryParse(span, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
-    private void ParseBlock(string block, (float x, float z)[] pocketsXZ, bool isLockFinalized = false)
+    private void ParseBlock(string block, (float x, float z)[] pocketsXZ)
     {
+        EnsureSvc();
+        if (svc == null)
+        {
+            Debug.LogWarning("[USB] ParseBlock skipped because TableService is not available yet.");
+            return;
+        }
+
         ReadOnlySpan<char> span = block.AsSpan().Trim();
         int start = 0;
-
-        // p -> line intended for pocket parsing
-        // t -> line intended for table parsing
-        // L, W, H, BD, C, BC -> lines intended for parsing table parameters. Need only once
 
         while (start < span.Length)
         {
             int newLine = span[start..].IndexOf('\n');
             ReadOnlySpan<char> line = newLine >= 0 ? span.Slice(start, newLine) : span[start..];
             line = line.Trim();
+
             if (!line.IsEmpty)
             {
                 int separator = line.IndexOf(' ');
                 ReadOnlySpan<char> token = separator > 0 ? line[..separator] : line;
                 ReadOnlySpan<char> body = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
 
-                if (svc == null) continue;
-
-                if (svc.HasAllPockets() && svc.ArePropertiesParsed() && isLockFinalized && BallTypeWire.TryParseToken(token, out var ballType))
+                if (svc.HasAllPockets() && svc.ArePropertiesParsed() && svc.LockFinalized && BallTypeWire.TryParseToken(token, out var ballType))
                 {
-                    // Tries to save the table. Only one table currently supported.
-                    if (svc.TrySaveEnviroment())
-                        Debug.Log("Enviroment successfully parsed. Saved to configuration.");
-
-
                     ParseBalls(line, ballType);
-                    continue;
                 }
-
-                if (!isLockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
+                else if (!svc.LockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
                 {
-                    pocketsXZ ??= new (float x, float z)[6];
-                            
-                    for (byte i = 0; i < svc.MaxPocketCount; i++)
-                    {
-                        if (body.IsEmpty) break;
+                    var parsedPockets = new (float x, float z)[svc.MAX_POCKET_COUNT];
+                    byte parsedPocketCount = 0;
+                    var pocketBody = body;
 
-                        TryNextToken(ref body, ';', out var pair);
+                    while (parsedPocketCount < svc.MAX_POCKET_COUNT && !pocketBody.IsEmpty)
+                    {
+                        TryNextToken(ref pocketBody, ';', out var pair);
                         if (pair.IsEmpty) break;
 
-                        // split "x,y"
                         TryNextToken(ref pair, ',', out var xS);
                         var zS = pair;
 
-                        // (optional) trim spaces if your tokenizer doesn't already
                         xS = xS.Trim();
                         zS = zS.Trim();
 
-                        if (TryParseFloat(xS, out float x) && TryParseFloat(zS, out float z))
+                        if (!TryParseFloat(xS, out float x) || !TryParseFloat(zS, out float z))
                         {
-                            pocketsXZ[i] = (x, z);   // Python (x,y) -> Unity (x,z)
-                            svc.IncrementPocketCount();
+                            parsedPocketCount = 0;
+                            break;
                         }
-                        else
-                        {
-                            break; // malformed pair: stop and don't claim success
-                        }
+
+                        parsedPockets[parsedPocketCount] = (x, z);
+                        parsedPocketCount++;
                     }
-                    if (svc.HasAllPockets())
+
+                    if (parsedPocketCount == svc.MAX_POCKET_COUNT)
+                    {
+                        pocketsXZ ??= new (float x, float z)[svc.MAX_POCKET_COUNT];
+                        Array.Copy(parsedPockets, pocketsXZ, svc.MAX_POCKET_COUNT);
+
+                        for (byte i = 0; i < svc.MAX_POCKET_COUNT; i++)
+                            svc.IncrementSuccessfullyParsedPocketCount();
+
                         svc.SetPocketsXZ(pocketsXZ);
+
+                        if (VerboseLogs)
+                            Debug.Log("[USB] Parsed and applied all 6 pockets.");
+                    }
+                    else if (VerboseLogs)
+                    {
+                        Debug.LogWarning($"[USB] Ignored malformed pocket line. Parsed count={parsedPocketCount}.");
+                    }
                 }
-                else if (!isLockFinalized && !svc.ArePropertiesParsed() && token.SequenceEqual("E"))
+                else if (!svc.LockFinalized && !svc.ArePropertiesParsed() && token.SequenceEqual("E"))
                 {
-                    // Python sends: "E predator_9ft.json"
                     var environmentJsonData = body.ToString().Trim().Replace(".json", string.Empty);
+                    if (string.Equals(_lastAppliedEnvironmentKey, environmentJsonData, StringComparison.Ordinal))
+                    {
+                        if (newLine < 0) break;
+                        start += newLine + 1;
+                        continue;
+                    }
 
                     var resourcePath = $"TableConfigurations/{environmentJsonData}";
                     var jsonAsset = Resources.Load<TextAsset>(resourcePath);
@@ -215,8 +336,6 @@ public class UsbSocketReceiver : MonoBehaviour
                     if (jsonAsset == null)
                     {
                         Debug.LogError($"[Unity] JSON resource not found at Resources/{resourcePath}.json");
-                        // Do NOT break the outer parsing loop; just ignore this line.
-                        // (Pockets and balls should still work.)
                     }
                     else
                     {
@@ -236,67 +355,83 @@ public class UsbSocketReceiver : MonoBehaviour
                                 }
                                 else
                                 {
-                                    // TODO: If this enviromnet is already loaded in, skip the application.
-
-                                    if (ApplyEnvironment(env))
+                                    bool applied = ApplyEnvironment(env);
+                                    if (applied)
                                     {
-                                        // Now properties are parsed -> subsequent env parsing will be skipped by your existing guards.
-                                        AppSettings.Instance.Settings.EnviromentInfo = env;
+                                        _lastAppliedEnvironmentKey = environmentJsonData;
+
+                                        // MODIFIED: null-safe compare/update to avoid NullReferenceException.
+                                        string currentName =
+                                            AppSettings.Instance?.Settings?.EnviromentInfo?.Table?.Name;
+
+                                        string newName = env.Table?.Name;
+
+                                        if (!string.Equals(currentName, newName, StringComparison.Ordinal))
+                                        {
+                                            if (AppSettings.Instance?.Settings != null)
+                                                AppSettings.Instance.Settings.EnviromentInfo = env;
+                                        }
                                     }
                                 }
                             }
                             catch (Exception ex)
                             {
-                                Debug.LogError($"[Unity] JSON deserialize failed for {resourcePath}.json: {ex}");
+                                // MODIFIED: This catch wraps both deserialize and post-deserialize processing,
+                                // so the message should not claim deserialization only.
+                                Debug.LogError($"[Unity] Environment apply failed for {resourcePath}.json: {ex}");
                             }
                         }
                     }
-
-                    continue; // done handling this line
                 }
-
-
-
-                
             }
+
             if (newLine < 0) break;
             start += newLine + 1;
         }
     }
 
     private bool ApplyEnvironment(float playfieldLength = -1,
-                                  float playfieldWidth = -1,
-                                  float playfieldHeight = -1,
-                                  float ballDiameter = -1,
-                                  float ballCircumference = -1,
-                                  float cameraHeightFromFloor = -1)
+                              float playfieldWidth = -1,
+                              float playfieldHeight = -1,
+                              float ballDiameter = -1,
+                              float ballCircumference = -1,
+                              float cameraHeightFromFloor = -1)
     {
+        EnsureSvc();
+        if (svc == null)
+        {
+            Debug.LogError("[USB] ApplyEnvironment failed because TableService is null.");
+            return false;
+        }
+
         if (svc.ArePropertiesParsed())
             return true;
 
-        // Width and length of the table.
+        svc.SetBallDiameter(ballDiameter);
+        svc.SetBallCircumference(ballCircumference);
+        svc.SetCamera(cameraHeightFromFloor);
+
         svc.SetTableLenght(playfieldLength);
         svc.SetTableWidth(playfieldWidth);
 
         if (!svc.IsTableHeightSet() && playfieldHeight > 0f)
         {
             svc.SetTable(playfieldLength, playfieldWidth, playfieldHeight);
+
             if (svc.HasAllPockets())
                 svc.ReapplyPockets();
         }
 
-        svc.SetBallDiameter(ballDiameter);
-        svc.SetCamera(cameraHeightFromFloor);
-        svc.SetBallCircumference(ballCircumference);
-
-        if (VerboseLogs)
+        if (VerboseLogs && !_loggedEnvironmentSummaryThisSession)
         {
             Debug.Log($"[USB] Table(t): L={playfieldLength:F3}m,\r\n" +
-            $" W={playfieldWidth:F3}m,\r\n" +
-            $" H={playfieldHeight:F3}m,\r\n" +
-            $" BD={ballDiameter}m,\r\n" +
-            $" BC={ballCircumference}m,\r\n" +
-            $" C={cameraHeightFromFloor}m,\r\n");
+                      $" W={playfieldWidth:F3}m,\r\n" +
+                      $" H={playfieldHeight:F3}m,\r\n" +
+                      $" BD={ballDiameter:F5}m,\r\n" +
+                      $" BC={ballCircumference:F5}m,\r\n" +
+                      $" C={cameraHeightFromFloor:F3}m");
+
+            _loggedEnvironmentSummaryThisSession = true;
         }
 
         return svc.ArePropertiesParsed();
@@ -304,11 +439,24 @@ public class UsbSocketReceiver : MonoBehaviour
 
     private bool ApplyEnvironment(EnvironmentInfo env)
     {
-        if (env != null)
-            return ApplyEnvironment(env.Table.Length, env.Table.Width, env.Table.Height, env.BallSpec.DiameterM, env.BallSpec.BallCircumferenceM, env.CameraData.HeightFromFloorM);
-        else
-            Debug.LogError("Enviroment info not properly cached or corrupted.");
-        return false;
+        if (env?.Table == null)
+        {
+            Debug.LogError("[USB] Environment info not properly cached or corrupted.");
+            return false;
+        }
+
+        float lengthM = MmToM(env.Table.Length);
+        float widthM = MmToM(env.Table.Width);
+        float heightM = MmToM(env.Table.Height);
+
+        return ApplyEnvironment(
+            lengthM,
+            widthM,
+            heightM,
+            env.BallSpec?.DiameterM ?? -1f,
+            env.BallSpec?.BallCircumferenceM ?? -1f,
+            env.CameraData?.HeightFromFloorM ?? -1f
+        );
     }
 
     private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
@@ -335,6 +483,11 @@ public class UsbSocketReceiver : MonoBehaviour
         svc.PlaceBalls(x, y, id, conf, vx, vy);
     }
 
+    private static float MmToM(float valueMm) // UPDATED: keep JSON in mm, convert only at Unity runtime boundary
+    {
+        return valueMm > 0f ? valueMm / 1000f : valueMm;
+    }
+
 #if UNITY_EDITOR
     [ContextMenu("USB/Test Inject Sample Block (full balls set)")]
     private void TestInjectSampleBlock()
@@ -356,7 +509,7 @@ public class UsbSocketReceiver : MonoBehaviour
             "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n" +
             "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n";
 
-        ParseBlock(block, pocketsXZ, false);
+        ParseBlock(block, pocketsXZ);
     }
 #endif
 }
