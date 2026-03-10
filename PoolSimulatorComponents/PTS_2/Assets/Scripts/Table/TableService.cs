@@ -100,6 +100,15 @@ public class TableService : MonoBehaviour
 
     private List<TableStateEntry> _tableStateEntries = null;
 
+    private static readonly HashSet<string> MarkerInteractionComponentTypeNames = new()
+    {
+        "Grabbable",
+        "HandGrabInteractable",
+        "DistanceHandGrabInteractable",
+        "RayInteractable",
+        "PokeInteractable"
+    };
+
     // UPDATED: one-time warning guard
     private bool _warnedMissingBallSpec = false;
 
@@ -350,7 +359,7 @@ public class TableService : MonoBehaviour
 
         for (byte i = 0; i < MAX_POCKET_COUNT; i++)
         {
-            Vector3 worldPocketPosition = new Vector3(
+            Vector3 worldPocketPosition = new(
                 pocketXZ[i].x,
                 markerY,
                 pocketXZ[i].z
@@ -373,6 +382,53 @@ public class TableService : MonoBehaviour
 
         Debug.Log($"[TableService] Pockets placed at markerY={markerY:F4}, TableY={TableY:F4}, BallDiameterM={BallDiameterM:F4}");
     }
+
+    public bool CanFinalizePocketPlacement() => ArePropertiesParsed()
+            && HasAllPockets()
+            && _markers != null
+            && _markers.Length == MAX_POCKET_COUNT;
+
+    public void FinalizePocketPlacement()
+    {
+        if (!CanFinalizePocketPlacement())
+        {
+            Debug.LogWarning("[TableService] FinalizePocketPlacement ignored because the table state is not ready yet.");
+            return;
+        }
+
+        IsLockedToJitter = true;
+        LockFinalized = true;
+
+        if (_lastMarkerPosition == null || _lastMarkerPosition.Length != MAX_POCKET_COUNT)
+            _lastMarkerPosition = new Vector3[MAX_POCKET_COUNT];
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            if (_markers != null && i < _markers.Length && _markers[i] != null)
+            {
+                _lastMarkerPosition[i] = _markers[i].transform.position;
+            }
+            else if (PocketPositions != null && i < PocketPositions.Length)
+            {
+                _lastMarkerPosition[i] = PocketPositions[i];
+            }
+        }
+
+        ApplyLockStateToMarkers();
+
+        Debug.Log("[TableService] Pocket placement finalized. Markers are frozen in place.");
+    }
+
+    public void ReEnablePocketEditing()
+    {
+        LockFinalized = false;
+        IsLockedToJitter = false;
+
+        ApplyLockStateToMarkers();
+
+        Debug.Log("[TableService] Pocket editing re-enabled.");
+    }
+
 
     //public void DetectMarker()
     public void SetMarkersBasedOnQRDetections()
@@ -435,9 +491,11 @@ public class TableService : MonoBehaviour
             _lastMarkerPosition = new Vector3[MAX_POCKET_COUNT];
 
         for (int i = 0; i < MAX_POCKET_COUNT; i++)
+        {
             _lastMarkerPosition[i] = _markers[i] != null
                 ? _markers[i].transform.position
               : Vector3.zero;
+        }
     }
 
     public void SetBallDiameter(float ballDiameter)
@@ -495,9 +553,7 @@ public class TableService : MonoBehaviour
 
     public void FinalizeLocked()
     {
-        SetLocked(true);
-        LockFinalized = true;
-        _lastMarkerPosition = null;
+        FinalizePocketPlacement();
         ProcessDiamonds(_diamondMarkerData);
     }
 
@@ -745,7 +801,7 @@ public class TableService : MonoBehaviour
 
     private void UpdatePocketPositionCache(byte index, Vector3 worldPosition)
     {
-        if (PocketPositions == null || index < 0 || index >= PocketPositions.Length)
+        if (PocketPositions == null || index >= PocketPositions.Length)
             return;
 
         PocketPositions[index] = worldPosition;
@@ -754,12 +810,60 @@ public class TableService : MonoBehaviour
     private void ApplyLockStateToMarkers()
     {
         if (_markers == null) return;
-        foreach (var go in _markers)
-        {
-            if (go == null) continue;
 
-            if (go.TryGetComponent<XZOnlyConstraint>(out var constraint))
-                constraint.GrabbableEnabled = true;
+        bool editingEnabled = !IsLockedToJitter; // UPDATED: if locked, editing must be disabled
+
+        foreach (var marker in _markers)
+        {
+            if (marker == null) continue;
+
+            ApplyMarkerEditState(marker, editingEnabled); // UPDATED: freeze/unfreeze entire marker interaction stack
+        }
+    }
+    private void ApplyMarkerEditState(GameObject marker, bool editingEnabled)
+    {
+        if (marker == null) return;
+
+        // UPDATED: cache the exact final pose before disabling editing
+        if (marker.TryGetComponent<XZOnlyConstraint>(out var constraint))
+        {
+            if (!editingEnabled)
+            {
+                constraint.SetConstrainedWorldPose(marker.transform.position, marker.transform.rotation);
+            }
+
+            constraint.GrabbableEnabled = editingEnabled;
+        }
+
+        // UPDATED: toggle all colliders on the marker and its children
+        Collider[] colliders = marker.GetComponentsInChildren<Collider>(includeInactive: true);
+        foreach (var collider in colliders)
+        {
+            collider.enabled = editingEnabled;
+        }
+
+        Rigidbody[] rigidbodies = marker.GetComponentsInChildren<Rigidbody>(includeInactive: true);
+        foreach (var rb in rigidbodies)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = !editingEnabled;
+            rb.detectCollisions = editingEnabled;
+            rb.constraints = editingEnabled ? RigidbodyConstraints.None : RigidbodyConstraints.FreezeAll;
+        }
+
+        // UPDATED: disable Meta/Oculus interaction scripts directly by type name
+        Behaviour[] behaviours = marker.GetComponentsInChildren<Behaviour>(includeInactive: true);
+        foreach (var behaviour in behaviours)
+        {
+            if (behaviour == null) continue;
+
+            string typeName = behaviour.GetType().Name;
+
+            if (MarkerInteractionComponentTypeNames.Contains(typeName))
+            {
+                behaviour.enabled = editingEnabled;
+            }
         }
     }
 

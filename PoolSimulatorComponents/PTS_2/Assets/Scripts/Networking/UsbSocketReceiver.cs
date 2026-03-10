@@ -38,10 +38,6 @@ public class UsbSocketReceiver : MonoBehaviour
         EnsureSvc();
         pocketsXZ ??= new (float, float)[6];
 
-        var environmentInfo = AppSettings.Instance.Settings.EnviromentInfo;
-        if (environmentInfo != null)
-            ApplyEnvironment(environmentInfo);
-
         if (AutoStart) StartServer();
     }
 
