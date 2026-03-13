@@ -13,6 +13,44 @@ public class TableService : MonoBehaviour
     public byte DiamondCount { get; private set; } = 0;
     public bool HasAllPockets() => PocketCount == MAX_POCKET_COUNT;
 
+    [Header("Diamond Debug Preview")]
+    public bool ShowComputedDiamondPreview = true;
+    public bool ShowDiamondEditorGizmos = true; // ADDED: editor-only scene/game gizmos
+    public bool ShowDiamondRuntimeMarkers = true; // ADDED: Quest-visible runtime preview
+    public bool HideDiamondPreviewAfterFinalize = true; // ADDED: preview is mainly for setup stage
+    public bool ShowDiamondIndices = true; // ADDED: editor labels for quick validation
+
+   
+
+    [Tooltip("Optional prefab for runtime diamond preview markers. Falls back to primitive spheres if null.")]
+    public GameObject DiamondMarkerPrefab; // ADDED
+
+    [Tooltip("Optional parent for runtime diamond markers. Falls back to MarkersParent, then this transform.")]
+    public Transform DiamondMarkersParent; // ADDED
+
+    [Tooltip("Extra height above the pocket marker plane to avoid z-fighting.")]
+    public float DiamondSurfaceLift = 0.015f; // ADDED
+
+    [Tooltip("Radius of editor gizmo spheres.")]
+    public float DiamondGizmoRadius = 0.015f; // ADDED
+
+
+
+    [Tooltip("Scale of fallback runtime spheres when DiamondMarkerPrefab is null.")]
+    public float DiamondRuntimeScale = 0.02f; // ADDED
+
+    public Color DiamondGizmoColor = Color.yellow; // ADDED
+    public Color DiamondRuntimeColor = Color.yellow; // ADDED
+
+    private readonly List<GameObject> _runtimeDiamondMarkers = new(); // ADDED
+    private List<DiamondMarkerData> _computedDiamondMarkerData = new(); // ADDED
+
+    [Header("Diamond Rail Anchor Calibration")]
+    public float DiamondLongRailCornerInsetM = 0.09f; // MODIFIED: long rail corner-pocket inset
+    public float DiamondLongRailSidePocketInsetM = 0.07f; // ADDED: long rail side-pocket inset
+    public float DiamondShortRailCornerInsetM = 0.06f; // MODIFIED: short rail corner-pocket inset 
+
+
     [Tooltip("Offset above table surface to avoid z-fighting")]
     public float SurfaceLift = 0.01f;
 
@@ -112,6 +150,8 @@ public class TableService : MonoBehaviour
     // UPDATED: one-time warning guard
     private bool _warnedMissingBallSpec = false;
 
+
+
     public void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -127,23 +167,69 @@ public class TableService : MonoBehaviour
 
     public void LateUpdate()
     {
-        if (LockFinalized || !MaintainRectangleWhenLocked || _markers is null) return;
+        // MODIFIED: keep the existing pocket rectangle maintenance,
+        // but do not early-return because diamond preview must still refresh.
+        if (!LockFinalized && MaintainRectangleWhenLocked && _markers is not null)
+        {
+            HandlePocketMarkers();
+        }
 
-        // Detect which marker moved the most this frame.
-        HandlePocketMarkers();
+        // ADDED: ISSUE-82 live diamond preview update.
+        RefreshComputedDiamondPreview();
     }
 
     public void OnDestroy()
     {
         if (_tableStateEntries.Any())
             AppSettings.Instance.AddTableStateEntries(_tableStateEntries);
+
+        // ADDED: cleanup runtime debug markers.
+        DestroyRuntimeDiamondMarkers();
     }
 
     public void OnApplicationQuit()
     {
         if (_tableStateEntries.Any())
             AppSettings.Instance.AddTableStateEntries(_tableStateEntries);
+
+        // ADDED: cleanup runtime debug markers.
+        DestroyRuntimeDiamondMarkers();
     }
+
+    private void OnDrawGizmos()
+    {
+        if (!ShowDiamondEditorGizmos)
+            return;
+
+        if (_computedDiamondMarkerData == null || _computedDiamondMarkerData.Count != MAX_DIAMOND_COUNT)
+            return;
+
+        Color previousColor = Gizmos.color;
+        Gizmos.color = DiamondGizmoColor;
+
+        float y = Application.isPlaying && TableY > 0f
+            ? GetDiamondPreviewY()
+            : transform.position.y;
+
+        for (int i = 0; i < _computedDiamondMarkerData.Count; i++)
+        {
+            DiamondMarkerData d = _computedDiamondMarkerData[i];
+            Vector3 world = new(d.XZ.X, y, d.XZ.Y);
+
+            Gizmos.DrawSphere(world, DiamondGizmoRadius);
+
+#if UNITY_EDITOR
+            if (ShowDiamondIndices)
+            {
+                UnityEditor.Handles.color = DiamondGizmoColor;
+                UnityEditor.Handles.Label(world + Vector3.up * 0.02f, d.Index.ToString());
+            }
+#endif
+        }
+
+        Gizmos.color = previousColor;
+    }
+
 
     public void IncrementSuccessfullyParsedPocketCount()
     {
@@ -176,6 +262,316 @@ public class TableService : MonoBehaviour
         }
 
         return (byte)(startIndex + source.Count);
+    }
+
+    private bool CanPreviewComputedDiamonds()
+    {
+        // ADDED: ISSUE-82 preview only requires a valid table height and all six pockets.
+        return ShowComputedDiamondPreview
+            && IsTableHeightSet()
+            && PocketPositions != null
+            && PocketPositions.Length == MAX_POCKET_COUNT
+            && HasAllPockets();
+    }
+
+    private float GetDiamondPreviewY()
+    {
+        // ADDED: draw diamonds slightly above the same plane used by pocket markers.
+        return GetPocketMarkerY(TableY) + DiamondSurfaceLift;
+    }
+
+    private static void AddComputedRailDiamonds(
+        List<DiamondMarkerData> target,
+        Vector3 start,
+        Vector3 end,
+        byte diamondCount,
+        ref byte nextIndex)
+    {
+        // ADDED: evenly spaced diamonds along one rail segment.
+        int divisor = diamondCount + 1;
+
+        for (int step = 1; step <= diamondCount; step++)
+        {
+            float t = (float)step / divisor;
+            Vector3 p = Vector3.Lerp(start, end, t);
+
+            target.Add(new DiamondMarkerData()
+            {
+                XZ = new Vector2Float(p.x, p.z),
+                Index = nextIndex++,
+                Confidence = 1f // ADDED: computed preview, not detector confidence
+            });
+        }
+    }
+
+    private List<DiamondMarkerData> BuildComputedDiamondLayoutFromPockets()
+    {
+        if (!CanPreviewComputedDiamonds())
+            return null;
+
+        // Pocket order in this project:
+        // 0 TL, 1 TR, 2 ML (bottom middle), 3 MR (top middle), 4 BL, 5 BR
+        Vector3 tl = PocketPositions[0];
+        Vector3 tr = PocketPositions[1];
+        Vector3 ml = PocketPositions[2];
+        Vector3 mr = PocketPositions[3];
+        Vector3 bl = PocketPositions[4];
+        Vector3 br = PocketPositions[5];
+
+        List<DiamondMarkerData> computed = new(MAX_DIAMOND_COUNT);
+        byte index = 0;
+
+        // MODIFIED: split each long rail into TWO independent 3-diamond segments.
+        // Bottom rail canonical order: left -> right
+        (Vector3 bottomLeftStart, Vector3 bottomLeftEnd) = BuildInsetRailSegment(
+            bl,
+            ml,
+            DiamondLongRailCornerInsetM,
+            DiamondLongRailSidePocketInsetM);
+
+        (Vector3 bottomRightStart, Vector3 bottomRightEnd) = BuildInsetRailSegment(
+            ml,
+            br,
+            DiamondLongRailSidePocketInsetM,
+            DiamondLongRailCornerInsetM);
+
+        // Right short rail canonical order: bottom -> top
+        (Vector3 rightStart, Vector3 rightEnd) = BuildInsetRailSegment(
+            br,
+            tr,
+            DiamondShortRailCornerInsetM,
+            DiamondShortRailCornerInsetM);
+
+        // Top rail canonical order: right -> left
+        (Vector3 topRightStart, Vector3 topRightEnd) = BuildInsetRailSegment(
+            tr,
+            mr,
+            DiamondLongRailCornerInsetM,
+            DiamondLongRailSidePocketInsetM);
+
+        (Vector3 topLeftStart, Vector3 topLeftEnd) = BuildInsetRailSegment(
+            mr,
+            tl,
+            DiamondLongRailSidePocketInsetM,
+            DiamondLongRailCornerInsetM);
+
+        // Left short rail canonical order: top -> bottom
+        (Vector3 leftStart, Vector3 leftEnd) = BuildInsetRailSegment(
+            tl,
+            bl,
+            DiamondShortRailCornerInsetM,
+            DiamondShortRailCornerInsetM);
+
+        // MODIFIED: 6 diamonds on each long rail are now 3 + 3, split by the side pocket.
+        AddComputedRailDiamonds(computed, bottomLeftStart, bottomLeftEnd, 3, ref index);
+        AddComputedRailDiamonds(computed, bottomRightStart, bottomRightEnd, 3, ref index);
+        AddComputedRailDiamonds(computed, rightStart, rightEnd, 3, ref index);
+        AddComputedRailDiamonds(computed, topRightStart, topRightEnd, 3, ref index);
+        AddComputedRailDiamonds(computed, topLeftStart, topLeftEnd, 3, ref index);
+        AddComputedRailDiamonds(computed, leftStart, leftEnd, 3, ref index);
+
+        if (computed.Count != MAX_DIAMOND_COUNT)
+        {
+            Debug.LogWarning(
+                $"[TableService] Computed diamond preview count mismatch. " +
+                $"Expected {MAX_DIAMOND_COUNT}, got {computed.Count}.");
+            return null;
+        }
+
+        if (VerboseDiamondLogs())
+        {
+            Debug.Log(
+                "[TableService] Computed diamond preview updated from segmented rail anchors. " +
+                $"LongCornerInset={DiamondLongRailCornerInsetM:F3}m, " +
+                $"LongSideInset={DiamondLongRailSidePocketInsetM:F3}m, " +
+                $"ShortCornerInset={DiamondShortRailCornerInsetM:F3}m");
+        }
+
+        return computed;
+    }
+
+    private void RefreshComputedDiamondPreview()
+    {
+        // ADDED: hide preview after final confirmation unless explicitly kept.
+        if (!ShowComputedDiamondPreview || (LockFinalized && HideDiamondPreviewAfterFinalize))
+        {
+            _computedDiamondMarkerData = null;
+            SetRuntimeDiamondMarkersActive(false);
+            return;
+        }
+
+        _computedDiamondMarkerData = BuildComputedDiamondLayoutFromPockets();
+
+        if (_computedDiamondMarkerData == null || _computedDiamondMarkerData.Count != MAX_DIAMOND_COUNT)
+        {
+            SetRuntimeDiamondMarkersActive(false);
+            return;
+        }
+
+        if (!ShowDiamondRuntimeMarkers)
+        {
+            SetRuntimeDiamondMarkersActive(false);
+            return;
+        }
+
+        EnsureRuntimeDiamondMarkers(_computedDiamondMarkerData.Count);
+
+        float y = GetDiamondPreviewY();
+
+        for (int i = 0; i < _computedDiamondMarkerData.Count; i++)
+        {
+            DiamondMarkerData d = _computedDiamondMarkerData[i];
+            GameObject marker = _runtimeDiamondMarkers[i];
+
+            if (marker == null)
+                continue;
+
+            marker.transform.SetPositionAndRotation(
+                new Vector3(d.XZ.X, y, d.XZ.Y),
+                Quaternion.identity
+            );
+
+            if (!marker.activeSelf)
+                marker.SetActive(true);
+        }
+
+        SetRuntimeDiamondMarkersActive(true);
+    }
+
+    private static (Vector3 start, Vector3 end) BuildInsetRailSegment(
+    Vector3 start,
+    Vector3 end,
+    float startInsetM,
+    float endInsetM)
+    {
+        // MODIFIED: supports different inset values on each side of the rail segment.
+        Vector3 delta = end - start;
+        float length = delta.magnitude;
+
+        if (length <= Mathf.Epsilon)
+            return (start, end);
+
+        float clampedStartInset = Mathf.Clamp(startInsetM, 0f, length * 0.45f);
+        float clampedEndInset = Mathf.Clamp(endInsetM, 0f, length * 0.45f);
+
+        // MODIFIED: prevent overlap if both insets become too large.
+        float totalInset = clampedStartInset + clampedEndInset;
+        if (totalInset >= length)
+        {
+            float safeScale = (length * 0.9f) / totalInset;
+            clampedStartInset *= safeScale;
+            clampedEndInset *= safeScale;
+        }
+
+        Vector3 direction = delta / length;
+
+        return
+        (
+            start + direction * clampedStartInset,
+            end - direction * clampedEndInset
+        );
+    }
+
+    private void EnsureRuntimeDiamondMarkers(int requiredCount)
+    {
+        while (_runtimeDiamondMarkers.Count < requiredCount)
+        {
+            _runtimeDiamondMarkers.Add(CreateRuntimeDiamondMarker(_runtimeDiamondMarkers.Count));
+        }
+
+        for (int i = 0; i < _runtimeDiamondMarkers.Count; i++)
+        {
+            _runtimeDiamondMarkers[i]?.SetActive(i < requiredCount);
+        }
+    }
+
+    private GameObject CreateRuntimeDiamondMarker(int index)
+    {
+        Transform parent = DiamondMarkersParent != null ? DiamondMarkersParent : (MarkersParent != null ? MarkersParent : transform);
+
+        GameObject go;
+
+        if (DiamondMarkerPrefab != null)
+        {
+            go = Instantiate(DiamondMarkerPrefab, Vector3.zero, Quaternion.identity, parent);
+        }
+        else
+        {
+            go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+
+            if (parent != null)
+                go.transform.SetParent(parent, worldPositionStays: true);
+
+            // ADDED: fallback runtime sphere scale.
+            go.transform.localScale = Vector3.one * DiamondRuntimeScale;
+        }
+
+        go.name = $"DiamondPreview_{index}";
+
+        // ADDED: these are debug visuals only, so they must not interfere with interaction/physics.
+        Collider[] colliders = go.GetComponentsInChildren<Collider>(includeInactive: true);
+        foreach (var collider in colliders)
+        {
+            collider.enabled = false;
+        }
+
+        Rigidbody[] rigidbodies = go.GetComponentsInChildren<Rigidbody>(includeInactive: true);
+        foreach (var rb in rigidbodies)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = true;
+            rb.detectCollisions = false;
+            rb.constraints = RigidbodyConstraints.FreezeAll;
+        }
+
+        ApplyDiamondRuntimeColor(go, DiamondRuntimeColor);
+        go.SetActive(false);
+
+        return go;
+    }
+
+    private void ApplyDiamondRuntimeColor(GameObject target, Color color)
+    {
+        if (target == null)
+            return;
+
+        Renderer[] renderers = target.GetComponentsInChildren<Renderer>(includeInactive: true);
+        foreach (var renderer in renderers)
+        {
+            if (renderer == null)
+                continue;
+
+            // ADDED: use instantiated runtime material for debug markers.
+            Material material = renderer.material;
+            material.color = color;
+        }
+    }
+
+    private void SetRuntimeDiamondMarkersActive(bool active)
+    {
+        for (int i = 0; i < _runtimeDiamondMarkers.Count; i++)
+        {
+            if (_runtimeDiamondMarkers[i] != null && _runtimeDiamondMarkers[i].activeSelf != active)
+                _runtimeDiamondMarkers[i].SetActive(active);
+        }
+    }
+
+    private void DestroyRuntimeDiamondMarkers()
+    {
+        for (int i = _runtimeDiamondMarkers.Count - 1; i >= 0; i--)
+        {
+            GameObject marker = _runtimeDiamondMarkers[i];
+            if (marker == null)
+                continue;
+
+            if (Application.isPlaying)
+                Destroy(marker);
+            else
+                DestroyImmediate(marker);
+        }
+
+        _runtimeDiamondMarkers.Clear();
     }
 
     private List<DiamondMarkerData> ProcessDiamonds(List<DiamondMarkerData> diamondMarkerData)
@@ -651,6 +1047,7 @@ public class TableService : MonoBehaviour
 
         // Create a buffer for a fluid system of tracking each ball for multiple points.
     }
+
     public void ReapplyPockets(float tableY)
     {
         if (tableY <= 0f) return;
@@ -824,35 +1221,44 @@ public class TableService : MonoBehaviour
     {
         if (marker == null) return;
 
-        // UPDATED: cache the exact final pose before disabling editing
+        // MODIFIED: always refresh the constrained baseline before changing edit state.
         if (marker.TryGetComponent<XZOnlyConstraint>(out var constraint))
         {
-            if (!editingEnabled)
-            {
-                constraint.SetConstrainedWorldPose(marker.transform.position, marker.transform.rotation);
-            }
-
+            constraint.SetConstrainedWorldPose(marker.transform.position, marker.transform.rotation);
             constraint.GrabbableEnabled = editingEnabled;
         }
 
-        // UPDATED: toggle all colliders on the marker and its children
+        // MODIFIED: colliders must stay enabled while editing so Quest grab/ray/poke systems
+        // can still target the marker. When locked, disable them to prevent accidental edits.
         Collider[] colliders = marker.GetComponentsInChildren<Collider>(includeInactive: true);
         foreach (var collider in colliders)
         {
+            if (collider == null) continue;
             collider.enabled = editingEnabled;
         }
 
+        // MODIFIED: keep markers kinematic to prevent physics drift,
+        // but keep collision participation enabled while editing so interaction still works.
         Rigidbody[] rigidbodies = marker.GetComponentsInChildren<Rigidbody>(includeInactive: true);
         foreach (var rb in rigidbodies)
         {
+            if (rb == null) continue;
+
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
-            rb.isKinematic = !editingEnabled;
-            rb.detectCollisions = editingEnabled;
-            rb.constraints = editingEnabled ? RigidbodyConstraints.None : RigidbodyConstraints.FreezeAll;
+
+            rb.useGravity = false; // MODIFIED: markers must never fall
+            rb.isKinematic = true; // MODIFIED: always kinematic, even while editing
+            rb.detectCollisions = editingEnabled; // MODIFIED: interaction works while editing, disabled when locked
+            rb.collisionDetectionMode = CollisionDetectionMode.Discrete; // ADDED: stable enough for setup handles
+            rb.interpolation = RigidbodyInterpolation.None; // ADDED: avoid extra smoothing noise
+
+            rb.constraints = editingEnabled
+                ? RigidbodyConstraints.FreezeRotation | RigidbodyConstraints.FreezePositionY // MODIFIED: allow only planar adjustment
+                : RigidbodyConstraints.FreezeAll; // MODIFIED: fully lock after confirmation
         }
 
-        // UPDATED: disable Meta/Oculus interaction scripts directly by type name
+        // Keep Meta/Oculus interaction scripts enabled only while editing.
         Behaviour[] behaviours = marker.GetComponentsInChildren<Behaviour>(includeInactive: true);
         foreach (var behaviour in behaviours)
         {

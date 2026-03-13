@@ -53,7 +53,12 @@ public class Ball
     public Vector2Float DetectedPosition;
     public Vector2Float CorrectedPosition { get; private set; } = null;
 
-    public bool UserModified { private set; get; } = false;
+    public bool UserModifiedPosition { get; private set; } = false;
+
+    public UserOverrides UserOverrides { get; private set; }
+
+    public bool IsPositionUserOverriden() => (UserOverrides & UserOverrides.UserModifiedPosition) == UserOverrides.UserModifiedPosition;
+    public bool IsTypeUserOverriden() => (UserOverrides & UserOverrides.UserModifiedType) == UserOverrides.UserModifiedPosition;
 
     public void AssignBallId(byte ballId)
     {
@@ -62,12 +67,15 @@ public class Ball
 
     public void ModifyPosition(Vector2Float newPosition)
     {
-        if (UserModified)
+        if (UserModifiedPosition)
             return;
 
         CorrectedPosition = newPosition;
-        UserModified = true;
+        UserOverrides |= UserOverrides.UserModifiedPosition;
         //Set the graphics to new position.
+
+
+
     }
 
     public void MoveToOriginalPosition()
@@ -89,11 +97,15 @@ public class Ball
          *      
         */
         CorrectedPosition = null;
-        UserModified = false;
+        UserModifiedPosition = false;
     }
+}
 
-
-
+[Serializable, System.Flags]
+public enum UserOverrides : byte
+{
+    UserModifiedPosition = 1,
+    UserModifiedType = 2
 }
 
 [Serializable]
