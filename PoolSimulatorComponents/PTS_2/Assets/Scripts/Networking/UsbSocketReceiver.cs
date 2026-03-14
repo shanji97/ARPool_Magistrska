@@ -457,27 +457,95 @@ public class UsbSocketReceiver : MonoBehaviour
 
     private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
     {
-        //TODO: check the parsing algorithm.
+        // UPDATED: supports both single-ball lines (cue/eight)
+        // and grouped multi-ball lines (solid/stripe) separated by ';'.
+        // Wire format examples:
+        // c  x,y,id,conf,vx,vy
+        // e  x,y,id,conf,vx,vy
+        // st x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
+        // so x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
 
-        // skip token (c/e/so/st) + whitespace
         int spaceIndex = line.IndexOf(' ');
-        var data = line[(spaceIndex + 1)..];
+        if (spaceIndex < 0 || spaceIndex >= line.Length - 1)
+            return;
 
-        // split by comma
-        var parts = data.ToString().Split(',');
+        ReadOnlySpan<char> data = line[(spaceIndex + 1)..].Trim();
+        if (data.IsEmpty)
+            return;
 
-        // Example: x,y,id,conf,vx,vy
-        float x = float.Parse(parts[0], CultureInfo.InvariantCulture);
-        float y = float.Parse(parts[1], CultureInfo.InvariantCulture);
+        string[] entries = data.ToString().Split(';', StringSplitOptions.RemoveEmptyEntries);
 
-        byte id = (byte)balltype;
+        for (int entryIndex = 0; entryIndex < entries.Length; entryIndex++)
+        {
+            string entry = entries[entryIndex].Trim();
+            if (string.IsNullOrWhiteSpace(entry))
+                continue;
 
-        float conf = float.Parse(parts[3], CultureInfo.InvariantCulture);
-        float vx = float.Parse(parts[4], CultureInfo.InvariantCulture);
-        float vy = float.Parse(parts[5], CultureInfo.InvariantCulture);
+            string[] parts = entry.Split(',', StringSplitOptions.None);
+            if (parts.Length < 6)
+            {
+                if (VerboseLogs)
+                    Debug.LogWarning($"[USB] Skipping malformed ball entry (expected 6 fields): '{entry}'");
+                continue;
+            }
 
-        svc.PlaceBalls(x, y, id, conf, vx, vy);
+            if (!TryParseFlexibleFloat(parts[0], out float x) ||
+                !TryParseFlexibleFloat(parts[1], out float y))
+            {
+                if (VerboseLogs)
+                    Debug.LogWarning($"[USB] Skipping ball entry due to invalid position: '{entry}'");
+                continue;
+            }
+
+            // NOTE:
+            // parts[2] is the Python-side record id / placeholder.
+            // For now Unity uses the token-derived BallType as the authoritative type,
+            // so this field is intentionally ignored here.
+            byte id = (byte)balltype;
+
+            // Confidence should ideally be numeric. If it is malformed, skip the record.
+            if (!TryParseFlexibleFloat(parts[3], out float conf))
+            {
+                if (VerboseLogs)
+                    Debug.LogWarning($"[USB] Skipping ball entry due to invalid confidence: '{entry}'");
+                continue;
+            }
+
+            // Velocity fields are optional / best-effort right now.
+            // Placeholder values like "\", "/", "u", "", "''" are treated as 0.
+            TryParseFlexibleFloat(parts[4], out float vx, defaultValue: 0f);
+            TryParseFlexibleFloat(parts[5], out float vy, defaultValue: 0f);
+
+            svc.PlaceBalls(x, y, id, conf, vx, vy);
+        }
     }
+
+    private static bool TryParseFlexibleFloat(string raw, out float value, float defaultValue = 0f)
+    {
+        value = defaultValue;
+
+        if (string.IsNullOrWhiteSpace(raw))
+            return true;
+
+        string cleaned = raw.Trim();
+
+        // UPDATED: tolerate current placeholder tokens coming from debug / partial Python payloads.
+        if (cleaned == "\\" ||
+            cleaned == "/" ||
+            cleaned == "u" ||
+            cleaned == "\"\"" ||
+            cleaned == "''" ||
+            cleaned.Equals("null", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Equals("nan", StringComparison.OrdinalIgnoreCase))
+        {
+            value = defaultValue;
+            return true;
+        }
+
+        return float.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
 
     private static float MmToM(float valueMm) // UPDATED: keep JSON in mm, convert only at Unity runtime boundary
     {
@@ -502,10 +570,45 @@ public class UsbSocketReceiver : MonoBehaviour
             "e 1.2500000,0.6350000,8,0.97,0.00,0.00\n" +
             "c 1.2700000,0.4000000,/,0.92,0.15,-0.10\n" +
             "st 0.3000000,0.5000000,9,0.88,0.20,-0.05; 0.4500000,0.5200000,10,0.91,\"\",''; 0.6000000,0.5400000,11,\\,-0.10,0.00; 0.7500000,0.5600000,12,0.66,0.00,0.00; 0.9000000,0.5800000,13,0.80,0.05,0.02; 1.0500000,0.6000000,14,0.74,-0.02,0.03; 1.2000000,0.6200000,15,0.60,\\,0.00\n" +
-            "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n" +
-            "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n";
+            "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n";
 
         ParseBlock(block, pocketsXZ);
+    }
+
+    [ContextMenu("USB/Test Inject Sample Block (ISSUE-83 stripe near lower-middle pocket)")]
+    private void TestInjectIssue83StripeNearLowerMiddlePocket()
+    {
+        (float x, float z)[] pocketsXZ = null;
+
+        EnsureSvc();
+        if (svc == null)
+        {
+            Debug.LogError("[USB] TableService.Instance is still null — make sure a TableService is present in the scene.");
+            return;
+        }
+
+        string block = BuildIssue83StripeNearLowerMiddlePocketBlock();
+
+        Debug.Log(
+            "[USB] Injecting ISSUE-83 sample block. " +
+            "Expected result: the stripe near the lower-middle pocket should be suppressed " +
+            "or marked ambiguous by the near-pocket logic.");
+
+        ParseBlock(block, pocketsXZ);
+    }
+
+    // UPDATED: dedicated raw-wire regression payload for ISSUE-83.
+    // This intentionally uses the exact grouped wire format that the receiver parses in production.
+    private static string BuildIssue83StripeNearLowerMiddlePocketBlock()
+    {
+        return
+            "E predator_9ft_virtual_debug.json\n" +
+            "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
+            "e 0.6196690,0.5729381,8,0.91796875,\\,\\\n" +
+            "c 0.1438348,0.5885691,/,0.935546875,\\,\\\n" +
+            "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n" +
+            "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n";
+            
     }
 #endif
 }

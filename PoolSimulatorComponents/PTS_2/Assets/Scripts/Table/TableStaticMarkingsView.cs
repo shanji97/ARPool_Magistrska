@@ -49,6 +49,7 @@ public class TableStaticMarkingsView : MonoBehaviour
     [Header("Dependencies")]
     public TableService TableServiceOverride;
 
+    // move booleans into a single byte (make smaller memory size)
     [Header("Visibility")]
     public bool RequireAllPockets = true;
 
@@ -83,6 +84,67 @@ public class TableStaticMarkingsView : MonoBehaviour
 
     [Tooltip("Extra outward expansion of the rack triangle.")]
     public float RackGuidePaddingM = 0.015f;
+
+    [Tooltip("If true, the rack body extends from the apex toward the table center. This is the standard 8-ball layout.")]
+    public bool RackExtendsTowardTableCenter = true; // ADDED
+
+    [Tooltip("Signed long-axis shift applied after deterministic rack placement. Positive moves toward table Right, negative toward table Left.")]
+    public float RackSignedLongAxisShiftM = 0f; // ADDED
+    [ContextMenu("Reset Static Markings To Deterministic Preset")]
+    public void ResetStaticMarkingsToDeterministicPreset()
+    {
+        ReEnableStaticMarkingsEditing(true);
+
+        ResolveDependencies();
+
+        if (_tableService == null)
+        {
+            Debug.LogWarning("[TableStaticMarkingsView] Reset requested, but TableService is not available.");
+            return;
+        }
+
+        if (!ShouldShowMarkings())
+        {
+            Debug.LogWarning("[TableStaticMarkingsView] Reset requested, but markings are not currently available.");
+            return;
+        }
+
+        if (!TryBuildGeometryBasis(out GeometryBasis basis))
+        {
+            Debug.LogWarning("[TableStaticMarkingsView] Reset requested, but geometry basis could not be built.");
+            return;
+        }
+
+        EnsureAdjustmentMarkers();
+
+        // MODIFIED: snap immediately instead of waiting for the next LateUpdate.
+        if (_quarterLineHandleMarker != null)
+        {
+            SetAdjustmentMarkerWorldPose(
+                _quarterLineHandleMarker,
+                basis.DeterministicQuarterLineCenter,
+                basis.MarkingY + AdjustmentMarkerLift);
+            _quarterHandleInitialized = true;
+        }
+
+        if (_rackHandleMarker != null)
+        {
+            SetAdjustmentMarkerWorldPose(
+                _rackHandleMarker,
+                basis.DeterministicRackApex,
+                basis.MarkingY + AdjustmentMarkerLift);
+            _rackHandleInitialized = true;
+        }
+
+        Vector3 quarterLineCenter = GetQuarterLineCenterFromHandle(basis);
+        Vector3 rackApex = GetRackApexFromHandle(basis);
+
+        _currentGeometry = BuildFinalGeometryFromAdjustedCenters(basis, quarterLineCenter, rackApex);
+        ApplyRuntimeVisuals(_currentGeometry);
+        UpdateAdjustmentMarkerVisibility();
+
+        Debug.Log("[TableStaticMarkingsView] Reset to deterministic preset applied immediately.");
+    }
 
     public bool ShowRackAdjustmentMarker = true;
 
@@ -296,7 +358,7 @@ public class TableStaticMarkingsView : MonoBehaviour
         if (pockets == null || pockets.Length != 6)
             return false;
 
-        // MODIFIED: use the actual TableService pocket order directly.
+        // Pocket order in this project:
         // 0 TL, 1 TR, 2 ML (bottom middle), 3 MR (top middle), 4 BL, 5 BR
         Vector3 tl = Flatten(pockets[0]);
         Vector3 tr = Flatten(pockets[1]);
@@ -316,10 +378,10 @@ public class TableStaticMarkingsView : MonoBehaviour
         Vector3 topLongRailCenter = SetY(0.5f * (tl + tr), markingY);
         Vector3 center = SetY(0.5f * (leftShortRailCenter + rightShortRailCenter), markingY);
 
-        // MODIFIED: on this table layout the long axis runs LEFT <-> RIGHT.
+        // Long axis: Left -> Right
         Vector3 longAxisLeftToRight = Flatten(rightShortRailCenter - leftShortRailCenter).normalized;
 
-        // MODIFIED: short axis runs BOTTOM <-> TOP.
+        // Short axis: Bottom -> Top
         Vector3 shortAxisBottomToTop = Flatten(topLongRailCenter - bottomLongRailCenter).normalized;
 
         if (longAxisLeftToRight == Vector3.zero || shortAxisBottomToTop == Vector3.zero)
@@ -348,11 +410,21 @@ public class TableStaticMarkingsView : MonoBehaviour
             RackApexReferenceEnd,
             (tableLengthM * 0.25f) + RackApexLongitudinalOffsetM);
 
+        // ADDED: intuitive world-consistent long-axis shift.
+        deterministicRackApex += longAxisLeftToRight * RackSignedLongAxisShiftM;
+
+        // Existing lateral adjustment.
         deterministicRackApex += shortAxisBottomToTop * RackApexLateralOffsetM;
 
-        Vector3 rackDepthDirection = RackApexReferenceEnd == TableReferenceEnd.Right
-            ? -longAxisLeftToRight
-            : longAxisLeftToRight;
+        // ADDED: decouple rack facing from rack reference end.
+        Vector3 directionTowardTableCenterFromReferenceEnd =
+            RackApexReferenceEnd == TableReferenceEnd.Left
+                ? longAxisLeftToRight
+                : -longAxisLeftToRight;
+
+        Vector3 rackDepthDirection = RackExtendsTowardTableCenter
+            ? directionTowardTableCenterFromReferenceEnd
+            : -directionTowardTableCenterFromReferenceEnd;
 
         basis = new GeometryBasis
         {
@@ -781,6 +853,7 @@ public class TableStaticMarkingsView : MonoBehaviour
 
         return point + (direction / magnitude) * paddingM;
     }
+
 
     private void OnDrawGizmos()
     {

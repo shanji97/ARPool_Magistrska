@@ -31,7 +31,7 @@
     "side_jaw_diameters_mm": 40
   },
   "ball_spec": {
-    "ball_circumference_m":0.068,
+    "ball_circumference_m":0.1795,
     "diameter_m": 0.05715
   },
   "camera": {

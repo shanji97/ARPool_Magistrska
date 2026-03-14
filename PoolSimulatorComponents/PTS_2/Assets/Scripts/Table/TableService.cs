@@ -20,8 +20,6 @@ public class TableService : MonoBehaviour
     public bool HideDiamondPreviewAfterFinalize = true; // ADDED: preview is mainly for setup stage
     public bool ShowDiamondIndices = true; // ADDED: editor labels for quick validation
 
-   
-
     [Tooltip("Optional prefab for runtime diamond preview markers. Falls back to primitive spheres if null.")]
     public GameObject DiamondMarkerPrefab; // ADDED
 
@@ -33,8 +31,6 @@ public class TableService : MonoBehaviour
 
     [Tooltip("Radius of editor gizmo spheres.")]
     public float DiamondGizmoRadius = 0.015f; // ADDED
-
-
 
     [Tooltip("Scale of fallback runtime spheres when DiamondMarkerPrefab is null.")]
     public float DiamondRuntimeScale = 0.02f; // ADDED
@@ -71,8 +67,58 @@ public class TableService : MonoBehaviour
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
     private Vector3[] _lastMarkerPosition;
-    public bool IsLockedToJitter { get; private set; } = false;
-    public bool LockFinalized { get; private set; } = false;
+
+
+    [Header("Near-Pocket Suppression")]
+    public bool EnableNearPocketSuppression = true; // ADDED: master switch for issue #83
+    public bool TreatNearPocketZoneAsPocketed = true; // ADDED: inner zone means "pocketed/suppressed"
+    public bool ShowNearPocketRuntimeMarkers = true; // ADDED: Quest-visible debug markers
+    public bool VerboseNearPocketLogs = true; // ADDED: deterministic logging for thesis/debug
+
+    [Tooltip("Ball center distance to nearest pocket center below which the ball is treated as pocketed/suppressed.")]
+    public float PocketCaptureThresholdM = 0.09f; // ADDED
+
+    [Tooltip("Ball center distance to nearest pocket center below which the ball is treated as near-pocket / ambiguous.")]
+    public float PocketAmbiguousThresholdM = 0.13f; // ADDED
+
+    [Tooltip("Extra distance required before a previously suppressed ball becomes visible again. Prevents flicker/toggling.")]
+    public float PocketSuppressionReleaseMarginM = 0.02f; // ADDED
+
+    [Tooltip("2D distance used to match current detections against existing near-pocket memory entries.")]
+    public float PocketSuppressionMatchRadiusM = 0.08f; // ADDED
+
+    [Tooltip("How long transient near-pocket suppression memory is retained for non-special balls.")]
+    public float PocketSuppressionMemorySeconds = 0.75f; // ADDED
+
+    [Tooltip("Extra height above the table plane for near-pocket debug markers.")]
+    public float NearPocketDebugLift = 0.03f; // ADDED
+
+    [Tooltip("Scale of fallback near-pocket runtime spheres when NearPocketDebugMarkerPrefab is null.")]
+    public float NearPocketDebugMarkerScale = 0.028f; // ADDED
+
+    [Tooltip("Optional prefab for near-pocket runtime debug markers. Falls back to primitive spheres if null.")]
+    public GameObject NearPocketDebugMarkerPrefab; // ADDED
+
+    [Tooltip("Optional parent for near-pocket runtime debug markers. Falls back to MarkersParent, then this transform.")]
+    public Transform NearPocketDebugMarkersParent; // ADDED
+
+    public Color NearPocketAmbiguousColor = new(1f, 0.65f, 0f, 1f); // ADDED: orange
+    public Color NearPocketPocketedColor = Color.red; // ADDED
+    public Color NearPocketSpecialColor = Color.magenta; // ADDED
+
+    private readonly List<NearPocketBallMemory> _nearPocketBallMemory = new(); // ADDED
+    private readonly List<GameObject> _runtimeNearPocketMarkers = new(); // ADDED
+
+    // multiple booleans -> to byte 
+    public bool CueBallPocketed { get; private set; } = false; // ADDED
+    public bool EightBallPocketed { get; private set; } = false; // ADDED
+    public byte CueBallPocketIndex { get; private set; } = byte.MaxValue; // ADDED
+    public byte EightBallPocketIndex { get; private set; } = byte.MaxValue; // ADDED
+
+
+    // Two bools for the price of one
+    public bool IsLockedToJitter { get; private set; } = false; // ->mo to bitwise operations with lockfinalize (
+    public bool LockFinalized { get; private set; } = false; // -> move to bitwise operations with is locked to jitter
 
     public float CameraHeightFromFloor { get; private set; } = -1f;
     public bool IsCameraFromFloorSet() => CameraHeightFromFloor > 0;
@@ -168,7 +214,7 @@ public class TableService : MonoBehaviour
     public void LateUpdate()
     {
         // MODIFIED: keep the existing pocket rectangle maintenance,
-        // but do not early-return because diamond preview must still refresh.
+        // but do not early-return because diamond preview and near-pocket debug state must still refresh.
         if (!LockFinalized && MaintainRectangleWhenLocked && _markers is not null)
         {
             HandlePocketMarkers();
@@ -176,15 +222,17 @@ public class TableService : MonoBehaviour
 
         // ADDED: ISSUE-82 live diamond preview update.
         RefreshComputedDiamondPreview();
+
+        // ADDED: ISSUE-83 cleanup + debug marker refresh.
+        CleanupExpiredNearPocketBallMemory();
+        RefreshNearPocketDebugMarkers();
     }
 
     public void OnDestroy()
     {
         if (_tableStateEntries.Any())
             AppSettings.Instance.AddTableStateEntries(_tableStateEntries);
-
-        // ADDED: cleanup runtime debug markers.
-        DestroyRuntimeDiamondMarkers();
+        Cleanup();
     }
 
     public void OnApplicationQuit()
@@ -192,8 +240,7 @@ public class TableService : MonoBehaviour
         if (_tableStateEntries.Any())
             AppSettings.Instance.AddTableStateEntries(_tableStateEntries);
 
-        // ADDED: cleanup runtime debug markers.
-        DestroyRuntimeDiamondMarkers();
+        Cleanup();
     }
 
     private void OnDrawGizmos()
@@ -230,6 +277,12 @@ public class TableService : MonoBehaviour
         Gizmos.color = previousColor;
     }
 
+    private void Cleanup()
+    {
+        DestroyRuntimeDiamondMarkers();
+        DestroyNearPocketDebugMarkers();
+
+    }
 
     public void IncrementSuccessfullyParsedPocketCount()
     {
@@ -986,67 +1039,119 @@ public class TableService : MonoBehaviour
 
     public void PlaceBalls(float x, float y, byte id, float conf, float vx, float vy)
     {
-        // Based on the game mode add a variable lenght of array. Set the 
+        // ADDED: ISSUE-83 runs before any smoothing or later ball assignment logic.
+        // This is intentionally a pre-placement suppression filter.
+        CleanupExpiredNearPocketBallMemory();
+
+        if (TryHandleNearPocketBall(x, y, id, conf, out PocketZoneBallState nearPocketState))
+        {
+            // ADDED: standard visualization / standard placement is intentionally suppressed here.
+            // Near-pocket balls are represented only by debug markers at this stage.
+            return;
+        }
+
+        // --------------------------------------------------------------------
+        // EXISTING / FUTURE NORMAL BALL PLACEMENT PATH CONTINUES BELOW
+        // --------------------------------------------------------------------
+        // Keep your numbered-ball assignment, user override UI, smoothing, and
+        // secondary Quest synchronization logic here. The important rule is:
+        //
+        //   issue #83 filter FIRST
+        //   smoothing SECOND
+        //   normal visualization / exercise logic AFTER THAT
+        //
+        // The current method body was intentionally incomplete already, so this
+        // implementation only adds the required deterministic suppression layer.
+        // --------------------------------------------------------------------
+
+        // Based on the game mode add a variable lenght of array. Set the
         //if (AppSettings.Instance.GameMode == GameMode.LessonsMode)
 
         //else { }
 
+        // If a ball was found and isn't in the buffer then add it later in the
+        // normal placement path, once ball identity assignment is finished.
 
-
-        /* 
-         * How to know which ball to place. For the "cue" and "eight" I know because of the the id.....hovewer what about the others (assumming I have only generic stripe and solid for now)?
-
-        // Determine the ball type and location.
-        // Go through each buffer range (for stripes and solids, for cue/eight we know the exaclty array positions) and compare the balls with the XZ locations already in there.
-        // If the buffer has no balls
-        //  Save immediately. Based on the type spawn a "pokeable" circle on it that opens a menu to assign a ball number (that hasn't been already assigned) based on the type. Cue and eight should be done automatically
-        //  but suggest/add a way to recover from the error (change ball number). BONUS: Add a photo taking feature for future training, based on the pool ball set.
-        //  
-        // If there are balls already within a certain treshold. Ask the user if the ball matches an already detected ball.
-        //  YES -> Overwrite it and log this event somehow for later visualization.
-                   Lock the index for the assigned ball so that 
-        //         If the ball position was user overriden, then do not move it.
-        //  NOT within treshold of another ball -> if there is place add it as a new ball of this type and number. If not ERROR?
-
-
-        // Track the new saved balls and the updated balls. Should be 16 or less. 
-            While the total amount of balls equal to python script ball data (send new data) keep the array of ball the same size. Else shrink it or mark
-        Adjust the scenario  accordingly in the Word file
-        */
-
-
-
-        // If a ball was found and isn't in the buffer the add it.
-
-        //No generic
-
-        // At the end transfer the data to the secondary Quest.
         if (AppSettings.Instance.Settings.DeviceInformation == DeviceInformation.PrimaryQuest)
         {
-            // Send to other Quest 3 devices.
+            // Send to other Quest 3 devices in the normal placement path later.
         }
-
-
 
         if ((id <= (byte)BallType.Cue))
         {
-            // Work directly on the ball array.
-            // Handle Jitter - distinguish between this and the actuall movement. Probably both the unity script and the python script should do this? Also multiple
+            // Normal placement / jitter distinction will stay here later.
         }
         else
         {
-            // Wtf should I do here?
-            /*
-             Idea:
-             Accumulate 14 (we don't need it for cue and eightball) XY locations of balls. 
-             Account for jitter and situation when two or more balls are next to one another.
-             Determine whether they are solid or striped.
-             For each ball, create a selection menu and make the user select the type (number).
-             */
+            // Generic solid/stripe handling stays here later.
         }
 
         // Create a buffer for a fluid system of tracking each ball for multiple points.
     }
+
+    //public void PlaceBalls(float x, float y, byte id, float conf, float vx, float vy)
+    //{
+    // Based on the game mode add a variable lenght of array. Set the 
+    //if (AppSettings.Instance.GameMode == GameMode.LessonsMode)
+
+    //else { }
+
+
+
+    /* 
+     * How to know which ball to place. For the "cue" and "eight" I know because of the the id.....hovewer what about the others (assumming I have only generic stripe and solid for now)?
+
+    // Determine the ball type and location.
+    // Go through each buffer range (for stripes and solids, for cue/eight we know the exaclty array positions) and compare the balls with the XZ locations already in there.
+    // If the buffer has no balls
+    //  Save immediately. Based on the type spawn a "pokeable" circle on it that opens a menu to assign a ball number (that hasn't been already assigned) based on the type. Cue and eight should be done automatically
+    //  but suggest/add a way to recover from the error (change ball number). BONUS: Add a photo taking feature for future training, based on the pool ball set.
+    //  
+    // If there are balls already within a certain treshold. Ask the user if the ball matches an already detected ball.
+    //  YES -> Overwrite it and log this event somehow for later visualization.
+               Lock the index for the assigned ball so that 
+    //         If the ball position was user overriden, then do not move it.
+    //  NOT within treshold of another ball -> if there is place add it as a new ball of this type and number. If not ERROR?
+
+
+    // Track the new saved balls and the updated balls. Should be 16 or less. 
+        While the total amount of balls equal to python script ball data (send new data) keep the array of ball the same size. Else shrink it or mark
+    Adjust the scenario  accordingly in the Word file
+    */
+
+
+
+    // If a ball was found and isn't in the buffer the add it.
+
+    //No generic
+
+    // At the end transfer the data to the secondary Quest.
+    //if (AppSettings.Instance.Settings.DeviceInformation == DeviceInformation.PrimaryQuest)
+    //{
+    // Send to other Quest 3 devices.
+    //}
+
+
+
+    //if ((id <= (byte)BallType.Cue))
+    //{
+    // Work directly on the ball array.
+    // Handle Jitter - distinguish between this and the actuall movement. Probably both the unity script and the python script should do this? Also multiple
+    //}
+    //else
+    //{
+    // Wtf should I do here?
+    /*
+     Idea:
+     Accumulate 14 (we don't need it for cue and eightball) XY locations of balls. 
+     Account for jitter and situation when two or more balls are next to one another.
+     Determine whether they are solid or striped.
+     For each ball, create a selection menu and make the user select the type (number).
+     */
+    //}
+
+    // Create a buffer for a fluid system of tracking each ball for multiple points.
+    //}
 
     public void ReapplyPockets(float tableY)
     {
@@ -1308,4 +1413,451 @@ public class TableService : MonoBehaviour
         return (short)mm;
     }
 
+    public void ResetNearPocketSuppressionState()
+    {
+        _nearPocketBallMemory.Clear();
+
+        CueBallPocketed = false;
+        EightBallPocketed = false;
+        CueBallPocketIndex = byte.MaxValue;
+        EightBallPocketIndex = byte.MaxValue;
+
+        RefreshNearPocketDebugMarkers();
+    }
+
+
+    private bool TryHandleNearPocketBall(float x, float y, byte id, float conf, out PocketZoneBallState resolvedState)
+    {
+        resolvedState = PocketZoneBallState.Visible;
+
+        if (!EnableNearPocketSuppression)
+            return false;
+
+        if (!HasAllPockets())
+            return false;
+
+        if (!TryMapIncomingBallToBallType(id, out BallType ballType))
+            return false;
+
+        Vector2Float positionXZ = new(x, y);
+
+        byte nearestPocketIndex = byte.MaxValue;
+        float nearestPocketSqrDistance = float.MaxValue;
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            Vector3 pocket = PocketPositions[i];
+
+            float dx = x - pocket.x;
+            float dz = y - pocket.z;
+            float sqrDistance = (dx * dx) + (dz * dz);
+
+            if (sqrDistance < nearestPocketSqrDistance)
+            {
+                nearestPocketSqrDistance = sqrDistance;
+                nearestPocketIndex = i;
+            }
+        }
+
+        if (nearestPocketIndex == byte.MaxValue)
+            return false;
+
+        bool isSpecialBall = IsSpecialBallType(ballType);
+        NearPocketBallMemory existing = FindMatchingNearPocketMemory(ballType, nearestPocketIndex, positionXZ);
+
+        PocketZoneBallState targetState = ResolvePocketZoneState(
+            nearestPocketSqrDistance,
+            existing,
+            isSpecialBall);
+
+        if (targetState == PocketZoneBallState.Visible)
+        {
+            // MODIFIED: remove transient memory once the ball has clearly left the suppression zone.
+            if (existing != null && !existing.IsSpecialBall)
+                _nearPocketBallMemory.Remove(existing);
+
+            return false;
+        }
+
+        float distanceToPocketM = Mathf.Sqrt(nearestPocketSqrDistance);
+
+        UpsertNearPocketBallMemory(
+            existing,
+            ballType,
+            id,
+            positionXZ,
+            nearestPocketIndex,
+            distanceToPocketM,
+            conf,
+            targetState,
+            isSpecialBall);
+
+        if (targetState == PocketZoneBallState.PocketedSpecialRetained)
+            SetSpecialPocketedState(ballType, nearestPocketIndex);
+
+        resolvedState = targetState;
+        return true;
+    }
+
+    // ADDED: ISSUE-83 deterministic classification with hysteresis.
+    private PocketZoneBallState ResolvePocketZoneState(
+        float sqrDistanceToPocketM,
+        NearPocketBallMemory existing,
+        bool isSpecialBall)
+    {
+        float captureThresholdSqr = PocketCaptureThresholdM * PocketCaptureThresholdM;
+
+        float ambiguousThresholdM = Mathf.Max(PocketAmbiguousThresholdM, PocketCaptureThresholdM);
+        float ambiguousThresholdSqr = ambiguousThresholdM * ambiguousThresholdM;
+
+        float ambiguousReleaseThresholdM = ambiguousThresholdM + PocketSuppressionReleaseMarginM;
+        float ambiguousReleaseThresholdSqr = ambiguousReleaseThresholdM * ambiguousReleaseThresholdM;
+
+        if (existing != null)
+        {
+            switch (existing.State)
+            {
+                case PocketZoneBallState.PocketedSuppressed:
+                case PocketZoneBallState.PocketedSpecialRetained:
+                    if (sqrDistanceToPocketM <= ambiguousReleaseThresholdSqr)
+                    {
+                        return isSpecialBall
+                            ? PocketZoneBallState.PocketedSpecialRetained
+                            : PocketZoneBallState.PocketedSuppressed;
+                    }
+                    break;
+
+                case PocketZoneBallState.NearPocketAmbiguous:
+                    if (sqrDistanceToPocketM <= ambiguousReleaseThresholdSqr)
+                        return PocketZoneBallState.NearPocketAmbiguous;
+                    break;
+            }
+        }
+
+        if (TreatNearPocketZoneAsPocketed && sqrDistanceToPocketM <= captureThresholdSqr)
+        {
+            return isSpecialBall
+                ? PocketZoneBallState.PocketedSpecialRetained
+                : PocketZoneBallState.PocketedSuppressed;
+        }
+
+        if (sqrDistanceToPocketM <= ambiguousThresholdSqr)
+            return PocketZoneBallState.NearPocketAmbiguous;
+
+        return PocketZoneBallState.Visible;
+    }
+
+    // ADDED: ISSUE-83.
+    private bool TryMapIncomingBallToBallType(byte id, out BallType ballType)
+    {
+        // Current wire format supports generic types directly.
+        if (id <= (byte)BallType.Cue)
+        {
+            ballType = (BallType)id;
+            return true;
+        }
+
+        // Future-proof fallback for numbered IDs.
+        if (id >= 1 && id <= 7)
+        {
+            ballType = BallType.Solid;
+            return true;
+        }
+
+        if (id == 8)
+        {
+            ballType = BallType.Eight;
+            return true;
+        }
+
+        if (id >= 9 && id <= 15)
+        {
+            ballType = BallType.Stripe;
+            return true;
+        }
+
+        ballType = default;
+        return false;
+    }
+
+    // ADDED: ISSUE-83.
+    private static bool IsSpecialBallType(BallType ballType)
+    {
+        return ballType == BallType.Cue || ballType == BallType.Eight;
+    }
+
+    // ADDED: ISSUE-83.
+    private NearPocketBallMemory FindMatchingNearPocketMemory(BallType ballType, byte pocketIndex, Vector2Float positionXZ)
+    {
+        NearPocketBallMemory best = null;
+        float bestSqrDistance = float.MaxValue;
+        float maxSqrDistance = PocketSuppressionMatchRadiusM * PocketSuppressionMatchRadiusM;
+
+        for (int i = 0; i < _nearPocketBallMemory.Count; i++)
+        {
+            NearPocketBallMemory candidate = _nearPocketBallMemory[i];
+
+            if (candidate == null)
+                continue;
+
+            if (candidate.BallType != ballType)
+                continue;
+
+            if (candidate.PocketIndex != pocketIndex)
+                continue;
+
+            if (candidate.PositionXZ == null)
+                continue;
+
+            float dx = candidate.PositionXZ.X - positionXZ.X;
+            float dz = candidate.PositionXZ.Y - positionXZ.Y;
+            float sqrDistance = (dx * dx) + (dz * dz);
+
+            if (sqrDistance <= maxSqrDistance && sqrDistance < bestSqrDistance)
+            {
+                best = candidate;
+                bestSqrDistance = sqrDistance;
+            }
+        }
+
+        return best;
+    }
+
+    private void UpsertNearPocketBallMemory(
+        NearPocketBallMemory existing,
+        BallType ballType,
+        byte rawIncomingId,
+        Vector2Float positionXZ,
+        byte pocketIndex,
+        float distanceToPocketM,
+        float confidence,
+        PocketZoneBallState state,
+        bool isSpecialBall)
+    {
+        bool created = existing == null;
+
+        if (created)
+        {
+            existing = new NearPocketBallMemory();
+            _nearPocketBallMemory.Add(existing);
+        }
+
+        PocketZoneBallState previousState = existing.State;
+        byte previousPocketIndex = existing.PocketIndex;
+
+        existing.UpdateState(
+            ballType,
+            rawIncomingId,
+            positionXZ,
+            pocketIndex,
+            distanceToPocketM,
+            confidence,
+            state,
+            Time.time,
+            isSpecialBall);
+
+        if (VerboseNearPocketLogs && (created || previousState != state || previousPocketIndex != pocketIndex))
+        {
+            Debug.Log(
+                $"[TableService][ISSUE-83] Ball suppressed. " +
+                $"BallType={ballType}, RawId={rawIncomingId}, PocketIndex={pocketIndex}, " +
+                $"State={state}, DistanceToPocketM={distanceToPocketM:F4}, Confidence={confidence:F3}");
+        }
+    }
+
+    private void SetSpecialPocketedState(BallType ballType, byte pocketIndex)
+    {
+        switch (ballType)
+        {
+            case BallType.Cue:
+                CueBallPocketed = true;
+                CueBallPocketIndex = pocketIndex;
+                break;
+
+            case BallType.Eight:
+                EightBallPocketed = true;
+                EightBallPocketIndex = pocketIndex;
+                break;
+        }
+    }
+
+    private void CleanupExpiredNearPocketBallMemory()
+    {
+        if (_nearPocketBallMemory.Count == 0)
+            return;
+
+        float now = Time.time;
+
+        for (int i = _nearPocketBallMemory.Count - 1; i >= 0; i--)
+        {
+            NearPocketBallMemory entry = _nearPocketBallMemory[i];
+
+            if (entry == null)
+            {
+                _nearPocketBallMemory.RemoveAt(i);
+                continue;
+            }
+
+            if (entry.IsSpecialBall)
+                continue; // retained until ResetNearPocketSuppressionState()
+
+            if ((now - entry.LastSeenTime) > PocketSuppressionMemorySeconds)
+                _nearPocketBallMemory.RemoveAt(i);
+        }
+    }
+
+    private float GetNearPocketDebugMarkerY()
+    {
+        return IsTableHeightSet()
+            ? GetPocketMarkerY(TableY) + NearPocketDebugLift
+            : transform.position.y + NearPocketDebugLift;
+    }
+
+    private void RefreshNearPocketDebugMarkers()
+    {
+        if (!ShowNearPocketRuntimeMarkers)
+        {
+            SetNearPocketDebugMarkersActive(false);
+            return;
+        }
+
+        EnsureNearPocketDebugMarkers(_nearPocketBallMemory.Count);
+
+        float y = GetNearPocketDebugMarkerY();
+
+        for (int i = 0; i < _nearPocketBallMemory.Count; i++)
+        {
+            NearPocketBallMemory entry = _nearPocketBallMemory[i];
+            GameObject marker = _runtimeNearPocketMarkers[i];
+
+            if (entry == null || marker == null || entry.PositionXZ == null)
+                continue;
+
+            marker.transform.SetPositionAndRotation(
+                new Vector3(entry.PositionXZ.X, y, entry.PositionXZ.Y),
+                Quaternion.identity);
+
+            ApplyNearPocketDebugColor(marker, GetNearPocketDebugColor(entry.State));
+            marker.name = $"NearPocket_{entry.BallType}_{entry.PocketIndex}_{entry.State}";
+
+            if (!marker.activeSelf)
+                marker.SetActive(true);
+        }
+
+        for (int i = _nearPocketBallMemory.Count; i < _runtimeNearPocketMarkers.Count; i++)
+            _runtimeNearPocketMarkers[i]?.SetActive(false);
+    }
+
+    private Color GetNearPocketDebugColor(PocketZoneBallState state)
+    {
+        return state switch
+        {
+            PocketZoneBallState.NearPocketAmbiguous => NearPocketAmbiguousColor,
+            PocketZoneBallState.PocketedSuppressed => NearPocketPocketedColor,
+            PocketZoneBallState.PocketedSpecialRetained => NearPocketSpecialColor,
+            _ => Color.white
+        };
+    }
+
+    private void EnsureNearPocketDebugMarkers(int requiredCount)
+    {
+        while (_runtimeNearPocketMarkers.Count < requiredCount)
+        {
+            _runtimeNearPocketMarkers.Add(CreateNearPocketDebugMarker(_runtimeNearPocketMarkers.Count));
+        }
+
+        for (int i = 0; i < _runtimeNearPocketMarkers.Count; i++)
+        {
+            if (_runtimeNearPocketMarkers[i] != null)
+                _runtimeNearPocketMarkers[i].SetActive(i < requiredCount);
+        }
+    }
+
+    private GameObject CreateNearPocketDebugMarker(int index)
+    {
+        Transform parent = NearPocketDebugMarkersParent != null
+            ? NearPocketDebugMarkersParent
+            : (MarkersParent != null ? MarkersParent : transform);
+
+        GameObject go;
+
+        if (NearPocketDebugMarkerPrefab != null)
+        {
+            go = Instantiate(NearPocketDebugMarkerPrefab, Vector3.zero, Quaternion.identity, parent);
+        }
+        else
+        {
+            go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+
+            if (parent != null)
+                go.transform.SetParent(parent, worldPositionStays: true);
+
+            go.transform.localScale = Vector3.one * NearPocketDebugMarkerScale;
+        }
+
+        go.name = $"NearPocketDebug_{index}";
+
+        Collider[] colliders = go.GetComponentsInChildren<Collider>(includeInactive: true);
+        foreach (var collider in colliders)
+        {
+            collider.enabled = false;
+        }
+
+        Rigidbody[] rigidbodies = go.GetComponentsInChildren<Rigidbody>(includeInactive: true);
+        foreach (var rb in rigidbodies)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = true;
+            rb.detectCollisions = false;
+            rb.constraints = RigidbodyConstraints.FreezeAll;
+        }
+
+        ApplyNearPocketDebugColor(go, NearPocketAmbiguousColor);
+        go.SetActive(false);
+
+        return go;
+    }
+
+    private void ApplyNearPocketDebugColor(GameObject target, Color color)
+    {
+        if (target == null)
+            return;
+
+        Renderer[] renderers = target.GetComponentsInChildren<Renderer>(includeInactive: true);
+        foreach (var renderer in renderers)
+        {
+            if (renderer == null)
+                continue;
+
+            Material material = renderer.material;
+            material.color = color;
+        }
+    }
+
+    private void SetNearPocketDebugMarkersActive(bool active)
+    {
+        for (int i = 0; i < _runtimeNearPocketMarkers.Count; i++)
+        {
+            if (_runtimeNearPocketMarkers[i] != null && _runtimeNearPocketMarkers[i].activeSelf != active)
+                _runtimeNearPocketMarkers[i].SetActive(active);
+        }
+    }
+
+    private void DestroyNearPocketDebugMarkers()
+    {
+        for (int i = _runtimeNearPocketMarkers.Count - 1; i >= 0; i--)
+        {
+            GameObject marker = _runtimeNearPocketMarkers[i];
+            if (marker == null)
+                continue;
+
+            if (Application.isPlaying)
+                Destroy(marker);
+            else
+                DestroyImmediate(marker);
+        }
+
+        _runtimeNearPocketMarkers.Clear();
+    }
 }

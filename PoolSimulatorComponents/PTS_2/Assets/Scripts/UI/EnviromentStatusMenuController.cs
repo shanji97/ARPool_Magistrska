@@ -42,9 +42,10 @@ public class EnvironmentStatusMenuController : MonoBehaviour
     [TextArea]
     [SerializeField] private string qrCompletedMessage = "QR code refinement completed.";
 
+    // Rearange multiple booleans into one 
     [Header("Behavior")]
-    [SerializeField] private bool disableConfirmButtonAfterClick = true;
-    [SerializeField] private bool invokeParsedEventOnlyOnce = true;
+    [SerializeField] private bool _disableConfirmButtonAfterClick = true;
+    [SerializeField] private bool _invokeParsedEventOnlyOnce = true;
 
     [Header("Events")]
     public UnityEvent OnEnvironmentParsed;
@@ -132,7 +133,7 @@ public class EnvironmentStatusMenuController : MonoBehaviour
             {
                 SetStatusText(environmentParseStatusText, environmentParsedMessage, Color.green);
 
-                bool shouldInvokeParsedEvent = !_hasInvokedEnvironmentParsedEvent || !invokeParsedEventOnlyOnce;
+                bool shouldInvokeParsedEvent = !_hasInvokedEnvironmentParsedEvent || !_invokeParsedEventOnlyOnce;
                 if (shouldInvokeParsedEvent)
                 {
                     _hasInvokedEnvironmentParsedEvent = true;
@@ -262,7 +263,7 @@ public class EnvironmentStatusMenuController : MonoBehaviour
         Debug.Log("[EnvironmentStatusMenuController] Pocket placement confirmed.");
         OnConfirmPocketPlacementRequested?.Invoke();
 
-        if (disableConfirmButtonAfterClick)
+        if (_disableConfirmButtonAfterClick)
         {
             SetButtonState(confirmPocketPlacementButton, confirmPocketPlacementButtonText, false, "Pockets confirmed");
         }
@@ -289,7 +290,7 @@ public class EnvironmentStatusMenuController : MonoBehaviour
         Debug.Log("[EnvironmentStatusMenuController] Static markings confirmed.");
         OnConfirmStaticMarkingsPlacementRequested?.Invoke();
 
-        if (disableConfirmButtonAfterClick)
+        if (_disableConfirmButtonAfterClick)
         {
             SetButtonState(confirmStaticMarkingsPlacementButton, confirmStaticMarkingsPlacementButtonText, false, "Markings confirmed");
         }

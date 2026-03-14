@@ -1,4 +1,3 @@
-
 public enum TableRail : byte
 {
     Left = 0,
