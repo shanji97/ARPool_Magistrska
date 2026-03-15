@@ -69,7 +69,10 @@ def _validate_ip(ip: str):
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
     return re.match(pattern, ip) is not None
 
-def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = False ) -> tuple[str, str]: 
+def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = False, is_offline_run: bool = False) -> tuple[str, str]: 
+    if is_offline_run:
+        return None, None
+    
     key: str = "quest_3_primary" if connect_to_quest else "droid_cam"
     cached = _load_connection_data(key)
     if cached and not is_editor_build:

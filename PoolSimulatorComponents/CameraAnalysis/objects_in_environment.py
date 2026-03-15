@@ -64,7 +64,7 @@ class PocketSpec:
 @dataclass
 class BallSpec:
     diameter_m: float = .05715
-    ball_circumference_m: float = 0.068
+    ball_circumference_m: float = 0.1795
     
     
 @dataclass

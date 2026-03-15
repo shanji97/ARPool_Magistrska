@@ -60,3 +60,52 @@ def synth_test():
     while True:
         usb_sender.send(payload)
         time.sleep(0.1)
+        
+        
+def build_issue_83_middle_lower_pocket_block() -> str:
+    """
+    Raw USB payload for ISSUE-83.
+    One stripe is intentionally very close to the lower-middle pocket and should be
+    suppressed or marked ambiguous by Unity near-pocket logic.
+
+    Lower-middle pocket in this payload:
+        (1.2700000, 0.0600000)
+
+    Stripe expected to trigger ISSUE-83 behavior:
+        (1.2302539, -0.0113007)
+    """
+    return (
+        "E predator_9ft_virtual_debug.json\n"
+        "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n"
+        "e 0.6196690,0.5729381,8,0.91796875,\\,\\\n"
+        "c 0.1438348,0.5885691,/,0.935546875,\\,\\\n"
+        "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n"
+        "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n"
+        "t L=2.5400000; W=1.2700000; H=0.7850000; B=0.0571500; C=2.5000000\n"
+    )
+
+
+def issue_83_middle_lower_pocket_test(repeat_delay_s: float = 0.1) -> None:
+    """
+    Repeatedly sends the dedicated ISSUE-83 regression payload over the USB TCP sender.
+
+    Use this after:
+    1. Unity app is running on Quest
+    2. Environment and pockets are already loaded / confirmed
+    3. UsbSocketReceiver is already listening
+    """
+    usb_sender = UsbTcpSender()
+    usb_sender.connect()
+
+    payload = build_issue_83_middle_lower_pocket_block()
+
+    print("[USB TEST] Connected.")
+    print("[USB TEST] Sending ISSUE-83 payload repeatedly.")
+    print("[USB TEST] Expected Unity behavior: one stripe near lower-middle pocket is suppressed or shown only as debug state.")
+
+    try:
+        while True:
+            usb_sender.send(payload)
+            time.sleep(repeat_delay_s)
+    except KeyboardInterrupt:
+        print("[USB TEST] Stopped by user.")

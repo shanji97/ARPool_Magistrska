@@ -226,7 +226,7 @@ class DroidCamController:
         except(socket.timeout, socket.error):
             return False
     
-    def send_camera_command(self, command: str, *args, calibrator: Optional[Calibrator] = None):
+    def send_camera_command(self, command: str, *args, suppres_info: bool = False ,calibrator: Optional[Calibrator] = None):
     
         is_changing_camera = False
         reset_pocket_globals = False
@@ -265,10 +265,10 @@ class DroidCamController:
                 return self.get_stream_url(args[0])
         elif command == "dump_camera_info":
                 info = self.get_camera_info()
-                if info:
+                if info and not suppres_info:
                     print(json.dumps(info, indent=2))
                     return info, is_changing_camera, reset_pocket_globals
-                else:
+                if info is None:
                     print("Failed to get camera info.")
                     return None, info, is_changing_camera, reset_pocket_globals
         else:

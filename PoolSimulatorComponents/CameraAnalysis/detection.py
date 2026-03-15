@@ -11,7 +11,7 @@ from droid_cam_controller import DroidCamController
 from object_detector import ObjectDetector
 from calibration import Calibrator, CALIBRATION_PATTERNS
 from objects_in_environment import EnvironmentConfig
-from detection_mode import DetectionMode
+from ball_transport_aggregator import BallTransportAggregator
 from helpers import (
     setup_connection,
     install_dependecies_for_other_projects,
@@ -20,33 +20,32 @@ from helpers import (
 from connection import UsbTcpSender
 from formatters import (
     LABEL_MAP,
-    type_to_str,
     p2p_classification_to_balltype,
     line_pockets,
     build_conf_transfer_block,
-    line_configuration_name
+    line_configuration_name,
 )
 
-from testing import synth_test
+# from testing import synth_test
 
-# Grayscale tresholds
-WHITE_TRESHOLD = 200 # For cue ball and striped balls.
-EIGHTBALL_TRESHOLD = 50
-STRIPE_WHITE_RATIO = 0.2 # % of white pixels to count as stripe.
+# MODIFIED: ISSUE-86 transport optimization settings.
+BALL_SEND_POSITION_DECIMALS = 4
+BALL_SEND_CONF_DECIMALS = 3
+BALL_SEND_VELOCITY_DECIMALS = 3
+
+BALL_BATCH_SIZE_FRAMES = 3
+BALL_RESET_MAX_POSITION_DELTA_M = 0.08
+BALL_FORCE_SEND_INTERVAL_SEC = 0.25
 
 MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means there is a problem.
 TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
 SEND_EVERY_N_FRAMES = 1
-DETECTION_MODE = DetectionMode.Both
 POCKET_STABLE_MAX_DELTA_PX = 1.5
 POCKET_STABLE_REQUIRED_FRAMES = 8
 
 POCKET_SCAN_INTERVAL_FRAMES = 5
 POCKET_RESEND_INTERVAL_SEC = 10.0
 RESCAN_DEBOUNCE_TIME = 0.75
-POCKETED_DISTANCE_FACTOR_OF_BALL_DIAMETER = .85
-YOLO_CIRCLE_MATCH_DIST_MULTIPLIER = 1.75
-
 
 # Runtime state
 _controller = None
@@ -66,9 +65,14 @@ _frame_index = 0
 _pockets_adjusted = False
 _pockets_px_adjusted_cached = None
 _pockets_xy_m_adjusted_cached = None
+_detector = None
+_last_pocket_send_time = 0.0
+_pockets_have_been_sent = False
+_pockets_px_before_adjust_cached = None
+_table_fail_streak = 0
+_H_cached = None
 
 # Camera and stream
-
 def open_stream(work_resolution:str = "1920x1080",
          performance_mode: bool = False,
          perf_resoulution: str ="1280x720",
@@ -148,25 +152,48 @@ def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
         if debug and _Km is not None:
             print("[K (distorted)]\n", _Km)
             print("[dist] ", _dist.ravel())
-    
-def commit_cache(homography_new, points_new, pockets_ready, force_rescan):
-    global _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan
-    _H_cached = homography_new
-    _pockets_px_cached = points_new
-    _pockets_ready = pockets_ready
-    _force_rescan = force_rescan
 
-def reset_pocket_globals():
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _detector
-    _is_changing_camera = False
+def reset_globals():
+    global _is_changing_camera
+    
+    global _H_cached
     _H_cached = None
+    
+    global _pockets_px_cached
     _pockets_px_cached = None
+    
+    global _pockets_ready
     _pockets_ready = False
-    _force_rescan = False
+    
+    global _force_rescan
+    global _detector
     if _detector is not None:
         _detector.reset_pocket_tracking()
-    return
+    
+    global _pockets_have_been_sent
+    _pockets_have_been_sent = False
+    
+    global _last_pocket_send_time
+    _last_pocket_send_time = 0.0
 
+    global _pockets_px_before_adjust_cached
+    _pockets_px_before_adjust_cached = None
+    
+    global _table_fail_streak
+    _table_fail_streak = 0
+    
+    global _force_rescan
+    _force_rescan = False
+    
+    global _pockets_adjusted
+    _pockets_adjusted = False
+    
+    global _pockets_px_adjusted_cached
+    _pockets_px_adjusted_cached = None
+    
+    global _pockets_xy_m_adjusted_cached
+    _pockets_xy_m_adjusted_cached = None
+    
 # Camera control part
 def check_keys(dimensions: str = "1920x1080"):
     global _controller, _is_changing_camera
@@ -205,23 +232,26 @@ def check_keys(dimensions: str = "1920x1080"):
             _force_rescan = True
             _last_rescan_request_time = now
         print("[pockets] Re-scan requested (r)")
+        
+    if reset_pocket_globals:
+        reset_pocket_globals()
     return (True, camera_info)
 
 def main(
          debug_config_name: Optional[str],
          debug_image_path: Optional[str],
          debug_pocket_display: bool = False,
+         debug_offline: bool = False,
          debug_static: bool = False,
          debug: bool = False,
-         ball_radius_range_px = (10,30), 
          work_resolution: str = "1920x1080",
          performance_mode: bool = False,
          perf_resoulution: str ="1280x720",
          fallback_resoulution: str ="1280x720",
-         detection_mode: Enum = DetectionMode.YOLO,
          is_editor_build: bool = False,
-         debug_detection: bool = False):
-
+         debug_detection: bool = False,
+         process_unknowns: Optional[bool] = False
+         ):
     print("Open Unity application. After 10 seconds the application is going to continue.")
     time.sleep(10)
     
@@ -233,9 +263,9 @@ def main(
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
     
-    q_ip, q_port = setup_connection(True, is_editor_build)
-    usb_sender = UsbTcpSender(q_ip, q_port)
-    if not usb_sender.connect():
+    q_ip, q_port = setup_connection(True, is_editor_build, debug_offline)
+    usb_sender = UsbTcpSender(q_ip, q_port, is_offline_run=debug_offline)
+    if not usb_sender.connect() and not debug_offline:
         open_ports(5005, is_editor_build)
         if not usb_sender.connect():
             print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
@@ -258,12 +288,13 @@ def main(
     expected_aspect_ratio = Lmm / Wmm    # Consider the units in the future. Regardless of this, the 
     camera_height_m = config.camera.height_from_floor_m
     
-    if config is not None:
+    if config is None:
+        return
+
+    if not debug_offline:
         if not usb_sender.send(line_configuration_name(config.get_json_name_for_unity())):
             print("[USB] Failed to send environment name on persistent connection.")
-    else:
-        return
-        
+            
     del config
     del env
     
@@ -280,7 +311,7 @@ def main(
         del work_w
         del work_h
     else:
-        ip, port = setup_connection(False, False)
+        ip, port = setup_connection(False, False, debug_offline)
         global _controller
         _controller = DroidCamController(ip, port)
         capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
@@ -299,31 +330,54 @@ def main(
                 print("Precompute failed:", e)
     if(debug):
         print("Launch the app. You have 10 seconds to do so.")
-        time.sleep(10)
-    
-    
     
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
     
     retry_count = 0
     pockets_px_raw = None
-    table_fail_streak = 0
+    global _table_fail_streak
+    _table_fail_streak = 0
     frame_counter = 0
     H_new = None
     
-    global _is_changing_camera, _H_cached, _pockets_px_cached, _pockets_ready, _force_rescan, _frame_index, _pockets_adjusted, _pockets_px_adjusted_cached, _pockets_xy_m_adjusted_cached
+    global _is_changing_camera
+    global _H_cached
+    global _pockets_px_cached
+    global _pockets_ready
+    global _force_rescan
+    global _frame_index
+    global _pockets_adjusted
+    global _pockets_px_adjusted_cached
+    global _pockets_xy_m_adjusted_cached
     global _map1, _map2
+    global _pockets_have_been_sent
+    global _last_pocket_send_time
+    
+    
     _pockets_have_been_sent = False
     pockets_xy_m = None
+    
+    global _pockets_xy_m_adjusted_cached
     _pockets_px_before_adjust_cached = None
     
-    start_time = time.time() if debug else None
     stable = False
+    ball_transport = BallTransportAggregator(
+        batch_size_frames=BALL_BATCH_SIZE_FRAMES,
+        pos_decimals=BALL_SEND_POSITION_DECIMALS,
+        conf_decimals=BALL_SEND_CONF_DECIMALS,
+        vel_decimals=BALL_SEND_VELOCITY_DECIMALS,
+        reset_max_position_delta_m=BALL_RESET_MAX_POSITION_DELTA_M,
+        force_send_interval_sec=BALL_FORCE_SEND_INTERVAL_SEC
+    )
+    
+    
+    start_time = time.time() if debug else None
+    
     
     # Main execution loop detection
     while True:
-        _frame_index+=1
+        _frame_index += 1
         # Camera switching lock
         if _is_changing_camera:
             print("Changing camera - skipping current frame(s).")
@@ -372,8 +426,8 @@ def main(
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
         if table_bounding_box is None or corners is None:
             retry_count += 1
-            table_fail_streak += 1
-            if table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
+            _table_fail_streak += 1
+            if _table_fail_streak >= TABLE_FAILS_BEFORE_RESCAN_FRAMES:
                 _pockets_ready = False
                 _detector.reset_pocket_tracking()
             continue
@@ -404,20 +458,14 @@ def main(
             continue
         
         if _force_rescan:
-            _detector.reset_pocket_tracking()
-            _pockets_ready = False
-            _pockets_have_been_sent = False
-            _last_pocket_send_time = 0.0
-            _pockets_px_cached = None
-            _H_cached = None
-            _force_rescan = False
+            reset_globals()
+            ball_transport.reset()
             print("[pockets] Re-scan started.")
 
         # Compute only until locked, and only every N frame
         should_scan_this_frame = (not _pockets_ready) and ((_frame_index % POCKET_SCAN_INTERVAL_FRAMES) == 0)
         
         raw_frame = frame
-        dbg_frame = raw_frame.copy() if (debug and (debug_pocket_display or True)) else None
         
         if not _pockets_ready:
             if should_scan_this_frame:
@@ -543,16 +591,14 @@ def main(
         for det, (xm, ym) in zip(yolo_detections, centers_m):
             if xm is None or ym is None:
                 continue
-            # Maybe do this on Quest 3
-            # Filter out of bounds / pocketed (pocket positions are in meters)
-            # if not _detector.is_in_table_bounds(xm, ym, pockets_xy_m, float(ball_diameter_m)):
-            #     continue
-            # if _detector.is_in_playfield_bounds_xy(xm, ym, pockets_xy_m, float(ball_diameter_m)):
-            #     continue
-            # if _detector.is_pocketed(xm, ym, pockets_xy_m, pocketed_distance_m):
-            #     continue
+            type = p2p_classification_to_balltype(int(det.get("cls", -1)))
+            
+            # We do not need diamonds and other stuff to be processed, which is classified as unknown
+            if type == "u" and not process_unknowns:
+                continue
+                
             entries.append({
-                "type": p2p_classification_to_balltype(int(det.get("cls", -1))),
+                "type": type,
                 "x": float(xm),
                 "y": float(ym),
                 "conf": float(det.get("confidence", 0.0)),
@@ -560,13 +606,30 @@ def main(
 
         
         # Convert entries to to current format in issues 64 and 70.    
-        data = build_conf_transfer_block(None, None, ball_diameter_m, camera_height_m, entries)
-        sent = usb_sender.send(data)
-        if not sent and debug:
-            print("[USB] Ball transfer failed. The sender will retry on the next send.")
+        now_sec = time.time()
+        entries_to_send = ball_transport.push(entries, now_sec)
+
+        if entries_to_send is not None:
+            data = build_conf_transfer_block(
+                pockets=None,
+                table_LW_m=None,
+                ball_diameter_m=ball_diameter_m,
+                camera_height_m=camera_height_m,
+                detection_entries=entries_to_send,
+                discard_diamonds=True,
+                pos_decimals=BALL_SEND_POSITION_DECIMALS,
+                conf_decimals=BALL_SEND_CONF_DECIMALS,
+                vel_decimals=BALL_SEND_VELOCITY_DECIMALS
+            )
+
+            sent = usb_sender.send(data)
+            if sent:
+                _table_fail_streak = 0
+            if not sent and debug:
+                print("[USB] Ball transfer failed. The sender will retry on the next send.")
+            elif sent and debug:
+                print(data)
         
-        # are pretty much aligned 6 with max Y, 6 with min Y, 6 pairs have the same X value per pair (i don't know how these marks are called). Just parse values and create a new line for them..Cleanup
-        # (alignment are going to be handled by Quest 3 once they are all 24 (max) parsed. Sent only once.
           
         if debug_detection:
         # UPDATED: cv2-only debug overlay (no matplotlib).
@@ -580,7 +643,7 @@ def main(
                 cv2.circle(raw_frame, (cx, cy), 3, (255, 255, 0), -1)
                 cv2.putText(
                     raw_frame,
-                    f"{type_to_str(cls_id)} {conf:.2f}",
+                    f"{p2p_classification_to_balltype(cls_id)} {conf:.2f}",
                     (x1, max(0, y1 - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.5,
@@ -591,6 +654,7 @@ def main(
             cv2.imshow("debug-detections", raw_frame)
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 break
+        
 
     if debug_detection or debug_static or debug_pocket_display or debug:
         # log_file.close()
@@ -614,6 +678,7 @@ if __name__ == "__main__":
     parser.add_argument("--debug-detection", action="store_true", help="If true, the script assumes you are displaying detections results on a 2D static image.")
     parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
     parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-offline", action="store_true", help="If this flag is set to true, there is no need to connect to the debug editor or the application. Works with static images and feed from phone.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
     parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
@@ -631,8 +696,8 @@ if __name__ == "__main__":
     parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
-    parser.add_argument("--ball-radius-range", type=str, default="6,80", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
-    parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
+    # parser.add_argument("--ball-radius-range", type=str, default="6,80", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
+    # parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
     
     args = parser.parse_args()
     
@@ -640,6 +705,13 @@ if __name__ == "__main__":
         print("Static image analysis and live capture cannot run at the same time.")
     if (not args.debug_static and not args.debug_phone) and args.debug:
         print("Either static image analysis or live capture must be enabled while running in debug mode.")
+        
+    if args.debug_offline and not args.debug:
+        print("You need to run this in general debug mode.")
+        
+    if args.debug_offline and not args.debug_static:
+        print("Offline mode means, you need to provide static images to your feed.")
+        
     
     if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
@@ -653,22 +725,23 @@ if __name__ == "__main__":
         synth_test()
     else:
         try:
-            if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
-                print(f"Chosen detection mode {args.detection_mode}.")
+            # if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
+            #     print(f"Chosen detection mode {args.detection_mode}.")
             install_dependecies_for_other_projects(["pix2pockets"])
-            radius_range = tuple(map(int, args.ball_radius_range.split(",")))
-            main(args.debug_conf,
-                 args.debug_image,
-                 args.debug_pocket_display,
-                 args.debug_static,
-                 args.debug,
-                 radius_range,                
-                 args.work_res,                
-                 args.performance,               
-                 args.perf_res,                
-                 args.fallback_res,                
-                 args.detection_mode,
-                 args.debug_editor,
-                 args.debug_detection)
+            # radius_range = tuple(map(int, args.ball_radius_range.split(",")))
+            main(
+                args.debug_conf,
+                args.debug_image,
+                args.debug_pocket_display,
+                args.debug_offline,
+                args.debug_static,
+                args.debug,
+                args.work_res,
+                args.performance,
+                args.perf_res,
+                args.fallback_res,
+                args.debug_editor,
+                args.debug_detection,
+            )
         except Exception as e:
             print(f"Error while executing main loop. Check parameters....Exception: {e}")

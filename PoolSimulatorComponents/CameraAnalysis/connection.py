@@ -32,19 +32,24 @@ class UsbTcpSender:
         send_timeout_s: float = 30.0,
         retry_initial_delay_s: float = 0.5,
         retry_max_delay_s: float = 5.0,
+        is_offline_run: bool = False
     ) -> None:
-        self.host = host
-        self.port = int(port)
-        self.auto_reconnect = auto_reconnect
-        self.connect_timeout_s = connect_timeout_s
-        self.send_timeout_s = send_timeout_s
-        self.retry_initial_delay_s = retry_initial_delay_s
-        self.retry_max_delay_s = retry_max_delay_s
+        self.is_offline_run = is_offline_run
+        self.host = host if not is_offline_run else None
+        self.port = int(port) if not is_offline_run else None
+        self.auto_reconnect = auto_reconnect if not is_offline_run else None
+        self.connect_timeout_s = connect_timeout_s if not is_offline_run else None
+        self.send_timeout_s = send_timeout_s if not is_offline_run else None
+        self.retry_initial_delay_s = retry_initial_delay_s if not is_offline_run else None
+        self.retry_max_delay_s = retry_max_delay_s if not is_offline_run else None
 
         self._sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
 
     def _create_socket(self) -> socket.socket:
+        if self.is_offline_run:
+            return None
+        
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -75,10 +80,14 @@ class UsbTcpSender:
             return False
 
     def connect(self) -> bool:
+        if self.is_offline_run:
+            return True
         with self._lock:
             return self._connect_unlocked()
 
     def send(self, data: str) -> bool:
+        if self.is_offline_run:
+            return True
         if not data.endswith("\n"):
             data += "\n"
 
@@ -104,5 +113,7 @@ class UsbTcpSender:
             return False
 
     def close(self) -> None:
+        if self.is_offline_run:
+            return 
         with self._lock:
             self._close_quiet_unlocked()
