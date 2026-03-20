@@ -163,6 +163,7 @@ MonoBehaviour:
   _rigidbody: {fileID: 382526793336549242}
   _kinematicWhileSelected: 1
   _throwWhenUnselected: 1
+  _forceKinematicDisabled: 0
 --- !u!114 &1906809953227635335
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -256,7 +257,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _lockButton: {fileID: 1095957366237000342}
-  label: {fileID: 4196873261755699743}
+  _lock_button_label: {fileID: 0}
+  _confirmButton: {fileID: 0}
+  _final_lock_button_label: {fileID: 0}
 --- !u!1001 &8010693004388443691
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -628,18 +631,6 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
---- !u!114 &4196873261755699743 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 6131082610728711220, guid: 7d6feeff1d3e17e46b23526391553e53,
-    type: 3}
-  m_PrefabInstance: {fileID: 8010693004388443691}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
 --- !u!224 &7427459502486500276 stripped

@@ -3,6 +3,9 @@ import os
 import json
 import socket
 from enum import Enum
+from typing import Tuple, Optional
+
+from calibration import Calibrator
 
 class FocusMode(Enum):
     Auto = 0
@@ -56,6 +59,10 @@ class DroidCamController:
         self.torch_state = False
         self._load_torch_state()
         self.apply_default_settings()
+        
+    def __init__(self, connection: Tuple[str, str]):
+        self.ip, self.port = connection
+        self.__init__(self.ip,self.port)
         
     def get_stream_url(self, resolution: str):
         return f'{self.base_url}/video?{resolution}'   
@@ -218,3 +225,52 @@ class DroidCamController:
                 return True
         except(socket.timeout, socket.error):
             return False
+    
+    def send_camera_command(self, command: str, *args, suppres_info: bool = False ,calibrator: Optional[Calibrator] = None):
+    
+        is_changing_camera = False
+        reset_pocket_globals = False
+        
+        if command == "toggle_torch":
+            self.toggle_torch()
+        elif command == "reset_torch":
+            self.reset_all_torch_states()
+        elif command == "set_focus_mode":
+            if args:
+                self._controller.set_focus_mode(args[0])
+        elif command == "set_manual_focus_value":
+            if args:
+                self.set_manual_focus_value(args[0])
+        elif command == "set_zoom":
+            if args:
+                self.set_zoom(args[0])
+        elif command == "set_exposure":
+            if args:
+                self.set_exposure(args[0])
+        elif command == "set_white_balance":
+            if args:
+                self.set_white_balance(args[0])
+        elif command == "sync_all_locks":
+            self.sync_all_locks()
+        elif command == "apply_defaults":
+            self.apply_default_settings()
+        elif command == "select_camera":
+            if args and calibrator is not None:
+                is_changing_camera = True
+                self.select_camera(args[0])   
+                calibrator._load_intrinsics_for_camera(args[1])
+                reset_pocket_globals = True
+                reset_pocket_globals()
+        elif command == "get_stream_url":
+                return self.get_stream_url(args[0])
+        elif command == "dump_camera_info":
+                info = self.get_camera_info()
+                if info and not suppres_info:
+                    print(json.dumps(info, indent=2))
+                    return info, is_changing_camera, reset_pocket_globals
+                if info is None:
+                    print("Failed to get camera info.")
+                    return None, info, is_changing_camera, reset_pocket_globals
+        else:
+            print(f"Unknown command: {command}")
+            return None, is_changing_camera, reset_pocket_globals

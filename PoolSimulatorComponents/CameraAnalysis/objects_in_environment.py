@@ -64,21 +64,20 @@ class PocketSpec:
 @dataclass
 class BallSpec:
     diameter_m: float = .05715
+    ball_circumference_m: float = 0.1795
+    
     
 @dataclass
 class CameraSpec:
     height_from_floor_m: float
     
-@dataclass(frozen=True)
+@dataclass
 class EnvironmentConfig:
     table: TableSpec
     pockets: PocketSpec
     ball_spec: BallSpec
     camera: CameraSpec
-    # def __init__(self):
-    #     pass
     
-
     def pocket_uv_positions(self) -> Dict[str, Tuple[float, float]]:
         """
         Returns idealized pocket centers in normalized table coordinates.
@@ -145,9 +144,9 @@ class EnvironmentConfig:
 
     ENVIRONMENT_JSON_PATH = "../Configuration/"
 
-    _json_configuration_path: str = ""
+    __loaded_json_configuration_name: str = ""
 
-    DEFAULT_BALLS = BallSpec(diameter_m=.05715)
+    DEFAULT_BALLS = BallSpec(.05715,.068)
 
     SCHEMA_VERSION = 2 # Bump every time when a change is made (add/rename/delete). Reset to 1 for final shippment.
 
@@ -397,6 +396,11 @@ class EnvironmentConfig:
 
     def get_debug_env_config(self, config_name: str) -> EnvironmentConfig:
         return self.get_environment_config(False, True, config_name, True)
+    
+    def get_json_name_for_unity(self):
+        if self.__loaded_json_configuration_name is None or self.__loaded_json_configuration_name == "":
+            self.get_environment_config()
+        return self.__loaded_json_configuration_name
 
     def get_environment_config(
                             self,
@@ -405,17 +409,16 @@ class EnvironmentConfig:
                             config_name: str = "last_environment.json",
                             debug: bool = False) -> EnvironmentConfig:
         
-        if  (config_name is None or len(config_name)==0 ) and debug:
-            print(config_name)
+        if  (config_name is None or len(config_name) == 0 ) and debug:
             print('No debug config specified. Using last known enviroment.')
             return self.get_environment_config()
         
         cache_path = f"{self.ENVIRONMENT_JSON_PATH}{config_name}"
+        self.__loaded_json_configuration_name = config_name
         
         if use_last_known:
             env = self.load_last_environment(cache_path)
             if debug:
-                json
                 return env
             if env is not None:
                 needs_cloth = (
@@ -426,10 +429,12 @@ class EnvironmentConfig:
                 if interactive and needs_cloth:
                     env.table = self.set_up_hsv(env.table)
                     return self.save_environment(env, cache_path)
-        
+        if env is not None:
+            return env
         table = None
         pockets = None
         camera_height_mm = None
+        
         if interactive:
             table = self.set_up_table()
             table = self.set_up_hsv(table)

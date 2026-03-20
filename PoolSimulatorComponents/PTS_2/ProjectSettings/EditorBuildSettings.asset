@@ -5,15 +5,18 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 0
+  - enabled: 1
     path: Assets/Scenes/SampleScene.unity
     guid: 99c9720ab356a0642a771bea13969a05
   - enabled: 1
     path: Assets/Scenes/PoolSetup.unity
-    guid: 3b16b108a8a0a934780c828b92ada54d
+    guid: 318483b7978313e41a6cd67292436d40
   - enabled: 0
     path: Assets/Scenes/SemanticLabelingScene.unity
     guid: 547452449e245df4e8d8aec12a8d5939
+  - enabled: 0
+    path: Assets/_Recovery/0.unity
+    guid: 304f8795593faed4ca2ef3080c3b4c49
   m_configObjects:
     com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 0baa5b9917f5b4c45b25636657946f1c,
       type: 2}

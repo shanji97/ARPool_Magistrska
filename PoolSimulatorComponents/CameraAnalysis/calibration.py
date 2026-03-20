@@ -15,6 +15,13 @@ from stats_logger import StatsLogger
 MANIFEST_PREFIX = "calibcache_"
 CACHE_PREFIX = "_downscaled_"
 
+CALIBRATION_PATTERNS = [
+    "20mm_13x9",
+    "25mm_10x7",
+    "30mm_6x8",
+    "35mm_7x4",
+    ]
+
 @dataclass
 class Intrinsics:
     fx: float
@@ -550,6 +557,44 @@ class Calibrator:
             timestamp=datetime.fromtimestamp(os.path.getmtime(image_path)).isoformat()
         )
         statistics.append_ndjson(nd)
+        
+    def run_calibration_only(self, dimensions: str = "1920x1080"):
+        summary = {}
+        try:
+            for cam_key in self.CAMERA_FOLDERS.keys():
+                patterns = self.available_patterns(cam_key) or [""]
+                rows = []
+                for pattern in patterns:
+                    intr = self.get_intrinsics(cam_key, dimensions, pattern=pattern)
+                    rows.append((pattern or "<root>", intr.rms))
+                summary[cam_key] = rows
+        except Exception as e:
+            print(f"Error: {e}")
+            
+        finally:
+            self.print_precompute_results(summary)
+            
+    @staticmethod
+    def undistort_frame_if_needed(frame, _use_undistorted_view, map1, map2):
+        if _use_undistorted_view and map1 is not None:
+            return cv2.remap(frame, map1, map2, cv2.INTER_LINEAR)
+        return frame
+
+    def undistort_points(points_xy, Km, dist_coeff, Knew):
+        if Km is None:
+            return points_xy
+        points = np.asarray(points_xy, dtype=np.float32).reshape(-1, 1, 2)
+        undistorted_points = cv2.undistortPoints(points, Km, dist_coeff, P = Knew)
+        return undistorted_points.reshape(-1, 2)
+            
+    def print_precompute_results(self, precompute_results: dict):
+        print("\n=== Calibration summary (per camera · per pattern) ===")
+        for cam in sorted(precompute_results.keys()):
+            print(f"\n[{cam}]")
+            rows = sorted(precompute_results[cam], key=lambda x: x[0].lower())  # (pattern, rms)
+            for pattern, rms in rows:
+                print(f"  - {pattern:<14}  RMS={rms:.4f}")
+        print("\nDone.\n")
         
 if __name__ == "__main__":
     import argparse
