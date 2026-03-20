@@ -3,12 +3,16 @@
     "rootNamespace": "",
     "references": [
         "GUID:d57657dfcac605a4686698618c1b7e83",
-        "GUID:64dca168057442b4db6994092aa157d9"
+        "GUID:64dca168057442b4db6994092aa157d9",
+        "GUID:42be8676e8cdf0648a638eb7de6c8202",
+        "GUID:f5eda1afa2a1241a59c4db6830e1c890",
+        "GUID:f64c9ebcd7899c3448a08dc9f9ddbe30"
     ],
     "includePlatforms": [
         "Android",
         "Editor",
-        "WindowsStandalone64"
+        "WindowsStandalone64",
+        "WindowsStandalone64Server"
     ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

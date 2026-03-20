@@ -1411,24 +1411,21 @@ MonoBehaviour:
   m_EditorClassIdentifier: Classes::TableQrAligmentController
   TableServiceOverride: {fileID: 1796661024}
   EnableQrTrackingWorkflow: 1
-  ScanIntervalSeconds: 0.05
-  RescanCooldownSeconds: 0.15
+  ScanIntervalSeconds: 0.25
+  IncrementalPerMarkerLock: 1
   UseMiddleQrMarkersWhenPresent: 1
   PoseChangePositionThresholdM: 0.01
   PoseChangeRotationThresholdDeg: 4
-  VerboseQrLogs: 0
-  mandatoryCornerPayloads:
+  VerboseQrLogs: 1
+  fallbackRequiredLockedMarkerCount: 6
+  fallbackQrPaperSizeM: 0.16
+  fallbackMarkerPayloads:
   - ARPOOL_MARKER_01
   - ARPOOL_MARKER_02
   - ARPOOL_MARKER_03
   - ARPOOL_MARKER_04
-  optionalReferencePayload05: ARPOOL_MARKER_05
-  optionalReferencePayload06: ARPOOL_MARKER_06
-  fallbackQrPaperSizeM: 0.16
-  LiveQrMarkerPrefab: {fileID: 0}
-  LiveQrMarkersParent: {fileID: 0}
-  LiveQrMarkerThicknessM: 0.002
-  LiveQrMarkerColor: {r: 1, g: 0.75, b: 0, a: 0.9}
+  - ARPOOL_MARKER_05
+  - ARPOOL_MARKER_06
   LockedQrMarkerPrefab: {fileID: 0}
   LockedQrMarkersParent: {fileID: 0}
   LockedQrMarkerThicknessM: 0.003
@@ -3036,14 +3033,8 @@ MonoBehaviour:
     markings.
   staticMarkingsConfirmedMessage: Static markings confirmed.
   qrWaitingMessage: Waiting for QR markers...
-  waitingColor: {r: 1, g: 1, b: 1, a: 1}
-  partialColor: {r: 1, g: 0.8, b: 0, a: 1}
-  readyColor: {r: 0, g: 1, b: 0, a: 1}
-  errorColor: {r: 1, g: 0, b: 0, a: 1}
-  enabledButtonLabelColor: {r: 0, g: 1, b: 0, a: 1}
-  disabledButtonLabelColor: {r: 1, g: 1, b: 1, a: 1}
-  disableConfirmButtonAfterClick: 1
-  invokeParsedEventOnlyOnce: 1
+  _disableConfirmButtonAfterClick: 1
+  _invokeParsedEventOnlyOnce: 1
   requireQrReadyBeforePocketConfirmation: 1
   hideQrLockButtonAfterPocketConfirmation: 1
   OnEnvironmentParsed:
@@ -3182,9 +3173,6 @@ MonoBehaviour:
   - ARPOOL_MARKER_06
   QR_MARKER_COUNT: 4
   QR_CODE_WHOLE_PAPER_SIZE_M: 0.16
-  QR_USE_DIRECT_CENTER_SPAN_VALUES: 1
-  QR_CORNER_CENTER_TOP_BOTTOM_M: 0.445
-  QR_CORNER_CENTER_LEFT_RIGHT_M: 1.65
   QR_CORNER_PAPER_GAP_TOP_BOTTOM_M: 0.445
   QR_CORNER_PAPER_GAP_LEFT_RIGHT_M: 1.88
   QR_CORNER_CENTER_EXTRA_TOP_BOTTOM_M: 0

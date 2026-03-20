@@ -38,6 +38,10 @@ public class UsbSocketReceiver : MonoBehaviour
         EnsureSvc();
         pocketsXZ ??= new (float, float)[6];
 
+        var env = AppSettings.Instance.Settings.EnviromentInfo;
+        if (env != null)
+            ApplyEnvironment(env);
+
         if (AutoStart) StartServer();
     }
 
@@ -344,14 +348,14 @@ public class UsbSocketReceiver : MonoBehaviour
                         {
                             try
                             {
-                                var env = JsonConvert.DeserializeObject<EnvironmentInfo>(data);
-                                if (env == null)
+                                var newEnvironment = JsonConvert.DeserializeObject<EnvironmentInfo>(data);
+                                if (newEnvironment == null)
                                 {
                                     Debug.LogError($"[Unity] Failed to deserialize EnvironmentInfo from {resourcePath}.json");
                                 }
                                 else
                                 {
-                                    bool applied = ApplyEnvironment(env);
+                                    bool applied = ApplyEnvironment(newEnvironment);
                                     if (applied)
                                     {
                                         _lastAppliedEnvironmentKey = environmentJsonData;
@@ -360,12 +364,13 @@ public class UsbSocketReceiver : MonoBehaviour
                                         string currentName =
                                             AppSettings.Instance?.Settings?.EnviromentInfo?.Table?.Name;
 
-                                        string newName = env.Table?.Name;
+                                        string newName = newEnvironment.Table?.Name;
 
                                         if (!string.Equals(currentName, newName, StringComparison.Ordinal))
                                         {
                                             if (AppSettings.Instance?.Settings != null)
-                                                AppSettings.Instance.Settings.EnviromentInfo = env;
+                                                AppSettings.Instance.Settings.EnviromentInfo = newEnvironment;
+                                            ApplyEnvironment(newEnvironment);
                                         }
                                     }
                                 }
@@ -608,7 +613,7 @@ public class UsbSocketReceiver : MonoBehaviour
             "c 0.1438348,0.5885691,/,0.935546875,\\,\\\n" +
             "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n" +
             "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n";
-            
+
     }
 #endif
 }

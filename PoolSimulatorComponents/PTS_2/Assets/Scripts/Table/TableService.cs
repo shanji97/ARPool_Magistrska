@@ -130,25 +130,13 @@ public class TableService : MonoBehaviour
     public bool IsBallCircumferenceSet() => BallCircumferenceM > 0;
 
     public bool AreBallPropertiesSet() => IsBallDiameterSet() && IsBallCircumferenceSet();
+
+    // Full environment readiness.
+    // Keep this for compatibility with older code that still expects the old meaning.
     public bool ArePropertiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet();
 
-    public string[] QR_CODE_MARKER_VALUES =
-    {
-        "ARPOOL_MARKER_01",
-        "ARPOOL_MARKER_02",
-        "ARPOOL_MARKER_03",
-        "ARPOOL_MARKER_04",
-        "ARPOOL_MARKER_05",
-        "ARPOOL_MARKER_06",
-        "ARPOOL_MARKER_07",
-        "ARPOOL_MARKER_08",
-        "ARPOOL_MARKER_09",
-        "ARPOOL_MARKER_10",
-        "ARPOOL_MARKER_11",
-        "ARPOOL_MARKER_12"
-    };
-
-    public const float QR_CODE_WHOLE_PAPER_SIZE_M = 0.019f;
+    // Added: QR-aligned pocket placement only needs a valid table plane.
+    public bool CanApplyQrAlignedPocketLayout() => IsTableHeightSet();
 
     public bool AreDiamondsParsed() => DiamondCount == MAX_DIAMOND_COUNT;
 
@@ -163,8 +151,70 @@ public class TableService : MonoBehaviour
 
     private bool _enviromentSaved = false;
 
-    public byte QR_MARKER_COUNT = 2;
+    [Header("QR Alignment")]
+    public string[] QR_CODE_MARKER_VALUES =
+{
+    "ARPOOL_MARKER_01",
+    "ARPOOL_MARKER_02",
+    "ARPOOL_MARKER_03",
+    "ARPOOL_MARKER_04",
+    "ARPOOL_MARKER_05",
+    "ARPOOL_MARKER_06"
+};
 
+    [Range(4, 6)]
+    public byte QR_MARKER_COUNT = 6;
+
+    [Min(0.05f)]
+    public float QR_CODE_WHOLE_PAPER_SIZE_M = 0.16f;
+
+    [Tooltip("If enabled, validation uses the direct center-to-center spans below instead of gap + paper size.")]
+    public bool QR_USE_DIRECT_CENTER_SPAN_VALUES = true;
+
+    [Tooltip("Direct measured center-to-center distance between the top and bottom corner QR markers.")]
+    [Min(0f)]
+    public float QR_CORNER_CENTER_TOP_BOTTOM_M = 0.445f;
+
+    [Tooltip("Direct measured center-to-center distance between the left and right corner QR markers.")]
+    [Min(0f)]
+    public float QR_CORNER_CENTER_LEFT_RIGHT_M = 1.65f;
+
+    [Tooltip("Measured clear gap between the top and bottom corner QR papers, edge-to-edge, in meters.")]
+    [Range(0f, 2f)]
+    public float QR_CORNER_PAPER_GAP_TOP_BOTTOM_M = 0.445f;
+
+    [Tooltip("Measured clear gap between the left and right corner QR papers, edge-to-edge, in meters.")]
+    [Range(0f, 3f)]
+    public float QR_CORNER_PAPER_GAP_LEFT_RIGHT_M = 1.65f;
+
+    [Tooltip("Optional correction added after gap + paper size for the top/bottom QR center-span validation.")]
+    public float QR_CORNER_CENTER_EXTRA_TOP_BOTTOM_M = 0f;
+
+    [Tooltip("Optional correction added after gap + paper size for the left/right QR center-span validation.")]
+    public float QR_CORNER_CENTER_EXTRA_LEFT_RIGHT_M = 0f;
+
+    [Tooltip("Allowed deviation for QR center-span validation.")]
+    [Min(0f)]
+    public float QR_CORNER_SPAN_TOLERANCE_M = 0.10f;
+
+    [Tooltip("If true, marker 05 and 06 refine the top and bottom rail placement when present.")]
+    public bool QR_USE_MIDDLE_MARKERS_WHEN_PRESENT = true;
+
+    [Tooltip("Distance from a corner QR marker center to the corresponding corner pocket center, measured inward toward the table center.")]
+    [Min(0f)]
+    public float QR_CORNER_MARKER_TO_CORNER_POCKET_OFFSET_M = 0.14f;
+
+    [Tooltip("Distance from marker 05 or 06 to the corresponding top or bottom rail estimate, measured inward toward the table center.")]
+    [Min(0f)]
+    public float QR_MIDDLE_MARKER_TO_RAIL_OFFSET_M = 0.14f;
+
+    [Header("Raw pocket detection state")]
+    public Vector2[] RawDetectedPocketXZ { get; private set; }
+    public bool HasRawDetectedPocketData { get; private set; }
+
+    [Tooltip("Pocket handle lift above the table surface.")]
+    [Min(0f)]
+    public float PocketMarkerLiftAboveTableM = 0.01f;
     private const float movingTreshold = .0005f;
 
     private GameObject[] _markers;
@@ -207,8 +257,9 @@ public class TableService : MonoBehaviour
         PocketPositions = new Vector3[MAX_POCKET_COUNT];
         _tableStateEntries = new();
 
-        // UPDATED: make sure _balls is always safe to index (even before any ball messages arrive)
         EnsureBallBufferSize();
+
+        RawDetectedPocketXZ = new Vector2[MAX_POCKET_COUNT];
     }
 
     public void LateUpdate()
@@ -284,6 +335,20 @@ public class TableService : MonoBehaviour
 
     }
 
+    public void SetRawDetectedPocketXZ((float x, float z)[] pocketXZ)
+    {
+        if (pocketXZ == null || pocketXZ.Length != MAX_POCKET_COUNT)
+        {
+            HasRawDetectedPocketData = false;
+            return;
+        }
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+            RawDetectedPocketXZ[i] = new Vector2(pocketXZ[i].x, pocketXZ[i].z);
+
+        HasRawDetectedPocketData = true;
+    }
+
     public void IncrementSuccessfullyParsedPocketCount()
     {
         if (PocketCount == MAX_POCKET_COUNT) return;
@@ -327,11 +392,7 @@ public class TableService : MonoBehaviour
             && HasAllPockets();
     }
 
-    private float GetDiamondPreviewY()
-    {
-        // ADDED: draw diamonds slightly above the same plane used by pocket markers.
-        return GetPocketMarkerY(TableY) + DiamondSurfaceLift;
-    }
+    private float GetDiamondPreviewY() => GetPocketMarkerY(TableY) + DiamondSurfaceLift;
 
     private static void AddComputedRailDiamonds(
         List<DiamondMarkerData> target,
@@ -814,10 +875,11 @@ public class TableService : MonoBehaviour
                 pocketXZ[i].z
             );
 
-            // MODIFIED: logical cache and visible marker stay identical.
             UpdatePocketPositionCache(i, worldPocketPosition);
             SetMarkerWorldPose(i, worldPocketPosition);
         }
+
+        PocketCount = MAX_POCKET_COUNT;
 
         if (_lastMarkerPosition == null || _lastMarkerPosition.Length != MAX_POCKET_COUNT)
             _lastMarkerPosition = new Vector3[MAX_POCKET_COUNT];
@@ -829,13 +891,10 @@ public class TableService : MonoBehaviour
                 : PocketPositions[i];
         }
 
-        Debug.Log($"[TableService] Pockets placed at markerY={markerY:F4}, TableY={TableY:F4}, BallDiameterM={BallDiameterM:F4}");
+        Debug.Log($"[TableService] Pockets placed at markerY={markerY:F4}, TableY={TableY:F4}, BallDiameterM={BallDiameterM:F4}, PocketCount={PocketCount}");
     }
 
-    public bool CanFinalizePocketPlacement() => ArePropertiesParsed()
-            && HasAllPockets()
-            && _markers != null
-            && _markers.Length == MAX_POCKET_COUNT;
+    public bool CanFinalizePocketPlacement() => IsTableHeightSet() && HasAllPockets() && _markers != null && _markers.Length == MAX_POCKET_COUNT;
 
     public void FinalizePocketPlacement()
     {
@@ -1074,7 +1133,7 @@ public class TableService : MonoBehaviour
 
         if (AppSettings.Instance.Settings.DeviceInformation == DeviceInformation.PrimaryQuest)
         {
-            // Send to other Quest 3 devices in the normal placement path later.
+            // Send to other Quest 3 devices in the normal placement path later. # 
         }
 
         if ((id <= (byte)BallType.Cue))
@@ -1155,23 +1214,18 @@ public class TableService : MonoBehaviour
 
     public void ReapplyPockets(float tableY)
     {
-        if (tableY <= 0f) return;
-
-        if (BallDiameterM <= 0f)
-        {
-            if (!_warnedMissingBallSpec)
-            {
-                Debug.LogWarning("[TableService] ReapplyPockets skipped: BallDiameterM is not set yet.");
-                _warnedMissingBallSpec = true;
-            }
+        if (tableY <= 0f)
             return;
-        }
 
-        if (_markers == null || _markers.Length != MAX_POCKET_COUNT) return;
-        if (PocketCount == 0) return;
+        if (_markers == null || _markers.Length != MAX_POCKET_COUNT)
+            return;
+
+        if (PocketCount == 0)
+            return;
 
         bool wasLocked = IsLockedToJitter;
-        if (wasLocked) IsLockedToJitter = false;
+        if (wasLocked)
+            IsLockedToJitter = false;
 
         TableY = tableY;
         float markerY = GetPocketMarkerY(tableY);
@@ -1190,7 +1244,11 @@ public class TableService : MonoBehaviour
             _lastMarkerPosition[i] = _markers[i].transform.position;
         }
 
-        if (wasLocked) IsLockedToJitter = true;
+        if (wasLocked)
+            IsLockedToJitter = true;
+
+        // Keep ball height refresh separate. Pocket markers do not depend on ball diameter.
+        SetBallHeight();
     }
 
     public void ReapplyPockets()
@@ -1279,12 +1337,11 @@ public class TableService : MonoBehaviour
         return tableY + (BallDiameterM * 0.5f);
     }
 
-    private float GetPocketMarkerY(float tableY) => GetDefaultBallHeight(tableY) + SurfaceLift;
-
+    private float GetPocketMarkerY(float tableY) => tableY <= 0f ? tableY : tableY + PocketMarkerLiftAboveTableM;
 
     private void SetMarkerWorldPose(byte index, Vector3 worldPosition)
     {
-        if (_markers == null || index < 0 || index >= _markers.Length)
+        if (_markers == null || index >= _markers.Length)
             return;
 
         GameObject marker = _markers[index];

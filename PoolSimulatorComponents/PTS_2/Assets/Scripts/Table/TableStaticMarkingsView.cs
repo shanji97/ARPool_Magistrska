@@ -4,48 +4,6 @@ using UnityEngine.Rendering;
 
 public class TableStaticMarkingsView : MonoBehaviour
 {
-    public struct TableReferenceGeometry
-    {
-        public bool IsValid;
-        public Vector3 Center;
-        public Vector3 LongAxisLeftToRight;
-        public Vector3 ShortAxisBottomToTop;
-        public float TableLengthM;
-        public float TableWidthM;
-
-        public Vector3 QuarterLineCenter;
-        public Vector3 QuarterLineStart;
-        public Vector3 QuarterLineEnd;
-
-        public Vector3 RackApex;
-        public Vector3 RackBaseLeft;
-        public Vector3 RackBaseRight;
-    }
-
-    private struct GeometryBasis
-    {
-        public float MarkingY;
-        public float BallDiameterM;
-
-        public Vector3 LeftShortRailCenter;
-        public Vector3 RightShortRailCenter;
-        public Vector3 BottomLongRailCenter;
-        public Vector3 TopLongRailCenter;
-
-        public Vector3 Center;
-        public Vector3 LongAxisLeftToRight;
-        public Vector3 ShortAxisBottomToTop;
-
-        public float TableLengthM;
-        public float TableWidthM;
-
-        public float QuarterLineHalfWidthM;
-        public Vector3 RackDepthDirection;
-
-        public Vector3 DeterministicQuarterLineCenter;
-        public Vector3 DeterministicRackApex;
-    }
-
     [Header("Dependencies")]
     public TableService TableServiceOverride;
 
