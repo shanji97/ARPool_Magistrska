@@ -1,0 +1,40 @@
+{
+  "_schema_version": 2,
+  "table": {
+    "name": "Custom",
+    "playfield_mm": [
+      2250,
+      1125,
+      785
+    ],
+    "overall_mm": [
+      2520,
+      1400
+    ],
+    "notes": "User-defined",
+    "cloth_profile": "Custom",
+    "cloth_lower_hsv": [
+      60,
+      100,
+      60
+    ],
+    "cloth_upper_hsv": [
+      90,
+      255,
+      255
+    ]
+  },
+  "pockets": {
+    "corner_pocket_diameter_mm": 120,
+    "side_pocket_diameter_mm": 135,
+    "corner_jaw_diameter_mm": 36,
+    "side_jaw_diameters_mm": 40
+  },
+  "ball_spec": {
+    "ball_circumference_m":0.1795,
+    "diameter_m": 0.05715
+  },
+  "camera": {
+    "height_from_floor_m": 2.18
+  }
+}

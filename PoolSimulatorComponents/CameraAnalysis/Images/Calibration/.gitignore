@@ -1,0 +1,7 @@
+# Snap the photos yourself!
+*.jpg
+*.png
+*.jpeg
+
+# Meshroom caches
+**/MeshroomCache
