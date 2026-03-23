@@ -24,7 +24,132 @@ from formatters import (
     line_pockets,
     build_conf_transfer_block,
     line_configuration_name,
+    line_cue_stick,
+    group_entries_by_type,
 )
+
+def _estimate_ball_layout_delta_m(previous_entries, current_entries):
+    if previous_entries is None or current_entries is None:
+        return float("inf")
+
+    previous_groups = group_entries_by_type(previous_entries)
+    current_groups = group_entries_by_type(current_entries)
+
+    if set(previous_groups.keys()) != set(current_groups.keys()):
+        return float("inf")
+
+    max_delta_m = 0.0
+
+    for ball_type in current_groups.keys():
+        previous_points = list(previous_groups[ball_type])
+        current_points = list(current_groups[ball_type])
+
+        if len(previous_points) != len(current_points):
+            return float("inf")
+
+        unmatched_previous = previous_points.copy()
+        for cx, cy in current_points:
+            nearest_index = min(
+                range(len(unmatched_previous)),
+                key=lambda i: (unmatched_previous[i][0] - cx) ** 2 + (unmatched_previous[i][1] - cy) ** 2
+            )
+            px, py = unmatched_previous.pop(nearest_index)
+            max_delta_m = max(max_delta_m, float(np.hypot(px - cx, py - cy)))
+
+    return float(max_delta_m)
+
+
+def _update_ball_stability(previous_entries, current_entries, stable_frames):
+    if current_entries is None or len(current_entries) < CUE_TRACK_MIN_BALLS:
+        return current_entries, 0, False, float("inf")
+
+    layout_delta_m = _estimate_ball_layout_delta_m(previous_entries, current_entries)
+    stable_frames = stable_frames + 1 if layout_delta_m <= float(CUE_TRACK_MAX_BALL_DELTA_M) else 0
+    cue_tracking_enabled = stable_frames >= int(CUE_TRACK_STABLE_REQUIRED_FRAMES)
+
+    return current_entries, stable_frames, cue_tracking_enabled, float(layout_delta_m)
+
+
+def _build_ball_debug_view(frame_bgr, yolo_detections):
+    debug_view = frame_bgr.copy()
+
+    for det in yolo_detections:
+        x1 = int(det["x1"]); y1 = int(det["y1"]); x2 = int(det["x2"]); y2 = int(det["y2"])
+        cx = int(det["cx"]); cy = int(det["cy"])
+        cls_id = int(det.get("cls", -1))
+        conf = float(det.get("confidence", 0.0))
+
+        cv2.rectangle(debug_view, (x1, y1), (x2, y2), (255, 255, 0), 2)
+        cv2.circle(debug_view, (cx, cy), 3, (255, 255, 0), -1)
+        cv2.putText(
+            debug_view,
+            f"{p2p_classification_to_balltype(cls_id)} {conf:.2f}",
+            (x1, max(0, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 0),
+            1
+        )
+
+    return debug_view
+
+
+def _build_cue_debug_view(frame_bgr, cue_info, stable_ball_frames, layout_delta_m):
+    debug_view = frame_bgr.copy()
+
+    if cue_info is None:
+        return debug_view
+
+    cue_line_point_px = cue_info["line_point_px"]
+    cue_hit_point_px = cue_info["hit_point_px"]
+    cue_dir_x_px, cue_dir_y_px = cue_info["direction_px"]
+
+    display_len_px = 220.0
+    cue_line_end_px = (
+        float(cue_line_point_px[0] + cue_dir_x_px * display_len_px),
+        float(cue_line_point_px[1] + cue_dir_y_px * display_len_px)
+    )
+
+    cv2.line(
+        debug_view,
+        (int(round(cue_line_point_px[0])), int(round(cue_line_point_px[1]))),
+        (int(round(cue_line_end_px[0])), int(round(cue_line_end_px[1]))),
+        (0, 0, 255),
+        2
+    )
+    cv2.circle(
+        debug_view,
+        (int(round(cue_hit_point_px[0])), int(round(cue_hit_point_px[1]))),
+        6,
+        (0, 0, 255),
+        -1
+    )
+    cv2.putText(
+        debug_view,
+        f"cue {cue_info['confidence']:.2f} stable={stable_ball_frames} d={layout_delta_m:.4f}m",
+        (int(round(cue_hit_point_px[0])) + 8, int(round(cue_hit_point_px[1])) - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 0, 255),
+        1
+    )
+
+    return debug_view
+
+
+def _show_ball_debug_windows(frame_bgr, yolo_detections):
+    cv2.imshow("debug-ball-detections", _build_ball_debug_view(frame_bgr, yolo_detections))
+
+
+def _show_cue_debug_windows(frame_bgr, cue_info, stable_ball_frames, layout_delta_m):
+    cv2.imshow("debug-cue-overlay", _build_cue_debug_view(frame_bgr, cue_info, stable_ball_frames, layout_delta_m))
+
+    if cue_info is not None and cue_info.get("debug_edges") is not None:
+        cv2.imshow("debug-cue-edges", cue_info["debug_edges"])
+
+    if cue_info is not None and cue_info.get("debug_mask") is not None:
+        cv2.imshow("debug-cue-mask", cue_info["debug_mask"])
+    
 
 # from testing import synth_test
 
@@ -46,6 +171,11 @@ POCKET_STABLE_REQUIRED_FRAMES = 8
 POCKET_SCAN_INTERVAL_FRAMES = 5
 POCKET_RESEND_INTERVAL_SEC = 10.0
 RESCAN_DEBOUNCE_TIME = 0.75
+
+CUE_TRACK_STABLE_REQUIRED_FRAMES = 8
+CUE_TRACK_MAX_BALL_DELTA_M = 0.0035
+CUE_TRACK_MIN_BALLS = 2
+CUE_MIN_CONFIDENCE = 0.35
 
 # Runtime state
 _controller = None
@@ -249,36 +379,22 @@ def main(
          perf_resoulution: str ="1280x720",
          fallback_resoulution: str ="1280x720",
          is_editor_build: bool = False,
+         debug_cue: bool = False,
          debug_detection: bool = False,
          process_unknowns: Optional[bool] = False
          ):
-    print("Open Unity application. After 10 seconds the application is going to continue.")
-    time.sleep(10)
     
-    debug_frame = None
-    dimensions = None
-    capture = None
-    config = None   
-
-    global _calib
-    _calib = Calibrator(allow_center_crop=True, force_recalib=False)
-    
-    q_ip, q_port = setup_connection(True, is_editor_build, debug_offline)
-    usb_sender = UsbTcpSender(q_ip, q_port, is_offline_run=debug_offline)
-    if not usb_sender.connect() and not debug_offline:
-        open_ports(5005, is_editor_build)
-        if not usb_sender.connect():
-            print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
-        exit()
+    usb_sender = None
     
     # Compute environment and static things, such as pockets.
+    config = None
     
     env = EnvironmentConfig.__new__(EnvironmentConfig)
     
     if debug and debug_config_name:
         config = env.get_debug_env_config(debug_config_name)
     else:
-        config = env.get_environment_config(interactive= True, use_last_known= True)
+        config = env.get_environment_config(interactive = True, use_last_known= True)
     
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
@@ -290,13 +406,33 @@ def main(
     
     if config is None:
         return
-
+    
+    # Don't need to wait for the application to be opened. 
     if not debug_offline:
+        print("Open Unity application. After 10 seconds the application is going to continue.")
+        time.sleep(10)
+        q_ip, q_port = setup_connection(True, is_editor_build)
+        usb_sender = UsbTcpSender(q_ip, q_port, debug_offline)
         if not usb_sender.send(line_configuration_name(config.get_json_name_for_unity())):
             print("[USB] Failed to send environment name on persistent connection.")
             
     del config
     del env
+    
+    debug_frame = None
+    dimensions = None
+    capture = None
+
+    global _calib
+    _calib = Calibrator(allow_center_crop=True, force_recalib=False)
+    
+    q_ip, q_port = setup_connection(True, is_editor_build, debug_offline)
+    usb_sender = UsbTcpSender(q_ip, q_port, debug_offline)
+    if not usb_sender.connect() and not debug_offline:
+        open_ports(5005, is_editor_build)
+        if not usb_sender.connect():
+            print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
+        exit()
     
     # Set up connection and open stream 
     if debug_static and debug_image_path:
@@ -328,9 +464,7 @@ def main(
                 print_precompute_results(pre)
         except Exception as e:
                 print("Precompute failed:", e)
-    if(debug):
-        print("Launch the app. You have 10 seconds to do so.")
-    
+        
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
     
@@ -359,9 +493,11 @@ def main(
     pockets_xy_m = None
     
     global _pockets_xy_m_adjusted_cached
+    global _pockets_px_before_adjust_cache
     _pockets_px_before_adjust_cached = None
     
     stable = False
+
     ball_transport = BallTransportAggregator(
         batch_size_frames=BALL_BATCH_SIZE_FRAMES,
         pos_decimals=BALL_SEND_POSITION_DECIMALS,
@@ -370,6 +506,10 @@ def main(
         reset_max_position_delta_m=BALL_RESET_MAX_POSITION_DELTA_M,
         force_send_interval_sec=BALL_FORCE_SEND_INTERVAL_SEC
     )
+    
+    previous_ball_entries = None
+    stable_ball_frames = 0
+    cue_info = None
     
     
     start_time = time.time() if debug else None
@@ -538,8 +678,8 @@ def main(
             should_send_pockets = (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC)
             if should_send_pockets:
                 if debug:
-                    print("Sending pockets")
-                pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)
+
+                    pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)
                 
                 if usb_sender.send(line_pockets(pockets_xy_m)):
                     _pockets_have_been_sent = True
@@ -577,26 +717,27 @@ def main(
         # BALL DETECTION and DETERMINATION IF THEY SHOULD BE CONSIDERED
         yolo_detections = []
         try:
-            yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame,img_size=960)
+            yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame, img_size=960)
         except Exception as e:
             print("[yolov5] ball detection failed:", e)
             yolo_detections = []
-            
+
         # Convert detections from pixels -> meters using the current homography.
         centers_px = [(int(d["cx"]), int(d["cy"])) for d in yolo_detections]
-        centers_m  = _detector.warp_px_to_m(_H_cached, centers_px)
-        
+        centers_m = _detector.warp_px_to_m(_H_cached, centers_px)
+
         entries = []
-        
+
         for det, (xm, ym) in zip(yolo_detections, centers_m):
             if xm is None or ym is None:
                 continue
+
             type = p2p_classification_to_balltype(int(det.get("cls", -1)))
-            
+
             # We do not need diamonds and other stuff to be processed, which is classified as unknown
             if type == "u" and not process_unknowns:
                 continue
-                
+
             entries.append({
                 "type": type,
                 "x": float(xm),
@@ -604,8 +745,13 @@ def main(
                 "conf": float(det.get("confidence", 0.0)),
             })
 
-        
-        # Convert entries to to current format in issues 64 and 70.    
+        previous_ball_entries, stable_ball_frames, cue_tracking_enabled, layout_delta_m = _update_ball_stability(
+            previous_ball_entries,
+            entries,
+            stable_ball_frames
+        )
+
+        # Convert entries to current transport format from issues 64 and 70.
         now_sec = time.time()
         entries_to_send = ball_transport.push(entries, now_sec)
 
@@ -623,40 +769,101 @@ def main(
             )
 
             sent = usb_sender.send(data)
+            
             if sent:
                 _table_fail_streak = 0
             if not sent and debug:
                 print("[USB] Ball transfer failed. The sender will retry on the next send.")
             elif sent and debug:
                 print(data)
-        
-          
-        if debug_detection:
-        # UPDATED: cv2-only debug overlay (no matplotlib).
-            for det in yolo_detections:
-                x1 = int(det["x1"]); y1 = int(det["y1"]); x2 = int(det["x2"]); y2 = int(det["y2"])
-                cx = int(det["cx"]); cy = int(det["cy"])
-                cls_id = int(det.get("cls", -1))
-                conf = float(det.get("confidence", 0.0))
 
-                cv2.rectangle(raw_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)  # cyan
-                cv2.circle(raw_frame, (cx, cy), 3, (255, 255, 0), -1)
-                cv2.putText(
-                    raw_frame,
-                    f"{p2p_classification_to_balltype(cls_id)} {conf:.2f}",
-                    (x1, max(0, y1 - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 0),
-                    1
+        cue_transport = None
+
+        cue_ball_det = next(
+            (det for det in yolo_detections if p2p_classification_to_balltype(int(det.get("cls", -1))) == "c"),
+            None
+        )
+
+        cue_gate_open = cue_tracking_enabled or debug_static or debug_cue
+
+        if cue_gate_open and cue_ball_det is not None:
+            cue_ball_radius_px = max(
+                4.0,
+                0.25 * (
+                    float(cue_ball_det["x2"] - cue_ball_det["x1"]) +
+                    float(cue_ball_det["y2"] - cue_ball_det["y1"])
                 )
+            )
 
-            cv2.imshow("debug-detections", raw_frame)
+            cue_info = _detector.detect_cue_stick(
+                frame_bgr=frame,
+                cue_ball_px=(float(cue_ball_det["cx"]), float(cue_ball_det["cy"])),
+                cue_ball_radius_px=float(cue_ball_radius_px),
+                table_polygon_px=inner_corners if inner_corners is not None else corners,
+                roi_radius_scale=14.0,
+                min_line_length_px=max(12, int(cue_ball_radius_px * 1.8)),
+                max_center_line_distance_scale=1.75,
+                line_circle_gate_scale=1.35,
+                canny1=35,
+                canny2=120,
+                hough_threshold=18,
+                max_line_gap=32,
+                angle_tolerance_deg=9.0,
+                debug=debug_cue
+            )
+
+
+            # print("[cue] cue_info =", cue_info)
+
+            if cue_info is not None and float(cue_info["confidence"]) >= float(CUE_MIN_CONFIDENCE):
+                cue_points_px = [
+                    cue_info["line_point_px"],
+                    cue_info["direction_probe_px"],
+                    cue_info["hit_point_px"],
+                ]
+                cue_points_m = _detector.warp_px_to_m(_H_cached, cue_points_px)
+
+                if all(px is not None and py is not None for px, py in cue_points_m):
+                    (line_x_m, line_y_m), (probe_x_m, probe_y_m), (hit_x_m, hit_y_m) = cue_points_m
+
+                    dir_x_m = float(probe_x_m - line_x_m)
+                    dir_y_m = float(probe_y_m - line_y_m)
+                    dir_length_m = float(np.hypot(dir_x_m, dir_y_m))
+
+                    if dir_length_m > 1e-6:
+                        cue_transport = {
+                            "line_point_m": (float(line_x_m), float(line_y_m)),
+                            "direction_m": (float(dir_x_m / dir_length_m), float(dir_y_m / dir_length_m)),
+                            "hit_point_m": (float(hit_x_m), float(hit_y_m)),
+                            "confidence": float(cue_info["confidence"]),
+                        }
+
+                        cue_payload = line_cue_stick(cue_transport)
+                        cue_sent = usb_sender.send(cue_payload)
+
+                        if debug:
+                            if cue_sent:
+                                print(cue_payload)
+                            else:
+                                print("[USB] Cue transfer failed. The sender will retry on the next frame.")
+        else:
+            cue_info = None
+            if debug_cue and cue_ball_det is None:
+                print("[cue] Cue ball not detected by YOLO in this frame.")
+            elif debug_cue and not cue_tracking_enabled and not debug_static:
+                print(f"[cue] Waiting for stable layout: {stable_ball_frames}/{CUE_TRACK_STABLE_REQUIRED_FRAMES}")
+                
+        if debug_detection:
+            _show_ball_debug_windows(raw_frame, yolo_detections)
+
+        if debug_cue:
+            _show_cue_debug_windows(raw_frame, cue_info, stable_ball_frames, layout_delta_m)
+
+        if debug_detection or debug_cue:
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 break
-        
 
-    if debug_detection or debug_static or debug_pocket_display or debug:
+    if debug_detection or debug_static or debug_pocket_display or debug_cue or  debug:
         # log_file.close()
         cv2.destroyAllWindows()
     if capture is not None:
@@ -674,10 +881,14 @@ if __name__ == "__main__":
     
     # Debug switches
     parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
-    parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
+    # parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-conf", type=str, default=None, help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-cue",action="store_true", help="If set to true, a cue stick debug overlay is displayed.")
+    parser.add_argument("--debug-use-config",action="store_true", help="If set to true, a Predator 9ft virtual debug table is used for testing otherwise we load in the last_environment.json.")
+    
     parser.add_argument("--debug-detection", action="store_true", help="If true, the script assumes you are displaying detections results on a 2D static image.")
     parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
-    parser.add_argument("--debug-image", type=str, default="./pix2pockets/8-Ball-Pool-3/train/images/test.png", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-image", type=str, default="../../../candidate_testing_images/test.jpg", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
     parser.add_argument("--debug-offline", action="store_true", help="If this flag is set to true, there is no need to connect to the debug editor or the application. Works with static images and feed from phone.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
@@ -696,22 +907,51 @@ if __name__ == "__main__":
     parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
-    # parser.add_argument("--ball-radius-range", type=str, default="6,80", help="Comma-separated min,max radius for Hough circles, e.g. 8,28")
-    # parser.add_argument("--detection-mode", type=int, default=DetectionMode.YOLO.value, help="Detection mode.\r\n1) Tresholding\r\n2) YOLOv8\r\n3) Both")
+    parser.add_argument("--qr-enabled", action="store_true", help="Enables QR code reader mode.")
+    parser.add_argument("--qr-required-count", type=int, default=6, help="Number of QR codes used. Must be a symetric number not lower than 4.")
     
+    
+    
+    parser.add_argument("--paper-size-m", type=float, default=0.16, help="Size of the square paper with the QR code on it.")
+    
+    
+    parser.add_argument("--qr-scan-interval-frames", type=int, default=3, help="Scan QR code every N frames.")
+    parser.add_argument("--qr-stable-frames-required", type=int, default=3, help="Scan QR code every N frames.")
+    parser.add_argument("--qr-resend-interval", type=int, default=3, help="Resend the QR code every N frames.")
+        
     args = parser.parse_args()
+    
+       
+    count = args.qr_required_count
+    if args.qr_enabled:
+        if count is None or count < 4 or count > 12 or count % 2 != 0:
+            print("The required number of QR code is between 4 and 12 and must be an even number.") 
+            exit()
     
     if args.debug_static and args.debug_phone:
         print("Static image analysis and live capture cannot run at the same time.")
+        exit()
     if (not args.debug_static and not args.debug_phone) and args.debug:
         print("Either static image analysis or live capture must be enabled while running in debug mode.")
+        exit()
+        
+    if args.debug_use_config:
+        args.debug_conf = "../Configuration/predator_9ft_virtual_debug.json"
         
     if args.debug_offline and not args.debug:
         print("You need to run this in general debug mode.")
+        exit()
         
     if args.debug_offline and not args.debug_static:
         print("Offline mode means, you need to provide static images to your feed.")
+        exit()
         
+    # work-res and performance  cannot be set together choose one.
+    
+    if args.work_res is not None and args.performance:
+        print("Performance is set to true, so working resolution is going to be overriden to 720p.")
+        args.work_res = "1280x720"
+    
     
     if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
@@ -719,10 +959,12 @@ if __name__ == "__main__":
         print(f"[calib-only] Running precompute_all for {calib_dims} (force={args.force_calib})")
         calibrator = Calibrator(calib_dims)
         calibrator.run_calibration_only(calib_dims)
-        print("Done.")
+        print("Done. Re-run the application without the --calibrate-only tag.")
+        exit()        
     if args.synthetic:
         print("Testing synthetic data to verify table object drawing function.")
-        synth_test()
+        exit()
+        # synth_test()
     else:
         try:
             # if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
@@ -741,6 +983,7 @@ if __name__ == "__main__":
                 args.perf_res,
                 args.fallback_res,
                 args.debug_editor,
+                args.debug_cue,
                 args.debug_detection,
             )
         except Exception as e:

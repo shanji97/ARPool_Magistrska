@@ -160,6 +160,335 @@ class ObjectDetector:
         except Exception as e:
             print(f"Error fetching GPU info: {e}")
             return False, cuda_version, vram
+        
+    @staticmethod
+    def _normalize_vector_2d(vx, vy):
+        length = float(np.hypot(vx, vy))
+        if length <= 1e-6:
+            return (.0,.0)
+        return (float(vx/length), float(vy/length))
+    
+    @staticmethod
+    def _axis_angle_deg(vx,vy): 
+        angle = float(np.degrees(np.arctan2(vy,vx)))
+        while angle < 0.0:
+            angle += 180
+        while angle > 180:
+            angle -= 180
+        return angle
+    
+    @staticmethod
+    def _axis_angle_delta_deg(a_deg, b_deg):
+        delta = abs(float(a_deg) - float(b_deg)) % 180
+        return min(delta, 180 - delta)
+            
+    @staticmethod
+    def _distance_point_to_segment(px, py, x1, y1, x2, y2):
+        vx = float(x2 - x1)
+        vy = float(y2 - y1)
+        denom = vx * vx + vy * vy
+        if denom <= 1e-6:
+            return float(np.hypot(px - x1, py - y1))
+
+        t = ((float(px) - float(x1)) * vx + (float(py) - float(y1)) * vy) / denom
+        t = max(0.0, min(1.0, t))
+        qx = float(x1) + t * vx
+        qy = float(y1) + t * vy
+        return float(np.hypot(float(px) - qx, float(py) - qy))
+    
+    @staticmethod
+    def _distance_point_to_infinite_line(px, py, x1, y1, x2, y2):
+        vx = float(x2 - x1)
+        vy = float(y2 - y1)
+        denom = float(np.hypot(vx, vy))
+        if denom <= 1e-6:
+            return float("inf")
+        return float(abs((float(py) - float(y1)) * vx - (float(px) - float(x1)) * vy) / denom)
+    
+    @staticmethod
+    def _line_circle_intersections(line_point_px, line_dir_px, circle_center_px, circle_radius_px):
+        px, py = map(float, line_point_px)
+        dx, dy = ObjectDetector._normalize_vector_2d(*line_dir_px)
+        if abs(dx) <= 1e-6 and abs(dy) <= 1e-6:
+            return []
+
+        cx, cy = map(float, circle_center_px)
+        r = float(circle_radius_px)
+
+        ox = px - cx
+        oy = py - cy
+
+        b = 2.0 * (dx * ox + dy * oy)
+        c = ox * ox + oy * oy - r * r
+        disc = b * b - 4.0 * c
+
+        if disc < 0.0:
+            return []
+
+        root = float(np.sqrt(max(0.0, disc)))
+        t1 = (-b - root) * 0.5
+        t2 = (-b + root) * 0.5
+
+        return [
+            (px + t1 * dx, py + t1 * dy),
+            (px + t2 * dx, py + t2 * dy),
+        ]
+        
+    def detect_cue_stick(
+        self,
+        frame_bgr,
+        cue_ball_px,
+        cue_ball_radius_px,
+        table_polygon_px=None,
+        roi_radius_scale=14.0,
+        min_line_length_px=None,
+        max_center_line_distance_scale=1.75,
+        line_circle_gate_scale=1.35,
+        canny1=35,
+        canny2=120,
+        hough_threshold=18,
+        max_line_gap=32,
+        angle_tolerance_deg=9.0,
+        debug=False
+    ):
+        """
+        Detect a cue line near the cue ball from a single overhead frame.
+
+        This version is intentionally more permissive than the previous one.
+        It does not require a Hough segment endpoint to be close to the cue ball.
+        Instead, it accepts segments whose infinite line passes close to the cue ball.
+
+        Returns:
+            {
+                "line_point_px": (x, y),
+                "direction_px": (dx, dy),
+                "direction_probe_px": (x, y),
+                "hit_point_px": (x, y),
+                "confidence": float,
+                "candidate_count": int,
+                "debug_mask": np.ndarray | None,
+                "debug_edges": np.ndarray | None,
+            }
+            or None
+        """
+        if frame_bgr is None or cue_ball_px is None:
+            return None
+
+        cx, cy = map(float, cue_ball_px)
+        ball_radius_px = max(float(cue_ball_radius_px), 4.0)
+
+        h, w = frame_bgr.shape[:2]
+        roi_radius_px = int(max(ball_radius_px * float(roi_radius_scale), ball_radius_px * 7.0))
+        min_line_length_px = int(
+            max(12.0, ball_radius_px * 1.8) if min_line_length_px is None else max(8.0, float(min_line_length_px))
+        )
+
+        x0 = max(0, int(round(cx - roi_radius_px)))
+        y0 = max(0, int(round(cy - roi_radius_px)))
+        x1 = min(w, int(round(cx + roi_radius_px)))
+        y1 = min(h, int(round(cy + roi_radius_px)))
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_eq = clahe.apply(gray)
+
+        edges_a = cv2.Canny(gray, int(canny1), int(canny2))
+        edges_b = cv2.Canny(gray_eq, int(max(10, canny1 * 0.7)), int(max(20, canny2 * 0.8)))
+        edges = cv2.bitwise_or(edges_a, edges_b)
+        edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
+
+        cue_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(cue_mask, (int(round(cx)), int(round(cy))), int(roi_radius_px), 255, -1)
+        cv2.circle(
+            cue_mask,
+            (int(round(cx)), int(round(cy))),
+            int(round(ball_radius_px * 1.05)),
+            0,
+            -1
+        )
+
+        if table_polygon_px is not None:
+            table_mask = np.zeros((h, w), dtype=np.uint8)
+            polygon = np.asarray(table_polygon_px, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(table_mask, [polygon], 255)
+            cue_mask = cv2.bitwise_and(cue_mask, table_mask)
+
+        masked_edges = cv2.bitwise_and(edges, cue_mask)
+        roi_edges = masked_edges[y0:y1, x0:x1]
+        if roi_edges.size == 0:
+            if debug:
+                print("[cue] Empty ROI edge image.")
+            return None
+
+        lines = cv2.HoughLinesP(
+            roi_edges,
+            rho=1,
+            theta=np.pi / 180.0,
+            threshold=int(hough_threshold),
+            minLineLength=int(min_line_length_px),
+            maxLineGap=int(max_line_gap)
+        )
+
+        if lines is None or len(lines) == 0:
+            if debug:
+                print(
+                    f"[cue] No Hough lines. "
+                    f"r={ball_radius_px:.1f}px roi={roi_radius_px}px minLen={min_line_length_px}px "
+                    f"canny=({canny1},{canny2}) hough={hough_threshold} gap={max_line_gap}"
+                )
+            return None
+
+        rejected_too_short = 0
+        rejected_too_far_from_axis = 0
+        rejected_no_hit = 0
+
+        candidates = []
+
+        for raw in lines.reshape(-1, 4):
+            lx1, ly1, lx2, ly2 = raw
+            lx1 += x0
+            lx2 += x0
+            ly1 += y0
+            ly2 += y0
+
+            length = float(np.hypot(lx2 - lx1, ly2 - ly1))
+            if length < float(min_line_length_px):
+                rejected_too_short += 1
+                continue
+
+            center_line_distance = self._distance_point_to_infinite_line(cx, cy, lx1, ly1, lx2, ly2)
+            if center_line_distance > float(ball_radius_px * float(max_center_line_distance_scale)):
+                rejected_too_far_from_axis += 1
+                continue
+
+            d1 = float(np.hypot(lx1 - cx, ly1 - cy))
+            d2 = float(np.hypot(lx2 - cx, ly2 - cy))
+
+            far_pt = (float(lx1), float(ly1)) if d1 >= d2 else (float(lx2), float(ly2))
+
+            seg_dir_x = float(lx2 - lx1)
+            seg_dir_y = float(ly2 - ly1)
+            seg_dir_x, seg_dir_y = self._normalize_vector_2d(seg_dir_x, seg_dir_y)
+            if abs(seg_dir_x) <= 1e-6 and abs(seg_dir_y) <= 1e-6:
+                continue
+
+            to_center_x = float(cx - far_pt[0])
+            to_center_y = float(cy - far_pt[1])
+
+            if (seg_dir_x * to_center_x + seg_dir_y * to_center_y) < 0.0:
+                seg_dir_x = -seg_dir_x
+                seg_dir_y = -seg_dir_y
+
+            intersections = self._line_circle_intersections(
+                line_point_px=far_pt,
+                line_dir_px=(seg_dir_x, seg_dir_y),
+                circle_center_px=(cx, cy),
+                circle_radius_px=float(ball_radius_px * float(line_circle_gate_scale))
+            )
+
+            if not intersections:
+                rejected_no_hit += 1
+                continue
+
+            forward_hits = []
+            for px_hit, py_hit in intersections:
+                proj = ((float(px_hit) - far_pt[0]) * seg_dir_x) + ((float(py_hit) - far_pt[1]) * seg_dir_y)
+                if proj >= 0.0:
+                    forward_hits.append((float(px_hit), float(py_hit), float(proj)))
+
+            if not forward_hits:
+                rejected_no_hit += 1
+                continue
+
+            hit_point = min(forward_hits, key=lambda item: item[2])
+            axis_angle = self._axis_angle_deg(seg_dir_x, seg_dir_y)
+
+            score = float(length) - (12.0 * center_line_distance)
+
+            candidates.append({
+                "far_pt": (float(far_pt[0]), float(far_pt[1])),
+                "hit_point": (float(hit_point[0]), float(hit_point[1])),
+                "dir": (float(seg_dir_x), float(seg_dir_y)),
+                "angle": float(axis_angle),
+                "length": float(length),
+                "line_dist": float(center_line_distance),
+                "score": float(score),
+            })
+
+        if not candidates:
+            if debug:
+                print(
+                    f"[cue] All cue candidates rejected. "
+                    f"rawLines={len(lines.reshape(-1, 4))} "
+                    f"tooShort={rejected_too_short} "
+                    f"tooFarAxis={rejected_too_far_from_axis} "
+                    f"noHit={rejected_no_hit}"
+                )
+            return None
+
+        dominant = max(candidates, key=lambda item: item["score"])
+        dominant_angle = float(dominant["angle"])
+
+        filtered = [
+            item for item in candidates
+            if self._axis_angle_delta_deg(item["angle"], dominant_angle) <= float(angle_tolerance_deg)
+        ]
+
+        if not filtered:
+            if debug:
+                print(f"[cue] No angle-consistent candidates after clustering. candidates={len(candidates)}")
+            return None
+
+        weight_sum = float(sum(max(1.0, item["score"]) for item in filtered))
+        if weight_sum <= 1e-6:
+            return None
+
+        avg_far_x = sum(item["far_pt"][0] * max(1.0, item["score"]) for item in filtered) / weight_sum
+        avg_far_y = sum(item["far_pt"][1] * max(1.0, item["score"]) for item in filtered) / weight_sum
+        avg_hit_x = sum(item["hit_point"][0] * max(1.0, item["score"]) for item in filtered) / weight_sum
+        avg_hit_y = sum(item["hit_point"][1] * max(1.0, item["score"]) for item in filtered) / weight_sum
+        avg_dir_x = sum(item["dir"][0] * max(1.0, item["score"]) for item in filtered)
+        avg_dir_y = sum(item["dir"][1] * max(1.0, item["score"]) for item in filtered)
+        avg_dir_x, avg_dir_y = self._normalize_vector_2d(avg_dir_x, avg_dir_y)
+
+        if abs(avg_dir_x) <= 1e-6 and abs(avg_dir_y) <= 1e-6:
+            return None
+
+        probe_distance_px = float(max(ball_radius_px * 3.0, 20.0))
+        direction_probe_px = (
+            float(avg_far_x + avg_dir_x * probe_distance_px),
+            float(avg_far_y + avg_dir_y * probe_distance_px)
+        )
+
+        avg_length = float(sum(item["length"] for item in filtered) / len(filtered))
+        avg_line_dist = float(sum(item["line_dist"] for item in filtered) / len(filtered))
+
+        confidence = 0.25
+        confidence += min(0.25, 0.08 * float(len(filtered)))
+        confidence += min(0.30, avg_length / max(1.0, float(roi_radius_px)))
+        confidence += min(0.20, 1.0 - (avg_line_dist / max(1.0, float(ball_radius_px * max_center_line_distance_scale))))
+        confidence = float(max(0.0, min(1.0, confidence)))
+
+        if debug:
+            print(
+                f"[cue] detected candidates={len(candidates)} filtered={len(filtered)} "
+                f"avgLen={avg_length:.1f}px avgLineDist={avg_line_dist:.2f}px conf={confidence:.2f}"
+            )
+
+        return {
+            "line_point_px": (float(avg_far_x), float(avg_far_y)),
+            "direction_px": (float(avg_dir_x), float(avg_dir_y)),
+            "direction_probe_px": (float(direction_probe_px[0]), float(direction_probe_px[1])),
+            "hit_point_px": (float(avg_hit_x), float(avg_hit_y)),
+            "confidence": confidence,
+            "candidate_count": int(len(filtered)),
+            "debug_mask": cue_mask if debug else None,
+            "debug_edges": masked_edges if debug else None,
+        }
 
     # -----------------------------
     # Corner ordering + smoothing
@@ -296,8 +625,9 @@ class ObjectDetector:
         py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
         return np.array([px, py], dtype=np.float32)
 
-    @staticmethod
+    
     def detect_inner_cushion_corners(
+        self,
         frame_bgr,
         approx_table_corners_px,
         roi_expand=0.06,
@@ -409,8 +739,7 @@ class ObjectDetector:
         inner = np.array([TL, TR, BL, BR], dtype=np.float32)
         # Re-order using existing ordering logic to avoid flips
         # Note: _order_corners returns [TL,TR,BL,BR]
-        od = ObjectDetector(label_map={}, debug=False)  # tiny helper instance for ordering
-        inner_ordered = od._order_corners(inner)
+        inner_ordered = self._order_corners(inner)
 
         return inner_ordered, edges
 
@@ -819,3 +1148,6 @@ class ObjectDetector:
                 best_d2 = d2
                 best = (t, conf)
         return best
+    
+    
+    

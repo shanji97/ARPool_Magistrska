@@ -146,7 +146,7 @@ class EnvironmentConfig:
 
     __loaded_json_configuration_name: str = ""
 
-    DEFAULT_BALLS = BallSpec(.05715,.068)
+    DEFAULT_BALLS = BallSpec(.05715,0.1795)
 
     SCHEMA_VERSION = 2 # Bump every time when a change is made (add/rename/delete). Reset to 1 for final shippment.
 
@@ -164,7 +164,7 @@ class EnvironmentConfig:
             cloth_upper_hsv=self._tuple_or_none(table_data.get("cloth_upper_hsv"))   # Added v2
         )
 
-    def _ensure_dir(path: str):
+    def _ensure_dir(self, path: str):
         directory = os.path.dirname(path)
         if directory and not os.path.exists(directory):
             os.makedirs(directory, exist_ok=True)
@@ -392,7 +392,7 @@ class EnvironmentConfig:
     
     def set_up_camera_height_mm(self):
         print("\nEnter camera height from FLOOR (m), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
-        return self._read_float("Camera height (m)", 1.5, 4.0, 2.5)
+        return self._read_float("Camera height (mm)", 1000, 4000, 2500)
 
     def get_debug_env_config(self, config_name: str) -> EnvironmentConfig:
         return self.get_environment_config(False, True, config_name, True)
@@ -450,8 +450,9 @@ class EnvironmentConfig:
             pockets = self.PRESET_POCKETS[0][1]
             camera_height_mm = 2500
             
+        camera_height_m = camera_height_mm / 1000
         env = EnvironmentConfig(table,
                                 pockets,
                                 self.DEFAULT_BALLS,
-                                CameraSpec(camera_height_mm))
+                                CameraSpec(camera_height_m))
         return self.save_environment(env, cache_path)

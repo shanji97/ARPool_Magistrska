@@ -29,10 +29,10 @@ from reportlab.lib.utils import ImageReader
 # CONFIGURATION
 # -----------------------------
 
-QR_SIZE_MM = 200.0
+QR_SIZE_MM = 165
 DPI = 600
 
-OUTPUT_FILE = "qr_markers_200mm_A4.pdf"
+OUTPUT_FILE = f"qr_markers_{QR_SIZE_MM}mm_A4.pdf"
 
 NUMBER_OF_MARKERS = 12
 

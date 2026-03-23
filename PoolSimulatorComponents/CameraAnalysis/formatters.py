@@ -39,6 +39,27 @@ def line_pockets(pockets_xy, decimals: int = 7):
 def line_configuration_name(configuration_name: str):
     return "E " + configuration_name
 
+def line_cue_stick(cue_data, pos_decimals=4, dir_decimals=4, conf_decimals=2):
+    line_x, line_y = cue_data["line_point_m"]
+    dir_x, dir_y = cue_data["direction_m"]
+    hit_x, hit_y = cue_data["hit_point_m"]
+    confidence = float(cue_data["confidence"])
+
+    return (
+        f"s "
+        f"{line_x:.{pos_decimals}f},{line_y:.{pos_decimals}f};"
+        f"{dir_x:.{dir_decimals}f},{dir_y:.{dir_decimals}f};"
+        f"{hit_x:.{pos_decimals}f},{hit_y:.{pos_decimals}f};"
+        f"{confidence:.{conf_decimals}f}"
+    )
+
+def group_entries_by_type(entries):
+    groups = {}
+    for entry in entries:
+        groups.setdefault(entry["type"], []).append((float(entry["x"]), float(entry["y"])))
+    for key in groups.keys():
+        groups[key].sort(key=lambda p: (p[0], p[1]))
+    return groups
 
 def normalize_detection_entries(
     entries_px: List[Dict],
