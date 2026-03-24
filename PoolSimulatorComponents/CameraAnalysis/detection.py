@@ -379,7 +379,7 @@ def main(
          perf_resoulution: str ="1280x720",
          fallback_resoulution: str ="1280x720",
          is_editor_build: bool = False,
-         debug_cue: bool = False,
+         debug_cue_stick: bool = False,
          debug_detection: bool = False,
          process_unknowns: Optional[bool] = False
          ):
@@ -510,7 +510,7 @@ def main(
     previous_ball_entries = None
     stable_ball_frames = 0
     cue_info = None
-    
+    ball_data = None
     
     start_time = time.time() if debug else None
     
@@ -756,7 +756,7 @@ def main(
         entries_to_send = ball_transport.push(entries, now_sec)
 
         if entries_to_send is not None:
-            data = build_conf_transfer_block(
+            ball_data = build_conf_transfer_block(
                 pockets=None,
                 table_LW_m=None,
                 ball_diameter_m=ball_diameter_m,
@@ -768,14 +768,12 @@ def main(
                 vel_decimals=BALL_SEND_VELOCITY_DECIMALS
             )
 
-            sent = usb_sender.send(data)
-            
-            if sent:
+            sent_ball_data = usb_sender.send(ball_data)
+
+            if sent_ball_data:
                 _table_fail_streak = 0
-            if not sent and debug:
+            if not sent_ball_data and debug:
                 print("[USB] Ball transfer failed. The sender will retry on the next send.")
-            elif sent and debug:
-                print(data)
 
         cue_transport = None
 
@@ -784,7 +782,7 @@ def main(
             None
         )
 
-        cue_gate_open = cue_tracking_enabled or debug_static or debug_cue
+        cue_gate_open = cue_tracking_enabled or debug_static or debug_cue_stick
 
         if cue_gate_open and cue_ball_det is not None:
             cue_ball_radius_px = max(
@@ -803,17 +801,14 @@ def main(
                 roi_radius_scale=14.0,
                 min_line_length_px=max(12, int(cue_ball_radius_px * 1.8)),
                 max_center_line_distance_scale=1.75,
-                line_circle_gate_scale=1.35,
+                line_circle_gate_scale=1.05,
                 canny1=35,
                 canny2=120,
                 hough_threshold=18,
                 max_line_gap=32,
                 angle_tolerance_deg=9.0,
-                debug=debug_cue
+                debug=debug_cue_stick
             )
-
-
-            # print("[cue] cue_info =", cue_info)
 
             if cue_info is not None and float(cue_info["confidence"]) >= float(CUE_MIN_CONFIDENCE):
                 cue_points_px = [
@@ -841,29 +836,31 @@ def main(
                         cue_payload = line_cue_stick(cue_transport)
                         cue_sent = usb_sender.send(cue_payload)
 
-                        if debug:
-                            if cue_sent:
+                        if debug: 
+                            if cue_sent and sent_ball_data and cue_payload is not None and ball_data is not None:
+                                print(ball_data)
                                 print(cue_payload)
                             else:
                                 print("[USB] Cue transfer failed. The sender will retry on the next frame.")
         else:
             cue_info = None
-            if debug_cue and cue_ball_det is None:
+            if debug_cue_stick and cue_ball_det is None:
                 print("[cue] Cue ball not detected by YOLO in this frame.")
-            elif debug_cue and not cue_tracking_enabled and not debug_static:
+            elif debug_cue_stick and not cue_tracking_enabled and not debug_static:
                 print(f"[cue] Waiting for stable layout: {stable_ball_frames}/{CUE_TRACK_STABLE_REQUIRED_FRAMES}")
                 
+        
         if debug_detection:
             _show_ball_debug_windows(raw_frame, yolo_detections)
 
-        if debug_cue:
+        if debug_cue_stick:
             _show_cue_debug_windows(raw_frame, cue_info, stable_ball_frames, layout_delta_m)
 
-        if debug_detection or debug_cue:
+        if debug_detection or debug_cue_stick:
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 break
 
-    if debug_detection or debug_static or debug_pocket_display or debug_cue or  debug:
+    if debug_detection or debug_static or debug_pocket_display or debug_cue_stick or  debug:
         # log_file.close()
         cv2.destroyAllWindows()
     if capture is not None:

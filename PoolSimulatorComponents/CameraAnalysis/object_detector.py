@@ -1148,6 +1148,3 @@ class ObjectDetector:
                 best_d2 = d2
                 best = (t, conf)
         return best
-    
-    
-    
