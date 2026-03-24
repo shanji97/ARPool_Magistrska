@@ -1,3 +1,4 @@
+// Attach to: Ball placeholder prefab root in PoolSetup scene
 using TMPro;
 using UnityEngine;
 
@@ -31,7 +32,7 @@ public class BallOverrideSelectable : MonoBehaviour
     }
 
     /// <summary>
-    /// Wire this to your Meta interaction event on poke/ray/select.
+    /// Wire this to your Meta interaction event on ray select.
     /// </summary>
     public void SelectThisBall()
     {
@@ -52,7 +53,8 @@ public class BallOverrideSelectable : MonoBehaviour
 
         if (debugLabel != null && RuntimeBall != null)
         {
-            debugLabel.text = $"{RuntimeBall.BallType} #{RuntimeBall.BallId}";
+            debugLabel.text =
+                $"{RuntimeBall.BallType} #{RuntimeBall.BallId} [{RuntimeBall.UserOverrides}]";
         }
     }
 

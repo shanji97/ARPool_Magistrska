@@ -14,37 +14,54 @@ public class TableService : MonoBehaviour
     public byte DiamondCount { get; private set; } = 0;
     public bool HasAllPockets() => PocketCount == MAX_POCKET_COUNT;
 
+    [Header("Ball Visualization")]
+    public GameObject BallViewPrefab;
+    public Transform BallViewsParent;
+    public bool EnableBallVisualization = true;
+    public bool RequireQrAlignmentBeforeBallVisualization = true;
+    public bool DebugBypassQrAlignmentGate = false;
+    public float BallViewSurfaceLiftM = 0.002f;
+    public float BallReuseMatchRadiusM = 0.09f;
+    public bool VerboseBallLogs = true;
+
+    public bool QrAlignmentConfirmedForBallVisualization { get; private set; } = false;
+
+    private readonly List<IncomingDetectedBallRecord> _latestDetectedBallSnapshot = new();
+    private readonly Dictionary<Ball, GameObject> _ballViewsByBall = new();
+    private TableStateEntry _activeTableStateEntry;
+    private int _ballViewSequence = 0;
+
     [Header("Diamond Debug Preview")]
     public bool ShowComputedDiamondPreview = true;
-    public bool ShowDiamondEditorGizmos = true; // ADDED: editor-only scene/game gizmos
-    public bool ShowDiamondRuntimeMarkers = true; // ADDED: Quest-visible runtime preview
-    public bool HideDiamondPreviewAfterFinalize = true; // ADDED: preview is mainly for setup stage
-    public bool ShowDiamondIndices = true; // ADDED: editor labels for quick validation
+    public bool ShowDiamondEditorGizmos = true;
+    public bool ShowDiamondRuntimeMarkers = true;
+    public bool HideDiamondPreviewAfterFinalize = true;
+    public bool ShowDiamondIndices = true;
 
     [Tooltip("Optional prefab for runtime diamond preview markers. Falls back to primitive spheres if null.")]
-    public GameObject DiamondMarkerPrefab; // ADDED
+    public GameObject DiamondMarkerPrefab;
 
     [Tooltip("Optional parent for runtime diamond markers. Falls back to MarkersParent, then this transform.")]
-    public Transform DiamondMarkersParent; // ADDED
+    public Transform DiamondMarkersParent;
 
     [Tooltip("Extra height above the pocket marker plane to avoid z-fighting.")]
-    public float DiamondSurfaceLift = 0.015f; // ADDED
+    public float DiamondSurfaceLift = 0.015f;
 
     [Tooltip("Radius of editor gizmo spheres.")]
-    public float DiamondGizmoRadius = 0.015f; // ADDED
+    public float DiamondGizmoRadius = 0.015f;
 
     [Tooltip("Scale of fallback runtime spheres when DiamondMarkerPrefab is null.")]
-    public float DiamondRuntimeScale = 0.02f; // ADDED
+    public float DiamondRuntimeScale = 0.02f;
 
-    public Color DiamondGizmoColor = Color.yellow; // ADDED
-    public Color DiamondRuntimeColor = Color.yellow; // ADDED
+    public Color DiamondGizmoColor = Color.yellow;
+    public Color DiamondRuntimeColor = Color.yellow;
 
-    private readonly List<GameObject> _runtimeDiamondMarkers = new(); // ADDED
-    private List<DiamondMarkerData> _computedDiamondMarkerData = new(); // ADDED
+    private readonly List<GameObject> _runtimeDiamondMarkers = new();
+    private List<DiamondMarkerData> _computedDiamondMarkerData = new();
 
     [Header("Diamond Rail Anchor Calibration")]
     public float DiamondLongRailCornerInsetM = 0.09f; // MODIFIED: long rail corner-pocket inset
-    public float DiamondLongRailSidePocketInsetM = 0.07f; // ADDED: long rail side-pocket inset
+    public float DiamondLongRailSidePocketInsetM = 0.07f;
     public float DiamondShortRailCornerInsetM = 0.06f; // MODIFIED: short rail corner-pocket inset 
 
 
@@ -78,50 +95,50 @@ public class TableService : MonoBehaviour
 
 
     [Header("Near-Pocket Suppression")]
-    public bool EnableNearPocketSuppression = true; // ADDED: master switch for issue #83
-    public bool TreatNearPocketZoneAsPocketed = true; // ADDED: inner zone means "pocketed/suppressed"
-    public bool ShowNearPocketRuntimeMarkers = true; // ADDED: Quest-visible debug markers
-    public bool VerboseNearPocketLogs = true; // ADDED: deterministic logging for thesis/debug
+    public bool EnableNearPocketSuppression = true;
+    public bool TreatNearPocketZoneAsPocketed = true;
+    public bool ShowNearPocketRuntimeMarkers = true;
+    public bool VerboseNearPocketLogs = true;
 
     [Tooltip("Ball center distance to nearest pocket center below which the ball is treated as pocketed/suppressed.")]
-    public float PocketCaptureThresholdM = 0.09f; // ADDED
+    public float PocketCaptureThresholdM = 0.09f;
 
     [Tooltip("Ball center distance to nearest pocket center below which the ball is treated as near-pocket / ambiguous.")]
-    public float PocketAmbiguousThresholdM = 0.13f; // ADDED
+    public float PocketAmbiguousThresholdM = 0.13f;
 
     [Tooltip("Extra distance required before a previously suppressed ball becomes visible again. Prevents flicker/toggling.")]
-    public float PocketSuppressionReleaseMarginM = 0.02f; // ADDED
+    public float PocketSuppressionReleaseMarginM = 0.02f;
 
     [Tooltip("2D distance used to match current detections against existing near-pocket memory entries.")]
-    public float PocketSuppressionMatchRadiusM = 0.08f; // ADDED
+    public float PocketSuppressionMatchRadiusM = 0.08f;
 
     [Tooltip("How long transient near-pocket suppression memory is retained for non-special balls.")]
-    public float PocketSuppressionMemorySeconds = 0.75f; // ADDED
+    public float PocketSuppressionMemorySeconds = 0.75f;
 
     [Tooltip("Extra height above the table plane for near-pocket debug markers.")]
-    public float NearPocketDebugLift = 0.03f; // ADDED
+    public float NearPocketDebugLift = 0.03f;
 
     [Tooltip("Scale of fallback near-pocket runtime spheres when NearPocketDebugMarkerPrefab is null.")]
-    public float NearPocketDebugMarkerScale = 0.028f; // ADDED
+    public float NearPocketDebugMarkerScale = 0.028f;
 
     [Tooltip("Optional prefab for near-pocket runtime debug markers. Falls back to primitive spheres if null.")]
-    public GameObject NearPocketDebugMarkerPrefab; // ADDED
+    public GameObject NearPocketDebugMarkerPrefab;
 
     [Tooltip("Optional parent for near-pocket runtime debug markers. Falls back to MarkersParent, then this transform.")]
-    public Transform NearPocketDebugMarkersParent; // ADDED
+    public Transform NearPocketDebugMarkersParent;
 
-    public Color NearPocketAmbiguousColor = new(1f, 0.65f, 0f, 1f); // ADDED: orange
-    public Color NearPocketPocketedColor = Color.red; // ADDED
-    public Color NearPocketSpecialColor = Color.magenta; // ADDED
+    public Color NearPocketAmbiguousColor = new(1f, 0.65f, 0f, 1f);
+    public Color NearPocketPocketedColor = Color.red;
+    public Color NearPocketSpecialColor = Color.magenta;
 
-    private readonly List<NearPocketBallMemory> _nearPocketBallMemory = new(); // ADDED
-    private readonly List<GameObject> _runtimeNearPocketMarkers = new(); // ADDED
+    private readonly List<NearPocketBallMemory> _nearPocketBallMemory = new();
+    private readonly List<GameObject> _runtimeNearPocketMarkers = new();
 
     // multiple booleans -> to byte 
-    public bool CueBallPocketed { get; private set; } = false; // ADDED
-    public bool EightBallPocketed { get; private set; } = false; // ADDED
-    public byte CueBallPocketIndex { get; private set; } = byte.MaxValue; // ADDED
-    public byte EightBallPocketIndex { get; private set; } = byte.MaxValue; // ADDED
+    public bool CueBallPocketed { get; private set; } = false;
+    public bool EightBallPocketed { get; private set; } = false;
+    public byte CueBallPocketIndex { get; private set; } = byte.MaxValue;
+    public byte EightBallPocketIndex { get; private set; } = byte.MaxValue;
 
 
     // Two bools for the price of one
@@ -143,7 +160,6 @@ public class TableService : MonoBehaviour
     // Keep this for compatibility with older code that still expects the old meaning.
     public bool ArePropertiesParsed() => Is2DTableSet() && IsTableHeightSet() && IsCameraFromFloorSet();
 
-    // Added: QR-aligned pocket placement only needs a valid table plane.
     public bool CanApplyQrAlignedPocketLayout() => IsTableHeightSet();
 
     public bool AreDiamondsParsed() => DiamondCount == MAX_DIAMOND_COUNT;
@@ -238,10 +254,10 @@ public class TableService : MonoBehaviour
     public const byte SolidCount = 7;
     public byte[] SolidBalls = new byte[StripeCount] { 1, 2, 3, 4, 5, 6, 7 };
 
-    public const byte MaxBallCount = SolidCount + StripeCount + 2;
+    public readonly byte MAX_BALL_COUNT = SolidCount + StripeCount + 2;
 
     // 0 - 6 solids, 7 eight, 8 - 14 stripes, cue 15
-    private List<Vector3Float> _balls = new(MaxBallCount);
+    private List<Vector3Float> _balls = null;
 
     private List<TableStateEntry> _tableStateEntries = null;
 
@@ -271,23 +287,24 @@ public class TableService : MonoBehaviour
         EnsureBallBufferSize();
 
         RawDetectedPocketXZ = new Vector2[MAX_POCKET_COUNT];
-    }
+            }
 
     public void LateUpdate()
     {
-        // MODIFIED: keep the existing pocket rectangle maintenance,
-        // but do not early-return because diamond preview and near-pocket debug state must still refresh.
         if (!LockFinalized && MaintainRectangleWhenLocked && _markers is not null)
-        {
             HandlePocketMarkers();
-        }
 
-        // ADDED: ISSUE-82 live diamond preview update.
         RefreshComputedDiamondPreview();
-
-        // ADDED: ISSUE-83 cleanup + debug marker refresh.
         CleanupExpiredNearPocketBallMemory();
         RefreshNearPocketDebugMarkers();
+        TryApplyCachedDetectedBallSnapshot();
+    }
+
+    private void Cleanup()
+    {
+        DestroyRuntimeDiamondMarkers();
+        DestroyNearPocketDebugMarkers();
+        DestroyBallViews();
     }
 
     public void OnDestroy()
@@ -337,13 +354,6 @@ public class TableService : MonoBehaviour
         }
 
         Gizmos.color = previousColor;
-    }
-
-    private void Cleanup()
-    {
-        DestroyRuntimeDiamondMarkers();
-        DestroyNearPocketDebugMarkers();
-
     }
 
     public void SetRawDetectedPocketXZ((float x, float z)[] pocketXZ)
@@ -1151,55 +1161,73 @@ public class TableService : MonoBehaviour
 
     public void PlaceBalls(float x, float y, byte id, float conf, float vx, float vy)
     {
-        // ADDED: ISSUE-83 runs before any smoothing or later ball assignment logic.
-        // This is intentionally a pre-placement suppression filter.
-        CleanupExpiredNearPocketBallMemory();
-
-        if (TryHandleNearPocketBall(x, y, id, conf, out PocketZoneBallState nearPocketState))
-        {
-            // ADDED: standard visualization / standard placement is intentionally suppressed here.
-            // Near-pocket balls are represented only by debug markers at this stage.
+        if (!TryMapIncomingBallToBallType(id, out BallType ballType))
             return;
-        }
 
-        // --------------------------------------------------------------------
-        // EXISTING / FUTURE NORMAL BALL PLACEMENT PATH CONTINUES BELOW
-        // --------------------------------------------------------------------
-        // Keep your numbered-ball assignment, user override UI, smoothing, and
-        // secondary Quest synchronization logic here. The important rule is:
-        //
-        //   issue #83 filter FIRST
-        //   smoothing SECOND
-        //   normal visualization / exercise logic AFTER THAT
-        //
-        // The current method body was intentionally incomplete already, so this
-        // implementation only adds the required deterministic suppression layer.
-        // --------------------------------------------------------------------
-
-        // Based on the game mode add a variable lenght of array. Set the
-        //if (AppSettings.Instance.GameMode == GameMode.LessonsMode)
-
-        //else { }
-
-        // If a ball was found and isn't in the buffer then add it later in the
-        // normal placement path, once ball identity assignment is finished.
-
-        if (AppSettings.Instance.Settings.DeviceInformation == DeviceInformation.PrimaryQuest)
-        {
-            // Send to other Quest 3 devices in the normal placement path later. # 
-        }
-
-        if ((id <= (byte)BallType.Cue))
-        {
-            // Normal placement / jitter distinction will stay here later.
-        }
-        else
-        {
-            // Generic solid/stripe handling stays here later.
-        }
-
-        // Create a buffer for a fluid system of tracking each ball for multiple points.
+        ApplyDetectedBallSnapshot(
+            new[]
+            {
+            new IncomingDetectedBallRecord(
+                ballType,
+                id,
+                new Vector2Float(x, y),
+                conf,
+                new Vector2Float(vx, vy))
+            },
+            replaceCurrentSnapshot: false);
     }
+
+    //public void PlaceBalls(float x, float y, byte id, float conf, float vx, float vy)
+    //{
+    //    // ADDED: ISSUE-83 runs before any smoothing or later ball assignment logic.
+    //    // This is intentionally a pre-placement suppression filter.
+    //    CleanupExpiredNearPocketBallMemory();
+
+    //    if (TryHandleNearPocketBall(x, y, id, conf, out PocketZoneBallState nearPocketState))
+    //    {
+    //        // ADDED: standard visualization / standard placement is intentionally suppressed here.
+    //        // Near-pocket balls are represented only by debug markers at this stage.
+    //        return;
+    //    }
+
+    //    // --------------------------------------------------------------------
+    //    // EXISTING / FUTURE NORMAL BALL PLACEMENT PATH CONTINUES BELOW
+    //    // --------------------------------------------------------------------
+    //    // Keep your numbered-ball assignment, user override UI, smoothing, and
+    //    // secondary Quest synchronization logic here. The important rule is:
+    //    //
+    //    //   issue #83 filter FIRST
+    //    //   smoothing SECOND
+    //    //   normal visualization / exercise logic AFTER THAT
+    //    //
+    //    // The current method body was intentionally incomplete already, so this
+    //    // implementation only adds the required deterministic suppression layer.
+    //    // --------------------------------------------------------------------
+
+    //    // Based on the game mode add a variable lenght of array. Set the
+    //    //if (AppSettings.Instance.GameMode == GameMode.LessonsMode)
+
+    //    //else { }
+
+    //    // If a ball was found and isn't in the buffer then add it later in the
+    //    // normal placement path, once ball identity assignment is finished.
+
+    //    if (AppSettings.Instance.Settings.DeviceInformation == DeviceInformation.PrimaryQuest)
+    //    {
+    //        // Send to other Quest 3 devices in the normal placement path later. # 
+    //    }
+
+    //    if ((id <= (byte)BallType.Cue))
+    //    {
+    //        // Normal placement / jitter distinction will stay here later.
+    //    }
+    //    else
+    //    {
+    //        // Generic solid/stripe handling stays here later.
+    //    }
+
+    //    // Create a buffer for a fluid system of tracking each ball for multiple points.
+    //}
 
     //public void PlaceBalls(float x, float y, byte id, float conf, float vx, float vy)
     //{
@@ -1535,13 +1563,13 @@ public class TableService : MonoBehaviour
 
     private void EnsureBallBufferSize()
     {
-        _balls ??= new List<Vector3Float>(MaxBallCount);
+        _balls ??= new List<Vector3Float>(MAX_BALL_COUNT);
 
-        while (_balls.Count < MaxBallCount)
+        while (_balls.Count < MAX_BALL_COUNT)
             _balls.Add(null);
 
-        if (_balls.Count > MaxBallCount)
-            _balls.RemoveRange(MaxBallCount, _balls.Count - MaxBallCount);
+        if (_balls.Count > MAX_BALL_COUNT)
+            _balls.RemoveRange(MAX_BALL_COUNT, _balls.Count - MAX_BALL_COUNT);
     }
 
     private void SetBallHeight()
@@ -1553,7 +1581,7 @@ public class TableService : MonoBehaviour
 
         float h = GetDefaultBallHeight(TableY);
 
-        for (byte i = 0; i < MaxBallCount; i++)
+        for (byte i = 0; i < MAX_BALL_COUNT; i++)
         {
             if (_balls[i] == null)
                 _balls[i] = new Vector3Float(h);
@@ -2014,5 +2042,366 @@ public class TableService : MonoBehaviour
         }
 
         _runtimeNearPocketMarkers.Clear();
+    }
+
+    public void SetQrAlignmentConfirmedForBallVisualization(bool isConfirmed)
+    {
+        QrAlignmentConfirmedForBallVisualization = isConfirmed;
+        TryApplyCachedDetectedBallSnapshot();
+    }
+
+    public bool IsReadyToVisualizeBalls()
+    {
+        if (!EnableBallVisualization)
+            return false;
+
+        if (!ArePropertiesParsed() || !HasAllPockets() || !LockFinalized)
+            return false;
+
+        if (RequireQrAlignmentBeforeBallVisualization &&
+            !QrAlignmentConfirmedForBallVisualization &&
+            !DebugBypassQrAlignmentGate)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    public void ApplyDetectedBallSnapshot(IReadOnlyList<IncomingDetectedBallRecord> snapshot, bool replaceCurrentSnapshot = true)
+    {
+        if (snapshot == null || snapshot.Count == 0)
+            return;
+
+        if (replaceCurrentSnapshot)
+            _latestDetectedBallSnapshot.Clear();
+
+        for (int i = 0; i < snapshot.Count; i++)
+        {
+            IncomingDetectedBallRecord record = snapshot[i];
+            if (record == null || record.PositionXZ == null)
+                continue;
+
+            _latestDetectedBallSnapshot.Add(record);
+        }
+
+        if (VerboseBallLogs)
+        {
+            Debug.Log(
+                $"[TableService] Cached detector snapshot with {_latestDetectedBallSnapshot.Count} ball entries. " +
+                $"ReadyForVisualization={IsReadyToVisualizeBalls()}");
+        }
+
+        TryApplyCachedDetectedBallSnapshot();
+    }
+
+    private void TryApplyCachedDetectedBallSnapshot()
+    {
+        if (!IsReadyToVisualizeBalls())
+        {
+            SetBallViewsActive(false);
+            return;
+        }
+
+        if (_latestDetectedBallSnapshot.Count == 0)
+            return;
+
+        ApplyCachedDetectedBallSnapshotToRuntimeState();
+        SyncBallViewsFromActiveTableState();
+    }
+
+    private void ApplyCachedDetectedBallSnapshotToRuntimeState()
+    {
+        TableStateEntry tableStateEntry = EnsureActiveTableStateEntry();
+        if (tableStateEntry?.BallInfo == null)
+            return;
+
+        HashSet<Ball> consumedBalls = new();
+
+        for (int i = 0; i < _latestDetectedBallSnapshot.Count; i++)
+        {
+            IncomingDetectedBallRecord record = _latestDetectedBallSnapshot[i];
+            if (record == null || record.PositionXZ == null)
+                continue;
+
+            CleanupExpiredNearPocketBallMemory();
+
+            if (TryHandleNearPocketBall(
+                record.PositionXZ.X,
+                record.PositionXZ.Y,
+                record.RawIncomingId,
+                record.Confidence,
+                out _))
+            {
+                continue;
+            }
+
+            Ball runtimeBall = FindReusableBallForRecord(tableStateEntry.BallInfo, record, consumedBalls);
+
+            if (runtimeBall == null)
+            {
+                if (tableStateEntry.BallInfo.Count >= MAX_BALL_COUNT)
+                {
+                    if (VerboseBallLogs)
+                    {
+                        Debug.LogWarning(
+                            $"[TableService] Detector snapshot wants to create more than {MAX_BALL_COUNT} runtime balls. " +
+                            $"Skipping extra ball of type {record.BallType}.");
+                    }
+
+                    continue;
+                }
+
+                runtimeBall = new Ball();
+                tableStateEntry.BallInfo.Add(runtimeBall);
+            }
+
+            runtimeBall.ApplyDetectedState(record.BallType, record.RawIncomingId, record.PositionXZ);
+            consumedBalls.Add(runtimeBall);
+        }
+    }
+
+    private TableStateEntry EnsureActiveTableStateEntry()
+    {
+        if (_activeTableStateEntry != null)
+            return _activeTableStateEntry;
+
+        global::GameMode mode = global::GameMode.SoloGame;
+        DeviceInformation deviceInformation = DeviceInformation.PrimaryQuest;
+
+        if (AppSettings.Instance != null)
+        {
+            mode = AppSettings.Instance.GameMode;
+
+            if (AppSettings.Instance.Settings != null)
+                deviceInformation = AppSettings.Instance.Settings.DeviceInformation;
+        }
+
+        if (mode == global::GameMode.LessonsMode)
+        {
+            Debug.LogWarning(
+                "[TableService] LessonsMode runtime ball state currently falls back to SoloGame " +
+                "until exercise-id wiring is added to the runtime ball pipeline.");
+
+            mode = global::GameMode.SoloGame;
+        }
+
+        _activeTableStateEntry = new TableStateEntry(mode, deviceInformation);
+        _tableStateEntries ??= new List<TableStateEntry>();
+        _tableStateEntries.Add(_activeTableStateEntry);
+
+        return _activeTableStateEntry;
+    }
+
+    private Ball FindReusableBallForRecord(
+        List<Ball> existingBalls,
+        IncomingDetectedBallRecord record,
+        HashSet<Ball> consumedBalls)
+    {
+        if (existingBalls == null || record == null || record.PositionXZ == null)
+            return null;
+
+        Ball bestMatch = null;
+        float bestSqrDistance = float.MaxValue;
+        float maxSqrDistance = BallReuseMatchRadiusM * BallReuseMatchRadiusM;
+
+        for (int i = 0; i < existingBalls.Count; i++)
+        {
+            Ball candidate = existingBalls[i];
+            if (candidate == null || consumedBalls.Contains(candidate))
+                continue;
+
+            if (candidate.GetLastDetectedOrCurrentBallType() != record.BallType)
+                continue;
+
+            Vector2Float candidatePosition = candidate.DetectedPosition ?? candidate.GetEffectivePosition();
+            if (candidatePosition == null)
+                continue;
+
+            float sqrDistance = GetSqrDistance(candidatePosition, record.PositionXZ);
+
+            if (record.BallType == BallType.Cue || record.BallType == BallType.Eight)
+            {
+                if (sqrDistance < bestSqrDistance)
+                {
+                    bestMatch = candidate;
+                    bestSqrDistance = sqrDistance;
+                }
+
+                continue;
+            }
+
+            if (sqrDistance <= maxSqrDistance && sqrDistance < bestSqrDistance)
+            {
+                bestMatch = candidate;
+                bestSqrDistance = sqrDistance;
+            }
+        }
+
+        return bestMatch;
+    }
+
+    private static float GetSqrDistance(Vector2Float a, Vector2Float b)
+    {
+        if (a == null || b == null)
+            return float.MaxValue;
+
+        float dx = a.X - b.X;
+        float dz = a.Y - b.Y;
+        return (dx * dx) + (dz * dz);
+    }
+
+    private void SyncBallViewsFromActiveTableState()
+    {
+        if (_activeTableStateEntry?.BallInfo == null)
+        {
+            DestroyBallViews();
+            return;
+        }
+
+        HashSet<Ball> liveBalls = new(_activeTableStateEntry.BallInfo.Where(ball => ball != null));
+
+        foreach (KeyValuePair<Ball, GameObject> pair in _ballViewsByBall.ToArray())
+        {
+            if (liveBalls.Contains(pair.Key))
+                continue;
+
+            if (pair.Value != null)
+                Destroy(pair.Value);
+
+            _ballViewsByBall.Remove(pair.Key);
+        }
+
+        int visualIndex = 0;
+
+        for (int i = 0; i < _activeTableStateEntry.BallInfo.Count; i++)
+        {
+            Ball runtimeBall = _activeTableStateEntry.BallInfo[i];
+            if (runtimeBall == null)
+                continue;
+
+            if (!_ballViewsByBall.TryGetValue(runtimeBall, out GameObject ballView) || ballView == null)
+            {
+                ballView = CreateBallView(runtimeBall);
+                _ballViewsByBall[runtimeBall] = ballView;
+            }
+
+            UpdateBallViewPose(runtimeBall, ballView, visualIndex);
+            visualIndex++;
+        }
+    }
+
+    private GameObject CreateBallView(Ball runtimeBall)
+    {
+        Transform parent = BallViewsParent != null
+            ? BallViewsParent
+            : (MarkersParent != null ? MarkersParent : transform);
+
+        GameObject go;
+
+        if (BallViewPrefab != null)
+        {
+            go = Instantiate(BallViewPrefab, Vector3.zero, Quaternion.identity, parent);
+        }
+        else
+        {
+            go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+
+            if (parent != null)
+                go.transform.SetParent(parent, worldPositionStays: true);
+
+            if (go.TryGetComponent<Collider>(out Collider collider))
+                Destroy(collider);
+
+            float fallbackDiameter = BallDiameterM > 0f ? BallDiameterM : 0.05715f;
+            go.transform.localScale = Vector3.one * fallbackDiameter;
+
+            if (go.TryGetComponent<Renderer>(out Renderer renderer))
+                renderer.material.color = GetFallbackBallColor(runtimeBall.BallType);
+        }
+
+        go.name = $"RuntimeBall_{_ballViewSequence++}";
+
+        BallOverrideSelectable selectable = go.GetComponent<BallOverrideSelectable>();
+        if (selectable == null)
+            selectable = go.AddComponent<BallOverrideSelectable>();
+
+        selectable.Bind(runtimeBall);
+        go.SetActive(false);
+
+        return go;
+    }
+
+    private void UpdateBallViewPose(Ball runtimeBall, GameObject ballView, int visualIndex)
+    {
+        if (runtimeBall == null || ballView == null)
+            return;
+
+        Vector2Float positionXZ = runtimeBall.GetEffectivePosition();
+        if (positionXZ == null)
+            return;
+
+        float y = GetDefaultBallHeight(TableY) + BallViewSurfaceLiftM;
+
+        ballView.transform.SetPositionAndRotation(
+            new Vector3(positionXZ.X, y, positionXZ.Y),
+            Quaternion.identity);
+
+        BallOverrideSelectable selectable = ballView.GetComponent<BallOverrideSelectable>();
+        if (selectable != null)
+            selectable.Bind(runtimeBall);
+
+        BallDebugView debugView = ballView.GetComponent<BallDebugView>();
+        if (debugView != null)
+            debugView.ApplyVisualState(runtimeBall);
+
+        ballView.name = $"RuntimeBall_{visualIndex}_{runtimeBall.BallType}_{runtimeBall.BallId}";
+        ballView.SetActive(!runtimeBall.IsIgnoredByUser());
+    }
+
+    private Color GetFallbackBallColor(BallType ballType) =>
+        ballType switch
+        {
+            BallType.Cue => Color.white,
+            BallType.Eight => Color.black,
+            BallType.Solid => new Color(0.95f, 0.8f, 0.1f, 1f),
+            BallType.Stripe => new Color(0.2f, 0.45f, 1f, 1f),
+            _ => Color.gray
+        };
+
+    private void SetBallViewsActive(bool active)
+    {
+        foreach (GameObject ballView in _ballViewsByBall.Values)
+        {
+            if (ballView != null && ballView.activeSelf != active)
+                ballView.SetActive(active);
+        }
+    }
+
+    private void DestroyBallViews()
+    {
+        foreach (GameObject ballView in _ballViewsByBall.Values.ToArray())
+        {
+            if (ballView == null)
+                continue;
+
+            if (Application.isPlaying)
+                Destroy(ballView);
+            else
+                DestroyImmediate(ballView);
+        }
+
+        _ballViewsByBall.Clear();
+    }
+
+    public void ResetRuntimeBallOverridesAndRefreshViews()
+    {
+        _activeTableStateEntry?.ResetAllBallOverrides();
+        SyncBallViewsFromActiveTableState();
+    }
+
+    public void ClearCachedDetectedBallSnapshot()
+    {
+        _latestDetectedBallSnapshot.Clear();
     }
 }

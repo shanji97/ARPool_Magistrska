@@ -22,7 +22,14 @@ public class Vector3Float
     public Vector3Float(UnityEngine.Vector3 vector3) : this(vector3.x, vector3.y, vector3.z) { }
     public void SetHeight(float height) => Y = height;
 
+    // XZ axis.
     public UnityEngine.Vector2 ToAxisXZ() => new(X, Z);
+    public void ToVector3FromXZAxis(Vector2Float XZ)
+    {
+        X = XZ.X;
+        Z = XZ.Y; // Unity's Y coordinate is the height coordinate.
+    }
+
     public void ToVector3FromXZAxis(UnityEngine.Vector2 axisXZ)
     {
         X = axisXZ.x;
@@ -30,6 +37,11 @@ public class Vector3Float
     }
 
     public UnityEngine.Vector2 ToAxisXY() => new(X, Y);
+    public void ToVector3FromXYAxis(Vector2Float XY)
+    {
+        X = XY.X;
+        Y = XY.Y;
+    }
     public void ToVector3FromXYAxis(UnityEngine.Vector2 axisXY)
     {
         X = axisXY.x;

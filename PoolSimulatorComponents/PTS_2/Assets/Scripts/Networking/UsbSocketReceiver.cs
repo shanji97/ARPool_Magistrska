@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
@@ -258,6 +259,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
         ReadOnlySpan<char> span = block.AsSpan().Trim();
         int start = 0;
+        List<IncomingDetectedBallRecord> parsedBallSnapshot = null;
 
         while (start < span.Length)
         {
@@ -270,10 +272,10 @@ public class UsbSocketReceiver : MonoBehaviour
                 int separator = line.IndexOf(' ');
                 ReadOnlySpan<char> token = separator > 0 ? line[..separator] : line;
                 ReadOnlySpan<char> body = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
-
-                if (svc.HasAllPockets() && svc.ArePropertiesParsed() && svc.LockFinalized && BallTypeWire.TryParseToken(token, out var ballType))
+                if (BallTypeWire.TryParseToken(token, out var ballType))
                 {
-                    ParseBalls(line, ballType);
+                    parsedBallSnapshot ??= new List<IncomingDetectedBallRecord>(svc.MAX_BALL_COUNT);
+                    ParseBalls(line, ballType, parsedBallSnapshot);
                 }
                 else if (!svc.LockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
                 {
@@ -284,7 +286,8 @@ public class UsbSocketReceiver : MonoBehaviour
                     while (parsedPocketCount < svc.MAX_POCKET_COUNT && !pocketBody.IsEmpty)
                     {
                         TryNextToken(ref pocketBody, ';', out var pair);
-                        if (pair.IsEmpty) break;
+                        if (pair.IsEmpty)
+                            break;
 
                         TryNextToken(ref pair, ',', out var xS);
                         var zS = pair;
@@ -325,7 +328,9 @@ public class UsbSocketReceiver : MonoBehaviour
                     var environmentJsonData = body.ToString().Trim().Replace(".json", string.Empty);
                     if (string.Equals(_lastAppliedEnvironmentKey, environmentJsonData, StringComparison.Ordinal))
                     {
-                        if (newLine < 0) break;
+                        if (newLine < 0)
+                            break;
+
                         start += newLine + 1;
                         continue;
                     }
@@ -371,8 +376,6 @@ public class UsbSocketReceiver : MonoBehaviour
                             }
                             catch (Exception ex)
                             {
-                                // MODIFIED: This catch wraps both deserialize and post-deserialize processing,
-                                // so the message should not claim deserialization only.
                                 Debug.LogError($"[Unity] Environment apply failed for {resourcePath}.json: {ex}");
                             }
                         }
@@ -380,9 +383,14 @@ public class UsbSocketReceiver : MonoBehaviour
                 }
             }
 
-            if (newLine < 0) break;
+            if (newLine < 0)
+                break;
+
             start += newLine + 1;
         }
+
+        if (parsedBallSnapshot != null && parsedBallSnapshot.Count > 0)
+            svc.ApplyDetectedBallSnapshot(parsedBallSnapshot);
     }
 
     private bool ApplyEnvironment(float playfieldLength = -1,
@@ -478,16 +486,73 @@ public class UsbSocketReceiver : MonoBehaviour
         );
     }
 
-    private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
-    {
-        // UPDATED: supports both single-ball lines (cue/eight)
-        // and grouped multi-ball lines (solid/stripe) separated by ';'.
-        // Wire format examples:
-        // c  x,y,id,conf,vx,vy
-        // e  x,y,id,conf,vx,vy
-        // st x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
-        // so x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
+    //private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
+    //{
+    //    // UPDATED: supports both single-ball lines (cue/eight)
+    //    // and grouped multi-ball lines (solid/stripe) separated by ';'.
+    //    // Wire format examples:
+    //    // c  x,y,id,conf,vx,vy
+    //    // e  x,y,id,conf,vx,vy
+    //    // st x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
+    //    // so x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
 
+    //    int spaceIndex = line.IndexOf(' ');
+    //    if (spaceIndex < 0 || spaceIndex >= line.Length - 1)
+    //        return;
+
+    //    ReadOnlySpan<char> data = line[(spaceIndex + 1)..].Trim();
+    //    if (data.IsEmpty)
+    //        return;
+
+    //    string[] entries = data.ToString().Split(';', StringSplitOptions.RemoveEmptyEntries);
+
+    //    for (int entryIndex = 0; entryIndex < entries.Length; entryIndex++)
+    //    {
+    //        string entry = entries[entryIndex].Trim();
+    //        if (string.IsNullOrWhiteSpace(entry))
+    //            continue;
+
+    //        string[] parts = entry.Split(',', StringSplitOptions.None);
+    //        if (parts.Length < 6)
+    //        {
+    //            if (VerboseLogs)
+    //                Debug.LogWarning($"[USB] Skipping malformed ball entry (expected 6 fields): '{entry}'");
+    //            continue;
+    //        }
+
+    //        if (!TryParseFlexibleFloat(parts[0], out float x) ||
+    //            !TryParseFlexibleFloat(parts[1], out float y))
+    //        {
+    //            if (VerboseLogs)
+    //                Debug.LogWarning($"[USB] Skipping ball entry due to invalid position: '{entry}'");
+    //            continue;
+    //        }
+
+    //        // NOTE:
+    //        // parts[2] is the Python-side record id / placeholder.
+    //        // For now Unity uses the token-derived BallType as the authoritative type,
+    //        // so this field is intentionally ignored here.
+    //        byte id = (byte)balltype;
+
+    //        // Confidence should ideally be numeric. If it is malformed, skip the record.
+    //        if (!TryParseFlexibleFloat(parts[3], out float conf))
+    //        {
+    //            if (VerboseLogs)
+    //                Debug.LogWarning($"[USB] Skipping ball entry due to invalid confidence: '{entry}'");
+    //            continue;
+    //        }
+
+    //        // Velocity fields are optional / best-effort right now.
+    //        // Placeholder values like "\", "/", "u", "", "''" are treated as 0.
+    //        TryParseFlexibleFloat(parts[4], out float vx, defaultValue: 0f);
+    //        TryParseFlexibleFloat(parts[5], out float vy, defaultValue: 0f);
+
+    //        svc.PlaceBalls(x, y, id, conf, vx, vy);
+    //    }
+    //}
+
+    private void ParseBalls(ReadOnlySpan<char> line, BallType ballType, List<IncomingDetectedBallRecord> targetSnapshot)
+    {
         int spaceIndex = line.IndexOf(' ');
         if (spaceIndex < 0 || spaceIndex >= line.Length - 1)
             return;
@@ -509,6 +574,7 @@ public class UsbSocketReceiver : MonoBehaviour
             {
                 if (VerboseLogs)
                     Debug.LogWarning($"[USB] Skipping malformed ball entry (expected 6 fields): '{entry}'");
+
                 continue;
             }
 
@@ -517,29 +583,30 @@ public class UsbSocketReceiver : MonoBehaviour
             {
                 if (VerboseLogs)
                     Debug.LogWarning($"[USB] Skipping ball entry due to invalid position: '{entry}'");
+
                 continue;
             }
 
-            // NOTE:
-            // parts[2] is the Python-side record id / placeholder.
-            // For now Unity uses the token-derived BallType as the authoritative type,
-            // so this field is intentionally ignored here.
-            byte id = (byte)balltype;
+            byte rawIncomingId = (byte)ballType;
 
-            // Confidence should ideally be numeric. If it is malformed, skip the record.
             if (!TryParseFlexibleFloat(parts[3], out float conf))
             {
                 if (VerboseLogs)
                     Debug.LogWarning($"[USB] Skipping ball entry due to invalid confidence: '{entry}'");
+
                 continue;
             }
 
-            // Velocity fields are optional / best-effort right now.
-            // Placeholder values like "\", "/", "u", "", "''" are treated as 0.
             TryParseFlexibleFloat(parts[4], out float vx, defaultValue: 0f);
             TryParseFlexibleFloat(parts[5], out float vy, defaultValue: 0f);
 
-            svc.PlaceBalls(x, y, id, conf, vx, vy);
+            targetSnapshot.Add(
+                new IncomingDetectedBallRecord(
+                    ballType,
+                    rawIncomingId,
+                    new Vector2Float(x, y),
+                    conf,
+                    new Vector2Float(vx, vy)));
         }
     }
 

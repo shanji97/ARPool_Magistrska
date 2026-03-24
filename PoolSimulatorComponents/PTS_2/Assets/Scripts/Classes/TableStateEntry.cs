@@ -19,30 +19,25 @@ public class TableStateEntry
             ExcreciseData = new ExerciseData(excerciseId.Value);
         }
 
-        const int MAX_REQUIRED_BALLS_ON_TABLE = 16;
-        int requiredBallCapacity = MAX_REQUIRED_BALLS_ON_TABLE;
+        const int maxRequiredBallsOnTable = 16;
+        int requiredBallCapacity = maxRequiredBallsOnTable;
 
         requiredBallCapacity = GameMode switch
         {
-            global::GameMode.SoloGame or global::GameMode.OnlineCoop or global::GameMode.LocalCoop => MAX_REQUIRED_BALLS_ON_TABLE,
-
+            global::GameMode.SoloGame or global::GameMode.OnlineCoop or global::GameMode.LocalCoop => maxRequiredBallsOnTable,
             global::GameMode.LessonsMode => ExerciseData.GetMaxNumberOfNeededBallForExercise(
-                                excerciseId ?? throw new ArgumentNullException(nameof(excerciseId))),
-            _ => MAX_REQUIRED_BALLS_ON_TABLE,
+                excerciseId ?? throw new ArgumentNullException(nameof(excerciseId))),
+            _ => maxRequiredBallsOnTable,
         };
 
-        // UPDATED: explicit list allocation, still preserving your current variable name and semantics.
         BallInfo = new List<Ball>(requiredBallCapacity);
-
         DataFromDevice = deviceInformation;
     }
 
     public DateTime EntryDate { get; } = DateTime.Now;
 
-    // UPDATED: private setter so constructor can assign safely.
     public global::GameMode GameMode { get; } = global::GameMode.SoloGame;
 
-    // NOTE: typo preserved intentionally because you already use this name elsewhere.
     public ExerciseData ExcreciseData { get; private set; } = null;
 
     public List<Ball> BallInfo { get; private set; } = null;
@@ -55,9 +50,7 @@ public class TableStateEntry
             return;
 
         for (int i = 0; i < BallInfo.Count; i++)
-        {
             BallInfo[i]?.ResetUserOverrides();
-        }
     }
 }
 
@@ -66,7 +59,7 @@ public class Ball
 {
     public BallType BallType;
 
-    public byte BallId { private set; get; }
+    public byte BallId { get; private set; }
 
     public Vector2Float DetectedPosition;
 
@@ -74,11 +67,10 @@ public class Ball
 
     public UserOverrides UserOverrides { get; private set; } = UserOverrides.None;
 
-    // UPDATED: cached non-overridden Python/detector state used when overrides are cleared.
     private BallType _lastDetectedBallType;
     private byte _lastDetectedBallId;
     private Vector2Float _lastDetectedPosition;
-    private bool _hasDetectedBaseline = false;
+    private bool _hasDetectedBaseline;
 
     public bool IsPositionUserOverriden() =>
         (UserOverrides & UserOverrides.UserModifiedPosition) == UserOverrides.UserModifiedPosition;
@@ -89,18 +81,17 @@ public class Ball
     public bool IsBallIdUserOverriden() =>
         (UserOverrides & UserOverrides.UserModifiedBallId) == UserOverrides.UserModifiedBallId;
 
-    public Vector2Float GetEffectivePosition()
-    {
-        return IsPositionUserOverriden() && CorrectedPosition != null
+    public bool IsIgnoredByUser() =>
+        (UserOverrides & UserOverrides.UserIgnoredBall) == UserOverrides.UserIgnoredBall;
+
+    public Vector2Float GetEffectivePosition() =>
+        IsPositionUserOverriden() && CorrectedPosition != null
             ? CorrectedPosition
             : DetectedPosition;
-    }
 
-    /// <summary>
-    /// UPDATED: This is the one method Python / packet application code should use.
-    /// Position is always refreshed from the detector.
-    /// Type and ball number are refreshed only when the corresponding manual override is not locked.
-    /// </summary>
+    public BallType GetLastDetectedOrCurrentBallType() =>
+        _hasDetectedBaseline ? _lastDetectedBallType : BallType;
+
     public void ApplyDetectedState(BallType detectedType, byte detectedBallId, Vector2Float detectedPosition)
     {
         _lastDetectedBallType = detectedType;
@@ -117,27 +108,17 @@ public class Ball
             BallId = NormalizeBallIdForType(detectedBallId, detectedType);
     }
 
-    public void AssignBallId(byte ballId)
-    {
-        // UPDATED: valid pool-ball numbers depend on current BallType, not enum numeric values.
+    public void AssignBallId(byte ballId) =>
         BallId = NormalizeBallIdForType(ballId, BallType);
-    }
 
     public void OverrideBallType(BallType newBallType)
     {
         BallType = newBallType;
         UserOverrides |= UserOverrides.UserModifiedType;
 
-        // UPDATED: if the ball number was not manually locked yet, move it to a valid default for the new type.
-        if (!IsBallIdUserOverriden())
-        {
-            BallId = GetDefaultBallIdForType(newBallType);
-        }
-        else
-        {
-            // UPDATED: keep the user-selected number only if it is valid for the new type.
-            BallId = NormalizeBallIdForType(BallId, newBallType);
-        }
+        BallId = IsBallIdUserOverriden()
+            ? NormalizeBallIdForType(BallId, newBallType)
+            : GetDefaultBallIdForType(newBallType);
     }
 
     public void OverrideBallId(byte newBallId)
@@ -150,19 +131,52 @@ public class Ball
     {
         CorrectedPosition = newPosition;
         UserOverrides |= UserOverrides.UserModifiedPosition;
-
-        // Visual movement is still handled by the view/placement layer, not here.
     }
 
-    public void MoveToOriginalPosition()
+    public void SetIgnoredByUser(bool isIgnored)
+    {
+        if (isIgnored)
+            UserOverrides |= UserOverrides.UserIgnoredBall;
+        else
+            UserOverrides &= ~UserOverrides.UserIgnoredBall;
+    }
+
+    public void ReleasePositionOverride()
     {
         CorrectedPosition = null;
         UserOverrides &= ~UserOverrides.UserModifiedPosition;
     }
 
+    public void ReleaseTypeOverride()
+    {
+        UserOverrides &= ~UserOverrides.UserModifiedType;
+
+        if (_hasDetectedBaseline)
+            BallType = _lastDetectedBallType;
+
+        if (IsBallIdUserOverriden())
+            BallId = NormalizeBallIdForType(BallId, BallType);
+        else if (_hasDetectedBaseline)
+            BallId = NormalizeBallIdForType(_lastDetectedBallId, BallType);
+        else
+            BallId = GetDefaultBallIdForType(BallType);
+    }
+
+    public void ReleaseBallIdOverride()
+    {
+        UserOverrides &= ~UserOverrides.UserModifiedBallId;
+        BallId = _hasDetectedBaseline
+            ? NormalizeBallIdForType(_lastDetectedBallId, BallType)
+            : GetDefaultBallIdForType(BallType);
+    }
+
+    public void ReleaseIgnoreOverride() =>
+        UserOverrides &= ~UserOverrides.UserIgnoredBall;
+
     public void ResetUserOverrides()
     {
-        MoveToOriginalPosition();
+        ReleasePositionOverride();
+        ReleaseIgnoreOverride();
 
         UserOverrides &= ~(UserOverrides.UserModifiedType | UserOverrides.UserModifiedBallId);
 
@@ -174,9 +188,8 @@ public class Ball
         }
     }
 
-    private static byte GetDefaultBallIdForType(BallType ballType)
-    {
-        return ballType switch
+    private static byte GetDefaultBallIdForType(BallType ballType) =>
+        ballType switch
         {
             BallType.Cue => 0,
             BallType.Eight => 8,
@@ -184,11 +197,9 @@ public class Ball
             BallType.Stripe => 9,
             _ => 0
         };
-    }
 
-    private static byte NormalizeBallIdForType(byte incomingBallId, BallType ballType)
-    {
-        return ballType switch
+    private static byte NormalizeBallIdForType(byte incomingBallId, BallType ballType) =>
+        ballType switch
         {
             BallType.Cue => 0,
             BallType.Eight => 8,
@@ -196,35 +207,24 @@ public class Ball
             BallType.Stripe => (byte)Mathf.Clamp(incomingBallId, 9, 15),
             _ => incomingBallId
         };
-    }
-}
-
-[Serializable, Flags]
-public enum UserOverrides : byte
-{
-    None = 0, // UPDATED
-    UserModifiedPosition = 1,
-    UserModifiedType = 2,
-    UserModifiedBallId = 4 // UPDATED
 }
 
 [Serializable]
 public class ExerciseData
 {
-    private const byte SMALLEST_EXERCISE_ID = 1;
-    private const byte LARGET_EXERCISE_ID = 10;
+    private const byte SmallestExerciseId = 1;
+    private const byte LargestExerciseId = 10;
 
     public ExerciseData(uint? excerciseId, byte numberOfAttempts = 10)
     {
         if (excerciseId == null)
             throw new ArgumentNullException(nameof(excerciseId), "Exercise ID cannot be null.");
 
-        // UPDATED: range validation must use OR, not AND.
-        if (excerciseId < SMALLEST_EXERCISE_ID || excerciseId > LARGET_EXERCISE_ID)
+        if (excerciseId < SmallestExerciseId || excerciseId > LargestExerciseId)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(excerciseId),
-                $"Exercise id must be between {SMALLEST_EXERCISE_ID} and {LARGET_EXERCISE_ID}.");
+                $"Exercise id must be between {SmallestExerciseId} and {LargestExerciseId}.");
         }
 
         ExerciseId = excerciseId;
@@ -237,8 +237,8 @@ public class ExerciseData
 
     public static byte GetMaxNumberOfNeededBallForExercise(byte exerciseId)
     {
-        const byte MIN_REQUIRED_BALLS_ON_TABLE = 2;
-        return MIN_REQUIRED_BALLS_ON_TABLE;
+        const byte minRequiredBallsOnTable = 2;
+        return minRequiredBallsOnTable;
     }
 }
 

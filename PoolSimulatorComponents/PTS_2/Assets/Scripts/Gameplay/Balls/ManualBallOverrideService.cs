@@ -15,7 +15,7 @@ public class ManualBallOverrideService : MonoBehaviour
     {
         if (Instance != null && Instance != this)
         {
-            Destroy(gameObject);
+            Destroy(this);
             return;
         }
 
@@ -55,6 +55,24 @@ public class ManualBallOverrideService : MonoBehaviour
         SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
+    public void ReleaseSelectedTypeOverride()
+    {
+        if (SelectedBall == null)
+            return;
+
+        SelectedBall.ReleaseTypeOverride();
+        SelectedBallChanged?.Invoke(SelectedSelectable);
+    }
+
+    public void ReleaseSelectedBallIdOverride()
+    {
+        if (SelectedBall == null)
+            return;
+
+        SelectedBall.ReleaseBallIdOverride();
+        SelectedBallChanged?.Invoke(SelectedSelectable);
+    }
+
     public void ResetSelectedOverrides()
     {
         if (SelectedBall == null)
@@ -64,9 +82,6 @@ public class ManualBallOverrideService : MonoBehaviour
         SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
-    /// <summary>
-    /// Call this from your session reset / new-run logic.
-    /// </summary>
     public void ResetOverridesForSession(TableStateEntry tableStateEntry, BallOverrideSelectable[] activeBallViews = null)
     {
         tableStateEntry?.ResetAllBallOverrides();
@@ -74,9 +89,7 @@ public class ManualBallOverrideService : MonoBehaviour
         if (activeBallViews != null)
         {
             for (int i = 0; i < activeBallViews.Length; i++)
-            {
                 activeBallViews[i]?.RefreshVisualState();
-            }
         }
 
         ClearSelection();
