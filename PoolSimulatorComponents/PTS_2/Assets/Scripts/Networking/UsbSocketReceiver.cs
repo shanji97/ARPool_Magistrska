@@ -40,7 +40,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
         var env = AppSettings.Instance.Settings.EnviromentInfo;
         if (env != null)
-            ApplyEnvironment(env);
+            ApplyEnvironment(env, true);
 
         if (AutoStart) StartServer();
     }
@@ -320,7 +320,7 @@ public class UsbSocketReceiver : MonoBehaviour
                         Debug.LogWarning($"[USB] Ignored malformed pocket line. Parsed count={parsedPocketCount}.");
                     }
                 }
-                else if (!svc.LockFinalized && !svc.ArePropertiesParsed() && token.SequenceEqual("E"))
+                else if (!svc.LockFinalized && token.SequenceEqual("E"))
                 {
                     var environmentJsonData = body.ToString().Trim().Replace(".json", string.Empty);
                     if (string.Equals(_lastAppliedEnvironmentKey, environmentJsonData, StringComparison.Ordinal))
@@ -355,22 +355,16 @@ public class UsbSocketReceiver : MonoBehaviour
                                 }
                                 else
                                 {
-                                    bool applied = ApplyEnvironment(newEnvironment);
+                                    bool applied = ApplyEnvironment(newEnvironment, isLoadedFromBackup: false);
+
                                     if (applied)
                                     {
                                         _lastAppliedEnvironmentKey = environmentJsonData;
 
-                                        // MODIFIED: null-safe compare/update to avoid NullReferenceException.
-                                        string currentName =
-                                            AppSettings.Instance?.Settings?.EnviromentInfo?.Table?.Name;
-
-                                        string newName = newEnvironment.Table?.Name;
-
-                                        if (!string.Equals(currentName, newName, StringComparison.Ordinal))
+                                        if (AppSettings.Instance?.Settings != null)
                                         {
-                                            if (AppSettings.Instance?.Settings != null)
-                                                AppSettings.Instance.Settings.EnviromentInfo = newEnvironment;
-                                            ApplyEnvironment(newEnvironment);
+                                            AppSettings.Instance.Settings.EnviromentInfo = newEnvironment;
+                                            AppSettings.Instance.Save();
                                         }
                                     }
                                 }
@@ -396,31 +390,54 @@ public class UsbSocketReceiver : MonoBehaviour
                               float playfieldHeight = -1,
                               float ballDiameter = -1,
                               float ballCircumference = -1,
-                              float cameraHeightFromFloor = -1)
+                              float cameraHeightFromFloor = -1,
+                              bool isLoadedFromBackup = false)
     {
+
         EnsureSvc();
         if (svc == null)
         {
             Debug.LogError("[USB] ApplyEnvironment failed because TableService is null.");
             return false;
         }
+        svc.SetEnvironmentLoadedFromBackup(isLoadedFromBackup);
 
-        if (svc.ArePropertiesParsed())
-            return true;
-
-        svc.SetBallDiameter(ballDiameter);
-        svc.SetBallCircumference(ballCircumference);
-        svc.SetCamera(cameraHeightFromFloor);
-
-        svc.SetTableLenght(playfieldLength);
-        svc.SetTableWidth(playfieldWidth);
-
-        if (!svc.IsTableHeightSet() && playfieldHeight > 0f)
+        if (isLoadedFromBackup)
         {
-            svc.SetTable(playfieldLength, playfieldWidth, playfieldHeight);
+            if (!svc.ArePropertiesParsed())
+            {
+                svc.SetBallDiameter(ballDiameter);
+                svc.SetBallCircumference(ballCircumference);
+                svc.SetCamera(cameraHeightFromFloor);
 
-            if (svc.HasAllPockets())
-                svc.ReapplyPockets();
+                svc.SetTableLenght(playfieldLength);
+                svc.SetTableWidth(playfieldWidth);
+
+                if (playfieldHeight > 0f)
+                {
+                    svc.SetTable(playfieldLength, playfieldWidth, playfieldHeight);
+
+                    if (svc.HasAllPockets())
+                        svc.ReapplyPockets();
+                }
+            }
+        }
+        else
+        {
+            svc.SetBallDiameter(ballDiameter);
+            svc.SetBallCircumference(ballCircumference);
+            svc.SetCamera(cameraHeightFromFloor);
+
+            svc.SetTableLenght(playfieldLength);
+            svc.SetTableWidth(playfieldWidth);
+
+            if (playfieldHeight > 0f)
+            {
+                svc.SetTable(playfieldLength, playfieldWidth, playfieldHeight);
+
+                if (svc.HasAllPockets())
+                    svc.ReapplyPockets();
+            }
         }
 
         if (VerboseLogs && !_loggedEnvironmentSummaryThisSession)
@@ -438,7 +455,7 @@ public class UsbSocketReceiver : MonoBehaviour
         return svc.ArePropertiesParsed();
     }
 
-    private bool ApplyEnvironment(EnvironmentInfo env)
+    private bool ApplyEnvironment(EnvironmentInfo env, bool isLoadedFromBackup = false)
     {
         if (env?.Table == null)
         {
@@ -456,7 +473,8 @@ public class UsbSocketReceiver : MonoBehaviour
             heightM,
             env.BallSpec?.DiameterM ?? -1f,
             env.BallSpec?.BallCircumferenceM ?? -1f,
-            env.CameraData?.HeightFromFloorM ?? -1f
+            env.CameraData?.HeightFromFloorM ?? -1f,
+            isLoadedFromBackup
         );
     }
 

@@ -42,6 +42,9 @@ public class TableQrAlignmentController : MonoBehaviour
 
     public bool VerboseQrLogs = true;
 
+    [Tooltip("After the first successful QR lock, stop scanning and keep the locked alignment for the rest of the current setup session.")]
+    public bool FreezeQrScanningAfterSuccessfulLock = true;
+
     [Header("QR Payload Configuration")]
     [SerializeField]
     private string[] mandatoryCornerPayloads =
@@ -80,6 +83,9 @@ public class TableQrAlignmentController : MonoBehaviour
     private float _nextScanTime;
     private float _lastSuccessfulLockTime = -999f;
     private bool _hasAppliedPocketPlacementFromQr;
+    private bool _qrAlignmentLockedForSession;
+
+    public bool IsQrAlignmentLockedForSession => _qrAlignmentLockedForSession;
 
     public int LiveDetectedCount => _liveDetections.Count;
     public int LockedDetectedCount => _lockedDetections.Count;
@@ -126,6 +132,14 @@ public class TableQrAlignmentController : MonoBehaviour
         if (!EnableQrTrackingWorkflow)
             return;
 
+        if (_qrAlignmentLockedForSession && FreezeQrScanningAfterSuccessfulLock)
+        {
+            if (!_hasAppliedPocketPlacementFromQr)
+                TryAutoApplyLockedQrPlacementIfReady();
+
+            return;
+        }
+
         if (Time.unscaledTime >= _nextScanTime)
         {
             _nextScanTime = Time.unscaledTime + ScanIntervalSeconds;
@@ -152,8 +166,17 @@ public class TableQrAlignmentController : MonoBehaviour
         string solveModes = BuildSupportedSolveModesText();
         float cooldownRemaining = GetRemainingRescanCooldownSeconds();
 
-        if (!HasAnyLiveDetections && !HasAnyLockedDetections)
+        if (!HasAnyLiveDetections && !HasAnyLockedDetections && !_qrAlignmentLockedForSession)
             return $"No QR code detected. Show a solvable QR set ({solveModes}).";
+
+        if (_qrAlignmentLockedForSession && _hasAppliedPocketPlacementFromQr)
+        {
+            return
+                $"QR alignment locked for this setup session. " +
+                $"Locked: {lockedSummary}. " +
+                $"QR scanning is paused and the current pocket placement will not be recalculated. " +
+                $"You can now manually drag the pocket markers to fine-tune them before confirming pockets.";
+        }
 
         if (!_hasAppliedPocketPlacementFromQr)
         {
@@ -269,6 +292,9 @@ public class TableQrAlignmentController : MonoBehaviour
                 : Color.red;
         }
 
+        if (_qrAlignmentLockedForSession && _hasAppliedPocketPlacementFromQr)
+            return Color.green;
+
         if (!environmentParsed)
             return new Color(1f, 0.8f, 0f, 1f);
 
@@ -288,6 +314,9 @@ public class TableQrAlignmentController : MonoBehaviour
         if (!environmentParsed)
             return "Pocket data received. Waiting for environment parsing before QR alignment can be applied.";
 
+        if (_qrAlignmentLockedForSession && _hasAppliedPocketPlacementFromQr)
+            return "QR alignment is locked for this setup session. The pocket markers now stay in their current QR-aligned frame, and you can manually fine-tune them before confirming pockets.";
+
         if (!_hasAppliedPocketPlacementFromQr)
         {
             if (CanResolveLiveCornerSet())
@@ -299,7 +328,7 @@ public class TableQrAlignmentController : MonoBehaviour
             return $"Pocket data received. Show a solvable QR set to align the pockets automatically ({BuildSupportedSolveModesText()}).";
         }
 
-        return "Placed pockets based on QR code detections. You can still refine with more QR markers, then make final manual adjustments and confirm pockets.";
+        return "Placed pockets based on QR code detections. QR scanning can still refine the fit until you lock the session, then you can make final manual adjustments and confirm pockets.";
     }
 
     public bool CanLockCurrentDetections
@@ -312,6 +341,9 @@ public class TableQrAlignmentController : MonoBehaviour
                 return false;
 
             if (_tableService != null && _tableService.LockFinalized)
+                return false;
+
+            if (_qrAlignmentLockedForSession)
                 return false;
 
             if (GetRemainingRescanCooldownSeconds() > 0f)
@@ -337,6 +369,9 @@ public class TableQrAlignmentController : MonoBehaviour
 
         if (_tableService != null && _tableService.LockFinalized)
             return "Pockets confirmed";
+
+        if (_qrAlignmentLockedForSession)
+            return "QR locked for session";
 
         float cooldownRemaining = GetRemainingRescanCooldownSeconds();
         if (cooldownRemaining > 0f)
@@ -374,10 +409,14 @@ public class TableQrAlignmentController : MonoBehaviour
 
         ReplaceLockedSnapshotWithCurrentLiveDetections();
 
+        _qrAlignmentLockedForSession = true;
         _lastSuccessfulLockTime = Time.unscaledTime;
         HasPendingLockUpdate = ComputePendingLockUpdate();
 
         bool applied = TryAutoApplyLockedQrPlacementIfReady();
+
+        if (applied)
+            _tableService?.SetExternalPocketUpdatesSuppressed(true);
 
         if (VerboseQrLogs)
         {
@@ -409,6 +448,9 @@ public class TableQrAlignmentController : MonoBehaviour
 
         if (_tableService != null && _tableService.LockFinalized)
             return "Pocket placement is already finalized.";
+
+        if (_qrAlignmentLockedForSession)
+            return "QR alignment is already locked for this setup session.";
 
         float cooldownRemaining = GetRemainingRescanCooldownSeconds();
         if (cooldownRemaining > 0f)
@@ -464,6 +506,8 @@ public class TableQrAlignmentController : MonoBehaviour
     {
         _lockedDetections.Clear();
         _hasAppliedPocketPlacementFromQr = false;
+        _qrAlignmentLockedForSession = false;
+        _tableService?.SetExternalPocketUpdatesSuppressed(false);
         HasPendingLockUpdate = ComputePendingLockUpdate();
 
         foreach (KeyValuePair<string, GameObject> entry in _lockedMarkerVisuals)
@@ -507,6 +551,9 @@ public class TableQrAlignmentController : MonoBehaviour
         if (_tableService.LockFinalized)
             return _hasAppliedPocketPlacementFromQr;
 
+        if (_qrAlignmentLockedForSession && _hasAppliedPocketPlacementFromQr)
+            return true;
+
         if (!CanResolveLockedCornerSet())
             return false;
 
@@ -515,6 +562,10 @@ public class TableQrAlignmentController : MonoBehaviour
 
         bool applied = TryApplyPocketLayoutFromLockedMarkers();
         _hasAppliedPocketPlacementFromQr = applied;
+
+        if (applied)
+            _tableService.SetExternalPocketUpdatesSuppressed(true);
+
         HasPendingLockUpdate = ComputePendingLockUpdate();
         return applied;
     }
@@ -1108,6 +1159,9 @@ public class TableQrAlignmentController : MonoBehaviour
 
     private bool ComputePendingLockUpdate()
     {
+        if (_qrAlignmentLockedForSession && FreezeQrScanningAfterSuccessfulLock)
+            return false;
+
         if (_liveDetections.Count == 0)
             return false;
 

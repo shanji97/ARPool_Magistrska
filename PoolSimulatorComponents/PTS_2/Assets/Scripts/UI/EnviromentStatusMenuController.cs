@@ -30,6 +30,10 @@ public class EnvironmentStatusMenuController : MonoBehaviour
     [TextArea]
     [SerializeField] private string environmentWaitingMessage = "Waiting for environment data to be parsed...";
     [TextArea]
+    [SerializeField] private string environmentBackupLoadedMessage = "Backup environment loaded, waiting for new data.";
+    [TextArea]
+    [SerializeField] private string environmentLiveParsedMessage = "Environment received from data transmission.";
+    [TextArea]
     [SerializeField] private string environmentParsedMessage = "Environment successfully parsed.";
     [TextArea]
     [SerializeField] private string pocketsWaitingMessage = "Waiting for pocket data to be received from the detection pipeline...";
@@ -167,9 +171,17 @@ public class EnvironmentStatusMenuController : MonoBehaviour
 
         bool qrWorkflowAvailable = qrController != null && qrController.EnableQrTrackingWorkflow;
 
-        if (environmentParsed)
+        if (!environmentParsed)
         {
-            SetStatusText(environmentParseStatusText, environmentParsedMessage, readyColor);
+            SetStatusText(environmentParseStatusText, environmentWaitingMessage, waitingColor);
+        }
+        else if (tableService.IsLoadedFromBackup)
+        {
+            SetStatusText(environmentParseStatusText, environmentBackupLoadedMessage, partialColor);
+        }
+        else
+        {
+            SetStatusText(environmentParseStatusText, environmentLiveParsedMessage, readyColor);
 
             bool shouldInvokeParsedEvent = !_hasInvokedEnvironmentParsedEvent || !invokeParsedEventOnlyOnce;
             if (shouldInvokeParsedEvent)
@@ -177,10 +189,6 @@ public class EnvironmentStatusMenuController : MonoBehaviour
                 _hasInvokedEnvironmentParsedEvent = true;
                 OnEnvironmentParsed?.Invoke();
             }
-        }
-        else
-        {
-            SetStatusText(environmentParseStatusText, environmentWaitingMessage, waitingColor);
         }
 
         if (!pocketsParsed)
@@ -192,7 +200,7 @@ public class EnvironmentStatusMenuController : MonoBehaviour
             if (qrWorkflowAvailable && qrController != null)
             {
                 string pocketMessage = qrController.BuildPocketPlacementGuidanceMessage();
-                Color pocketColor = qrController.HasAppliedPocketPlacementFromQr ? readyColor : partialColor;
+                Color pocketColor = (qrController.HasAppliedPocketPlacementFromQr || qrController.IsQrAlignmentLockedForSession) ? readyColor : partialColor;
                 SetStatusText(pocketParsingStatusText, pocketMessage, pocketColor);
             }
             else

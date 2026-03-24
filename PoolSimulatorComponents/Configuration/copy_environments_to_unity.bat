@@ -13,8 +13,11 @@ rem Example:
 rem set "FILES=last_environment.json predator_9ft_virtual_debug.json"
 set "FILES="
 
-rem Excluded files (applies for both explicit list and wildcard mode)
+rem Excluded exact file names
 set "EXCLUDED_FILES=torch_state.json"
+
+rem Excluded suffix pattern
+set "EXCLUDED_SUFFIX=_network_data.json"
 
 if not exist "%DEST_DIR%" (
     mkdir "%DEST_DIR%"
@@ -37,11 +40,18 @@ exit /b 0
 :copy_if_allowed
 set "FILE_NAME=%~1"
 
+rem Exclude exact file names
 for %%E in (%EXCLUDED_FILES%) do (
     if /I "%%~E"=="!FILE_NAME!" (
-        echo Skipped ^(excluded^): !FILE_NAME!
+        echo Skipped ^(excluded exact file^): !FILE_NAME!
         exit /b 0
     )
+)
+
+rem Exclude any file ending with _network_data.json
+if /I "!FILE_NAME:~-18!"=="%EXCLUDED_SUFFIX%" (
+    echo Skipped ^(excluded suffix^): !FILE_NAME!
+    exit /b 0
 )
 
 if not exist "%SRC_DIR%!FILE_NAME!" (

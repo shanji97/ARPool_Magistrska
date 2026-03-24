@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -66,7 +67,14 @@ public class TableService : MonoBehaviour
 
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
+    [Tooltip("Preserve the current table rotation while the user manually drags pocket markers after QR alignment.")]
+    public bool MaintainPocketOrientationDuringEditing = true;
     private Vector3[] _lastMarkerPosition;
+    private bool _externalPocketUpdatesSuppressed;
+    private bool _hasPocketEditingBasis;
+    private Vector3 _pocketEditingBasisOrigin;
+    private Vector3 _pocketEditingLongAxis = Vector3.right;
+    private Vector3 _pocketEditingShortAxis = Vector3.forward;
 
 
     [Header("Near-Pocket Suppression")]
@@ -139,6 +147,9 @@ public class TableService : MonoBehaviour
     public bool CanApplyQrAlignedPocketLayout() => IsTableHeightSet();
 
     public bool AreDiamondsParsed() => DiamondCount == MAX_DIAMOND_COUNT;
+
+    public bool IsLoadedFromBackup { get; private set; } = false;
+    public void SetEnvironmentLoadedFromBackup(bool isLoadedFromBackup) => IsLoadedFromBackup = isLoadedFromBackup;
 
     private bool VerboseDiamondLogs()
     {
@@ -854,6 +865,7 @@ public class TableService : MonoBehaviour
     private void PrivateSetPocketsXZ((float x, float z)[] pocketXZ, float tableY)
     {
         if (IsLockedToJitter) return;
+        if (_externalPocketUpdatesSuppressed && !LockFinalized) return;
         if (pocketXZ?.Length != MAX_POCKET_COUNT) return;
         if (tableY <= 0f)
         {
@@ -891,6 +903,8 @@ public class TableService : MonoBehaviour
                 : PocketPositions[i];
         }
 
+        CaptureCurrentPocketEditingBasisFromCurrentPockets();
+
         Debug.Log($"[TableService] Pockets placed at markerY={markerY:F4}, TableY={TableY:F4}, BallDiameterM={BallDiameterM:F4}, PocketCount={PocketCount}");
     }
 
@@ -923,6 +937,7 @@ public class TableService : MonoBehaviour
         }
 
         ApplyLockStateToMarkers();
+        _externalPocketUpdatesSuppressed = false;
 
         Debug.Log("[TableService] Pocket placement finalized. Markers are frozen in place.");
     }
@@ -932,9 +947,45 @@ public class TableService : MonoBehaviour
         LockFinalized = false;
         IsLockedToJitter = false;
 
+        CaptureCurrentPocketEditingBasisFromCurrentPockets();
         ApplyLockStateToMarkers();
 
         Debug.Log("[TableService] Pocket editing re-enabled.");
+    }
+
+    public void SetExternalPocketUpdatesSuppressed(bool suppressed)
+    {
+        _externalPocketUpdatesSuppressed = suppressed;
+    }
+
+    public void CaptureCurrentPocketEditingBasisFromCurrentPockets()
+    {
+        if (PocketPositions == null || PocketPositions.Length != MAX_POCKET_COUNT || !HasAllPockets())
+            return;
+
+        Vector3 topLeft = FlattenToTablePlane(PocketPositions[0]);
+        Vector3 topRight = FlattenToTablePlane(PocketPositions[1]);
+        Vector3 bottomMiddle = FlattenToTablePlane(PocketPositions[2]);
+        Vector3 topMiddle = FlattenToTablePlane(PocketPositions[3]);
+        Vector3 bottomLeft = FlattenToTablePlane(PocketPositions[4]);
+        Vector3 bottomRight = FlattenToTablePlane(PocketPositions[5]);
+
+        Vector3 longAxis = FlattenDirectionToTablePlane(((topRight - topLeft) + (bottomRight - bottomLeft)) * 0.5f);
+        Vector3 shortAxis = FlattenDirectionToTablePlane(((topLeft - bottomLeft) + (topRight - bottomRight)) * 0.5f);
+
+        if (longAxis.sqrMagnitude <= 0.000001f || shortAxis.sqrMagnitude <= 0.000001f)
+            return;
+
+        longAxis = longAxis.normalized;
+        shortAxis = Vector3.Cross(Vector3.up, longAxis).normalized;
+
+        if (Vector3.Dot(shortAxis, FlattenDirectionToTablePlane(topMiddle - bottomMiddle)) < 0f)
+            shortAxis = -shortAxis;
+
+        _pocketEditingBasisOrigin = 0.25f * (topLeft + topRight + bottomLeft + bottomRight);
+        _pocketEditingLongAxis = longAxis;
+        _pocketEditingShortAxis = shortAxis;
+        _hasPocketEditingBasis = true;
     }
 
 
@@ -958,6 +1009,8 @@ public class TableService : MonoBehaviour
         {
             _lastMarkerPosition[i] = _markers[i].transform.position;
         }
+
+        CaptureCurrentPocketEditingBasisFromCurrentPockets();
     }
 
     public void SetEdgeDiamonds((float x, float z, byte i, float c)[] diamonds) => PrivateSetEdgeDiamonds(diamonds, TableY);
@@ -1244,6 +1297,8 @@ public class TableService : MonoBehaviour
             _lastMarkerPosition[i] = _markers[i].transform.position;
         }
 
+        CaptureCurrentPocketEditingBasisFromCurrentPockets();
+
         if (wasLocked)
             IsLockedToJitter = true;
 
@@ -1280,37 +1335,61 @@ public class TableService : MonoBehaviour
             return;
         }
 
-        var TL = _markers[0].transform.position;
-        var TR = _markers[1].transform.position;
-        var ML = _markers[2].transform.position;
-        var MR = _markers[3].transform.position;
-        var BL = _markers[4].transform.position;
-        var BR = _markers[5].transform.position;
+        if (!MaintainPocketOrientationDuringEditing || !_hasPocketEditingBasis)
+            CaptureCurrentPocketEditingBasisFromCurrentPockets();
 
-        float leftX = 0.5f * (TL.x + BL.x);
-        float rightX = 0.5f * (TR.x + BR.x);
-        float topZ = 0.5f * (TR.z + MR.z);
-        float bottomZ = 0.5f * (BL.z + ML.z);
+        if (!_hasPocketEditingBasis)
+        {
+            for (sbyte i = 0; i < MAX_POCKET_COUNT; i++)
+                _lastMarkerPosition[i] = _markers[i].transform.position;
+            return;
+        }
+
+        Vector3 TL = FlattenToTablePlane(_markers[0].transform.position);
+        Vector3 TR = FlattenToTablePlane(_markers[1].transform.position);
+        Vector3 ML = FlattenToTablePlane(_markers[2].transform.position);
+        Vector3 MR = FlattenToTablePlane(_markers[3].transform.position);
+        Vector3 BL = FlattenToTablePlane(_markers[4].transform.position);
+        Vector3 BR = FlattenToTablePlane(_markers[5].transform.position);
+
+        float tlU = ProjectPocketLong(TL);
+        float trU = ProjectPocketLong(TR);
+        float mlU = ProjectPocketLong(ML);
+        float mrU = ProjectPocketLong(MR);
+        float blU = ProjectPocketLong(BL);
+        float brU = ProjectPocketLong(BR);
+
+        float tlV = ProjectPocketShort(TL);
+        float trV = ProjectPocketShort(TR);
+        float mlV = ProjectPocketShort(ML);
+        float mrV = ProjectPocketShort(MR);
+        float blV = ProjectPocketShort(BL);
+        float brV = ProjectPocketShort(BR);
+
+        float leftU = 0.5f * (tlU + blU);
+        float rightU = 0.5f * (trU + brU);
+        float topV = (tlV + trV + mrV) / 3f;
+        float bottomV = (blV + brV + mlV) / 3f;
 
         switch (moved)
         {
-            case 0: leftX = TL.x; topZ = TL.z; break;
-            case 1: rightX = TR.x; topZ = TR.z; break;
-            case 4: leftX = BL.x; bottomZ = BL.z; break;
-            case 5: rightX = BR.x; bottomZ = BR.z; break;
-            case 2: bottomZ = ML.z; break;
-            case 3: topZ = MR.z; break;
+            case 0: leftU = tlU; topV = tlV; break;
+            case 1: rightU = trU; topV = trV; break;
+            case 2: bottomV = mlV; break;
+            case 3: topV = mrV; break;
+            case 4: leftU = blU; bottomV = blV; break;
+            case 5: rightU = brU; bottomV = brV; break;
         }
 
-        float centerX = 0.5f * (leftX + rightX);
+        float centerU = 0.5f * (leftU + rightU);
         float markerY = GetPocketMarkerY(TableY);
 
-        TL = new Vector3(leftX, markerY, topZ);
-        TR = new Vector3(rightX, markerY, topZ);
-        BL = new Vector3(leftX, markerY, bottomZ);
-        BR = new Vector3(rightX, markerY, bottomZ);
-        ML = new Vector3(centerX, markerY, bottomZ);
-        MR = new Vector3(centerX, markerY, topZ);
+        TL = ComposePocketFromBasis(leftU, topV, markerY);
+        TR = ComposePocketFromBasis(rightU, topV, markerY);
+        BL = ComposePocketFromBasis(leftU, bottomV, markerY);
+        BR = ComposePocketFromBasis(rightU, bottomV, markerY);
+        ML = ComposePocketFromBasis(centerU, bottomV, markerY);
+        MR = ComposePocketFromBasis(centerU, topV, markerY);
 
         SetMarkerWorldPose(0, TL);
         SetMarkerWorldPose(1, TR);
@@ -1328,6 +1407,25 @@ public class TableService : MonoBehaviour
 
         for (sbyte i = 0; i < MAX_POCKET_COUNT; i++)
             _lastMarkerPosition[i] = _markers[i].transform.position;
+    }
+
+    private Vector3 FlattenToTablePlane(Vector3 world)
+    {
+        float y = TableY > 0f ? GetPocketMarkerY(TableY) : world.y;
+        return new Vector3(world.x, y, world.z);
+    }
+
+    private Vector3 FlattenDirectionToTablePlane(Vector3 direction) => new Vector3(direction.x, 0f, direction.z);
+
+    private float ProjectPocketLong(Vector3 world) => Vector3.Dot(FlattenToTablePlane(world) - _pocketEditingBasisOrigin, _pocketEditingLongAxis);
+
+    private float ProjectPocketShort(Vector3 world) => Vector3.Dot(FlattenToTablePlane(world) - _pocketEditingBasisOrigin, _pocketEditingShortAxis);
+
+    private Vector3 ComposePocketFromBasis(float longCoord, float shortCoord, float markerY)
+    {
+        Vector3 world = _pocketEditingBasisOrigin + (_pocketEditingLongAxis * longCoord) + (_pocketEditingShortAxis * shortCoord);
+        world.y = markerY;
+        return world;
     }
 
     private float GetDefaultBallHeight(float tableY)
