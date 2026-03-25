@@ -3,8 +3,9 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
-// Attach to: EnvironmentStatusMenu GameObject in the setup/menu scene used before gameplay.
-// Issue: #87 QR alignment workflow and user-facing setup feedback.
+// Attach to: EnvironmentStatusMenu GameObject in PoolSetup scene
+// Branch: ISSUE-84
+// Issue: #84 global toggle for ball edit entry buttons
 public class EnvironmentStatusMenuController : MonoBehaviour
 {
     [Header("UI References")]
@@ -21,6 +22,9 @@ public class EnvironmentStatusMenuController : MonoBehaviour
 
     [SerializeField] private Button lockQrPositionButton;
     [SerializeField] private TextMeshProUGUI lockQrPositionButtonText;
+
+    [SerializeField] private Button toggleBallEntryButtonsButton; // UPDATED: global show/hide for all ball "E" buttons
+    [SerializeField] private TextMeshProUGUI toggleBallEntryButtonsButtonText; // UPDATED
 
     [Header("Scene References")]
     [SerializeField] private TableStaticMarkingsView tableStaticMarkingsView;
@@ -61,12 +65,16 @@ public class EnvironmentStatusMenuController : MonoBehaviour
     [SerializeField] private bool invokeParsedEventOnlyOnce = true;
     [SerializeField] private bool requireQrReadyBeforePocketConfirmation = true;
     [SerializeField] private bool hideQrLockButtonAfterPocketConfirmation = true;
+    [SerializeField] private bool showBallEntryToggleAfterPocketConfirmation = true; // UPDATED
+    [SerializeField] private bool forceHideBallEntryButtonsWhenSetupIsInvalid = true; // UPDATED
 
     [Header("Events")]
     public UnityEvent OnEnvironmentParsed;
     public UnityEvent OnConfirmPocketPlacementRequested;
     public UnityEvent OnConfirmStaticMarkingsPlacementRequested;
     public UnityEvent OnQrLockedAndApplied;
+    public UnityEvent OnBallEntryButtonsShown; // UPDATED
+    public UnityEvent OnBallEntryButtonsHidden; // UPDATED
 
     private bool _hasInvokedEnvironmentParsedEvent;
     private string _lastQrStatusMessage = string.Empty;
@@ -95,6 +103,12 @@ public class EnvironmentStatusMenuController : MonoBehaviour
             lockQrPositionButton.onClick.RemoveListener(HandleLockQrPositionClicked);
             lockQrPositionButton.onClick.AddListener(HandleLockQrPositionClicked);
         }
+
+        if (toggleBallEntryButtonsButton != null)
+        {
+            toggleBallEntryButtonsButton.onClick.RemoveListener(HandleToggleBallEntryButtonsClicked);
+            toggleBallEntryButtonsButton.onClick.AddListener(HandleToggleBallEntryButtonsClicked);
+        }
     }
 
     private void OnEnable()
@@ -110,6 +124,7 @@ public class EnvironmentStatusMenuController : MonoBehaviour
         confirmPocketPlacementButtonText = ResolveButtonLabel(confirmPocketPlacementButton, confirmPocketPlacementButtonText);
         confirmStaticMarkingsPlacementButtonText = ResolveButtonLabel(confirmStaticMarkingsPlacementButton, confirmStaticMarkingsPlacementButtonText);
         lockQrPositionButtonText = ResolveButtonLabel(lockQrPositionButton, lockQrPositionButtonText);
+        toggleBallEntryButtonsButtonText = ResolveButtonLabel(toggleBallEntryButtonsButton, toggleBallEntryButtonsButtonText); // UPDATED
 
         if (tableStaticMarkingsView == null)
             tableStaticMarkingsView = FindFirstObjectByType<TableStaticMarkingsView>();
@@ -145,7 +160,12 @@ public class EnvironmentStatusMenuController : MonoBehaviour
         SetButtonState(confirmPocketPlacementButton, confirmPocketPlacementButtonText, false, "Confirm pockets");
         SetButtonState(confirmStaticMarkingsPlacementButton, confirmStaticMarkingsPlacementButtonText, false, "Confirm markings");
         SetButtonState(lockQrPositionButton, lockQrPositionButtonText, false, "Show QR codes");
+        SetButtonState(toggleBallEntryButtonsButton, toggleBallEntryButtonsButtonText, false, "Show ball edit buttons"); // UPDATED
+
         SetButtonVisible(lockQrPositionButton, true);
+        SetButtonVisible(toggleBallEntryButtonsButton, false); // UPDATED: default hidden until setup reaches the required phase.
+
+        BallOverrideSelectable.SetGlobalEntryButtonsVisible(false); // UPDATED: default global state is hidden.
     }
 
     private void RefreshUiFromTableService(bool forceRefresh)
@@ -246,10 +266,17 @@ public class EnvironmentStatusMenuController : MonoBehaviour
             _lastQrStatusMessage = "QR workflow disabled.";
         }
 
+        bool qrRequirementSatisfied =
+            !requireQrReadyBeforePocketConfirmation ||
+            qrController == null ||
+            !qrController.EnableQrTrackingWorkflow ||
+            qrController.IsReadyToPlacePockets ||
+            tableService.DebugBypassQrAlignmentGate;
+
         bool canConfirmPocketPlacement =
             tableService.CanFinalizePocketPlacement() &&
             !pocketsConfirmed &&
-            (!requireQrReadyBeforePocketConfirmation || (qrController != null && qrController.IsReadyToPlacePockets));
+            qrRequirementSatisfied;
 
         bool canConfirmStaticMarkings = pocketsConfirmed && staticMarkingsReady && !staticMarkingsConfirmed;
 
@@ -274,6 +301,29 @@ public class EnvironmentStatusMenuController : MonoBehaviour
 
         SetButtonVisible(lockQrPositionButton, showQrButton);
         SetButtonState(lockQrPositionButton, lockQrPositionButtonText, canLockQr, qrButtonLabel);
+
+        // UPDATED: if setup is no longer valid for ball visualization, force-close the per-ball entry-button workflow.
+        bool ballEditingSetupValid =
+            pocketsConfirmed &&
+            tableService.IsReadyToVisualizeBalls();
+
+        if (forceHideBallEntryButtonsWhenSetupIsInvalid && !ballEditingSetupValid && BallOverrideSelectable.AreEntryButtonsGloballyVisible)
+        {
+            BallOverrideSelectable.SetGlobalEntryButtonsVisible(false);
+            ManualBallOverrideService.Instance?.ClearSelection();
+        }
+
+        bool showBallEntryToggle = showBallEntryToggleAfterPocketConfirmation && pocketsConfirmed;
+        bool canToggleBallEntryButtons =
+            ballEditingSetupValid &&
+            BallOverrideSelectable.RegisteredSelectableCount > 0;
+
+        string ballEntryToggleLabel = BallOverrideSelectable.AreEntryButtonsGloballyVisible
+            ? "Hide ball edit buttons"
+            : "Show ball edit buttons";
+
+        SetButtonVisible(toggleBallEntryButtonsButton, showBallEntryToggle);
+        SetButtonState(toggleBallEntryButtonsButton, toggleBallEntryButtonsButtonText, canToggleBallEntryButtons, ballEntryToggleLabel);
     }
 
     private TableStaticMarkingsView ResolveMarkingsView()
@@ -346,7 +396,8 @@ public class EnvironmentStatusMenuController : MonoBehaviour
         if (requireQrReadyBeforePocketConfirmation &&
             qrController != null &&
             qrController.EnableQrTrackingWorkflow &&
-            !qrController.IsReadyToPlacePockets)
+            !qrController.IsReadyToPlacePockets &&
+            !tableService.DebugBypassQrAlignmentGate)
         {
             Debug.LogWarning("[EnvironmentStatusMenuController] Confirm pockets requested before QR alignment was completed.");
             return;
@@ -389,6 +440,36 @@ public class EnvironmentStatusMenuController : MonoBehaviour
 
         if (disableConfirmButtonAfterClick)
             SetButtonState(confirmStaticMarkingsPlacementButton, confirmStaticMarkingsPlacementButtonText, false, "Markings confirmed");
+
+        RefreshUiFromTableService(forceRefresh: true);
+    }
+
+    private void HandleToggleBallEntryButtonsClicked()
+    {
+        TableService tableService = TableService.Instance;
+
+        if (tableService == null)
+            return;
+
+        if (!tableService.IsReadyToVisualizeBalls())
+        {
+            Debug.LogWarning("[EnvironmentStatusMenuController] Ball edit buttons cannot be toggled before the ball visualization gate is open.");
+            return;
+        }
+
+        bool nextVisible = !BallOverrideSelectable.AreEntryButtonsGloballyVisible;
+
+        BallOverrideSelectable.SetGlobalEntryButtonsVisible(nextVisible);
+
+        if (!nextVisible)
+        {
+            ManualBallOverrideService.Instance?.ClearSelection(); // UPDATED: hiding all "E" buttons also hides the selected-ball menu.
+            OnBallEntryButtonsHidden?.Invoke();
+        }
+        else
+        {
+            OnBallEntryButtonsShown?.Invoke();
+        }
 
         RefreshUiFromTableService(forceRefresh: true);
     }

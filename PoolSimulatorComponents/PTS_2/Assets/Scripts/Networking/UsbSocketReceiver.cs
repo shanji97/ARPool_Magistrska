@@ -21,7 +21,7 @@ public class UsbSocketReceiver : MonoBehaviour
     private Thread _listenerThread;
     private volatile bool _running = false;
     private readonly ConcurrentQueue<string> _blocks = new();
-    private TableService svc = TableService.Instance;
+    private TableService svc;
     private (float, float)[] pocketsXZ = null;
 
 

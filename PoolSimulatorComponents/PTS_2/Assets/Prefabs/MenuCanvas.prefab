@@ -16,7 +16,8 @@ GameObject:
   - component: {fileID: 3070257784080375603}
   - component: {fileID: 81163076000781552}
   - component: {fileID: 5652807819931571385}
-  m_Layer: 5
+  - component: {fileID: 913989154930105937}
+  m_Layer: 3
   m_Name: MenuCanvas
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -303,6 +304,34 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 37f34a0b747766743bde3ba4d54db0bc, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+--- !u!114 &913989154930105937
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 541030809057562441}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ee10491ef6d5d1d49a270cf6b09bdc19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Oculus.VR::OVROverlayCanvas
+  _mipmapMode: 0
+  _dynamicResolution: 1
+  _redrawResolutionThreshold: 2147483647
+  rectTransform: {fileID: 592242905952359839}
+  maxTextureSize: 2048
+  manualRedraw: 0
+  renderInterval: 1
+  renderIntervalFrameOffset: 0
+  superSample: 0
+  layer: 5
+  opacity: 2
+  shape: 0
+  curveRadius: 1
+  overlapMask: 0
+  compositionMode: 1
+  _overlayEnabled: 1
 --- !u!1 &2988978144163113474
 GameObject:
   m_ObjectHideFlags: 0
@@ -315,7 +344,7 @@ GameObject:
   - component: {fileID: 3654344400437773616}
   - component: {fileID: 930111229139044232}
   - component: {fileID: 2516216679263491413}
-  m_Layer: 5
+  m_Layer: 3
   m_Name: Surface
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -397,7 +426,7 @@ GameObject:
   - component: {fileID: 6216248593596336636}
   - component: {fileID: 6934662324928228323}
   - component: {fileID: 5836198217064906641}
-  m_Layer: 5
+  m_Layer: 3
   m_Name: MainMenuPanel
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -520,7 +549,7 @@ GameObject:
   - component: {fileID: 867287481484697497}
   - component: {fileID: 8805237858568747758}
   - component: {fileID: 7442677911514929735}
-  m_Layer: 5
+  m_Layer: 3
   m_Name: MainMenuSettingsPanel
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -717,9 +746,17 @@ PrefabInstance:
       propertyPath: m_Name
       value: CHALLANGES_BUTTON
       objectReference: {fileID: 0}
+    - target: {fileID: 3367365647008093623, guid: ac36cdbe847d3444e9dcf3802f99ae32, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     - target: {fileID: 6393917160974860330, guid: ac36cdbe847d3444e9dcf3802f99ae32, type: 3}
       propertyPath: 'm_ActiveFontFeatures.Array.data[0]'
       value: 1801810542
+      objectReference: {fileID: 0}
+    - target: {fileID: 8046955236543195842, guid: ac36cdbe847d3444e9dcf3802f99ae32, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -742,6 +779,10 @@ PrefabInstance:
     - target: {fileID: 188814731956983413, guid: 02add1e8aac3805409349b96737e1639, type: 3}
       propertyPath: 'm_ActiveFontFeatures.Array.data[0]'
       value: 1801810542
+      objectReference: {fileID: 0}
+    - target: {fileID: 3857767459610573981, guid: 02add1e8aac3805409349b96737e1639, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 6611494969017506001, guid: 02add1e8aac3805409349b96737e1639, type: 3}
       propertyPath: m_Pivot.x
@@ -827,6 +868,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: PLAYGROUND_BUTTON
       objectReference: {fileID: 0}
+    - target: {fileID: 8403229823694210024, guid: 02add1e8aac3805409349b96737e1639, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -848,6 +893,10 @@ PrefabInstance:
     - target: {fileID: 349535804790922428, guid: 95a0281d5ad52594eba4b99362449dc9, type: 3}
       propertyPath: 'm_ActiveFontFeatures.Array.data[0]'
       value: 1801810542
+      objectReference: {fileID: 0}
+    - target: {fileID: 3733072982362945108, guid: 95a0281d5ad52594eba4b99362449dc9, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 6739565017033462296, guid: 95a0281d5ad52594eba4b99362449dc9, type: 3}
       propertyPath: m_Pivot.x
@@ -933,6 +982,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: PLAYGAME_BUTTON
       objectReference: {fileID: 0}
+    - target: {fileID: 8275720597413873953, guid: 95a0281d5ad52594eba4b99362449dc9, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -999,6 +1052,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: BACK_TEXT
       objectReference: {fileID: 0}
+    - target: {fileID: 192909290609189461, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     - target: {fileID: 3871441006581516477, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
       propertyPath: m_text
       value: Back
@@ -1006,6 +1063,10 @@ PrefabInstance:
     - target: {fileID: 4880380179161488672, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
       propertyPath: m_Name
       value: BACK_BUTTON
+      objectReference: {fileID: 0}
+    - target: {fileID: 4880380179161488672, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 7846516640514967065, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
       propertyPath: m_Pivot.x
@@ -1149,6 +1210,10 @@ PrefabInstance:
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[1].m_Arguments.m_ObjectArgumentAssemblyTypeName
       value: UnityEngine.Object, UnityEngine
       objectReference: {fileID: 0}
+    - target: {fileID: 192909290609189461, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     - target: {fileID: 3871441006581516477, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
       propertyPath: 'm_ActiveFontFeatures.Array.data[0]'
       value: 1801810542
@@ -1156,6 +1221,10 @@ PrefabInstance:
     - target: {fileID: 4880380179161488672, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
       propertyPath: m_Name
       value: SETTINGS_BUTTON
+      objectReference: {fileID: 0}
+    - target: {fileID: 4880380179161488672, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 7846516640514967065, guid: 1bfdf4943bb386742878d7552f4bfe47, type: 3}
       propertyPath: m_Pivot.x
@@ -1339,6 +1408,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: QUIT_BUTTON
       objectReference: {fileID: 0}
+    - target: {fileID: 4193726678433877967, guid: 1809c159678fd20409424c0e733a3d69, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     - target: {fileID: 5490895986748971602, guid: 1809c159678fd20409424c0e733a3d69, type: 3}
       propertyPath: 'm_ActiveFontFeatures.Array.data[0]'
       value: 1801810542
@@ -1371,6 +1444,10 @@ PrefabInstance:
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Arguments.m_ObjectArgumentAssemblyTypeName
       value: UnityEngine.Object, UnityEngine
       objectReference: {fileID: 0}
+    - target: {fileID: 8873448209134153914, guid: 1809c159678fd20409424c0e733a3d69, type: 3}
+      propertyPath: m_Layer
+      value: 3
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -1392,6 +1469,10 @@ PrefabInstance:
     - target: {fileID: 1005306199405788642, guid: 2b5766c31bc5d024bbe241acb1531786, type: 3}
       propertyPath: 'm_ActiveFontFeatures.Array.data[0]'
       value: 1801810542
+      objectReference: {fileID: 0}
+    - target: {fileID: 4243752346512414474, guid: 2b5766c31bc5d024bbe241acb1531786, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 6101782606920971078, guid: 2b5766c31bc5d024bbe241acb1531786, type: 3}
       propertyPath: m_Pivot.x
@@ -1476,6 +1557,10 @@ PrefabInstance:
     - target: {fileID: 8931509245665306751, guid: 2b5766c31bc5d024bbe241acb1531786, type: 3}
       propertyPath: m_Name
       value: LESSONS_BUTTON
+      objectReference: {fileID: 0}
+    - target: {fileID: 8931509245665306751, guid: 2b5766c31bc5d024bbe241acb1531786, type: 3}
+      propertyPath: m_Layer
+      value: 3
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

@@ -1,6 +1,9 @@
 using System;
 using UnityEngine;
 
+// Attach to: GameplaySystems/ManualBallOverrideService in PoolSetup scene
+// Branch: ISSUE-84
+// Issue: #84 manual ball override selection state
 public class ManualBallOverrideService : MonoBehaviour
 {
     public static ManualBallOverrideService Instance { get; private set; }
@@ -8,6 +11,8 @@ public class ManualBallOverrideService : MonoBehaviour
     public BallOverrideSelectable SelectedSelectable { get; private set; }
 
     public Ball SelectedBall => SelectedSelectable != null ? SelectedSelectable.RuntimeBall : null;
+
+    public bool HasSelection => SelectedBall != null; // UPDATED: helper for menu/UI state.
 
     public event Action<BallOverrideSelectable> SelectedBallChanged;
 

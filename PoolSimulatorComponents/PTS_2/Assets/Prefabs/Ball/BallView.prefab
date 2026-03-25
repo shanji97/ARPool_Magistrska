@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 2582179831159020964}
   - component: {fileID: 8916417194659963220}
   - component: {fileID: 777132167948403990}
-  m_Layer: 0
+  m_Layer: 3
   m_Name: BallMenuButton
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -194,7 +194,7 @@ Transform:
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: -0, y: -0, z: -0}
   m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
+  m_ConstrainProportionsScale: 1
   m_Children:
   - {fileID: 1650171853056527081}
   - {fileID: 7623038908608935046}
@@ -221,7 +221,7 @@ SphereCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Radius: 0.5
+  m_Radius: 0.028575
   m_Center: {x: 0, y: 0, z: 0}
 --- !u!54 &5619882219716246980
 Rigidbody:
@@ -357,7 +357,7 @@ GameObject:
   - component: {fileID: 2613313441819708305}
   - component: {fileID: 5774890298928780159}
   - component: {fileID: 5938210239629405535}
-  m_Layer: 0
+  m_Layer: 3
   m_Name: BallMenuText
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -587,13 +587,14 @@ GameObject:
   - component: {fileID: 2440790132486806594}
   - component: {fileID: 3910612326749904}
   - component: {fileID: 5803331639186024327}
-  m_Layer: 0
+  - component: {fileID: 7494886867723056270}
+  m_Layer: 3
   m_Name: SelectButtonCanvas
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &6131881848373694750
 RectTransform:
   m_ObjectHideFlags: 0
@@ -838,6 +839,34 @@ MonoBehaviour:
     ReEnterDistance: 0.02
   _closeDistanceThreshold: 0.001
   _tiebreakerScore: 0
+--- !u!114 &7494886867723056270
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6020928616003452204}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ee10491ef6d5d1d49a270cf6b09bdc19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Oculus.VR::OVROverlayCanvas
+  _mipmapMode: 0
+  _dynamicResolution: 1
+  _redrawResolutionThreshold: 2147483647
+  rectTransform: {fileID: 6131881848373694750}
+  maxTextureSize: 2048
+  manualRedraw: 0
+  renderInterval: 1
+  renderIntervalFrameOffset: 0
+  superSample: 0
+  layer: 5
+  opacity: 2
+  shape: 0
+  curveRadius: 1
+  overlapMask: 0
+  compositionMode: 1
+  _overlayEnabled: 1
 --- !u!1 &6678422659480589834
 GameObject:
   m_ObjectHideFlags: 0

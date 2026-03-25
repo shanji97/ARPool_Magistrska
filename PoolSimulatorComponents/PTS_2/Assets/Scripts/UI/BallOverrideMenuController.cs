@@ -1,16 +1,29 @@
-// Attach to: BallMenu in PoolSetup scene
 using TMPro;
 using UnityEngine;
 
+// Attach to: BallMenu GameObject in PoolSetup scene
+// Branch: ISSUE-84
+// Issue: #84 selected-ball world-space menu controller
 public class BallOverrideMenuController : MonoBehaviour
 {
     [Header("Menu Root")]
-    [SerializeField] private GameObject menuCanvasRoot; // e.g. BallMenu/MenuCanvas
+    [SerializeField] private GameObject menuCanvasRoot; // BallMenu/MenuCanvas
+
+    [Header("Optional Rect Used For Height Clamping")]
+    [SerializeField] private RectTransform menuHeightReferenceRect; // assign BallMenu/MenuCanvas or the main panel rect
 
     [Header("Follow Target")]
-    [SerializeField] private Vector3 worldOffset = new(0f, 0.08f, 0f);
+    [SerializeField] private Vector3 worldOffset = new(0f, 0.24f, 0f); // e.g. menu follow offset above selected ball
     [SerializeField] private bool followSelectedBall = true;
-    [SerializeField] private bool keepCurrentRotation = true; // UPDATED: preserves your current 180-degree canvas workaround
+    [SerializeField] private bool keepCurrentRotation = true; // keep your current 180° canvas workaround
+
+    [Header("Height Clamp")]
+    [SerializeField] private bool clampBottomHeight = true;
+    [SerializeField] private float minimumMenuBottomWorldY = 1.15f;
+    [SerializeField] private float fallbackHalfHeightWorld = 0.18f;
+
+    [Header("Behavior")]
+    [SerializeField] private bool closeMenuWhenEntryButtonsAreHidden = true; // UPDATED: hiding global "E" buttons also closes the menu.
 
     [Header("Optional Labels")]
     [SerializeField] private TMP_Text selectedTypeText;
@@ -18,9 +31,12 @@ public class BallOverrideMenuController : MonoBehaviour
     [SerializeField] private TMP_Text selectedOverrideFlagsText;
 
     private BallOverrideSelectable _selectedSelectable;
+    private Quaternion _initialRotation;
 
     private void Awake()
     {
+        _initialRotation = transform.rotation;
+
         if (menuCanvasRoot != null)
             menuCanvasRoot.SetActive(false);
     }
@@ -29,12 +45,16 @@ public class BallOverrideMenuController : MonoBehaviour
     {
         if (ManualBallOverrideService.Instance != null)
             ManualBallOverrideService.Instance.SelectedBallChanged += HandleSelectedBallChanged;
+
+        BallOverrideSelectable.EntryButtonsVisibilityChanged += HandleEntryButtonsVisibilityChanged; // UPDATED
     }
 
     private void OnDisable()
     {
         if (ManualBallOverrideService.Instance != null)
             ManualBallOverrideService.Instance.SelectedBallChanged -= HandleSelectedBallChanged;
+
+        BallOverrideSelectable.EntryButtonsVisibilityChanged -= HandleEntryButtonsVisibilityChanged; // UPDATED
     }
 
     private void LateUpdate()
@@ -46,19 +66,84 @@ public class BallOverrideMenuController : MonoBehaviour
         if (anchor == null)
             return;
 
-        transform.position = anchor.position + worldOffset;
+        Vector3 desiredPosition = anchor.position + worldOffset;
+
+        if (clampBottomHeight)
+        {
+            float halfHeightWorld = GetHalfHeightWorld();
+            float currentBottomY = desiredPosition.y - halfHeightWorld;
+
+            if (currentBottomY < minimumMenuBottomWorldY)
+                desiredPosition.y += minimumMenuBottomWorldY - currentBottomY;
+        }
+
+        transform.position = desiredPosition;
+
+        if (keepCurrentRotation)
+            transform.rotation = _initialRotation;
+
+        RefreshTexts();
     }
 
     private void HandleSelectedBallChanged(BallOverrideSelectable selectable)
     {
         _selectedSelectable = selectable;
 
-        bool shouldShow = _selectedSelectable != null && _selectedSelectable.RuntimeBall != null;
+        bool shouldShow =
+            _selectedSelectable != null &&
+            _selectedSelectable.RuntimeBall != null &&
+            BallOverrideSelectable.AreEntryButtonsGloballyVisible; // UPDATED: menu is only reachable while global entry buttons are enabled.
 
         if (menuCanvasRoot != null)
             menuCanvasRoot.SetActive(shouldShow);
 
+        if (shouldShow)
+        {
+            Transform anchor = _selectedSelectable.MenuAnchor;
+            if (anchor != null)
+            {
+                Vector3 desiredPosition = anchor.position + worldOffset;
+
+                if (clampBottomHeight)
+                {
+                    float halfHeightWorld = GetHalfHeightWorld();
+                    float currentBottomY = desiredPosition.y - halfHeightWorld;
+
+                    if (currentBottomY < minimumMenuBottomWorldY)
+                        desiredPosition.y += minimumMenuBottomWorldY - currentBottomY;
+                }
+
+                transform.position = desiredPosition;
+            }
+
+            if (keepCurrentRotation)
+                transform.rotation = _initialRotation;
+        }
+
         RefreshTexts();
+    }
+
+    private void HandleEntryButtonsVisibilityChanged(bool areVisible)
+    {
+        if (areVisible)
+            return;
+
+        if (closeMenuWhenEntryButtonsAreHidden)
+        {
+            ManualBallOverrideService.Instance?.ClearSelection(); // UPDATED: hiding all "E" buttons also closes the selected-ball menu.
+            return;
+        }
+
+        if (menuCanvasRoot != null)
+            menuCanvasRoot.SetActive(false);
+    }
+
+    private float GetHalfHeightWorld()
+    {
+        if (menuHeightReferenceRect == null)
+            return fallbackHalfHeightWorld;
+
+        return menuHeightReferenceRect.rect.height * menuHeightReferenceRect.lossyScale.y * 0.5f;
     }
 
     private void RefreshTexts()
