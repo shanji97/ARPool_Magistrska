@@ -248,13 +248,7 @@ public class TableService : MonoBehaviour
     public readonly byte MAX_POCKET_COUNT = 6;
     public readonly byte MAX_DIAMOND_COUNT = 18;
 
-    public const byte StripeCount = 7;
-    public byte[] StripedBalls = new byte[] { 9, 10, 11, 12, 13, 14, 15 };
-
-    public const byte SolidCount = 7;
-    public byte[] SolidBalls = new byte[StripeCount] { 1, 2, 3, 4, 5, 6, 7 };
-
-    public readonly byte MAX_BALL_COUNT = SolidCount + StripeCount + 2;
+    public readonly byte MAX_BALL_COUNT = 16;
 
     // 0 - 6 solids, 7 eight, 8 - 14 stripes, cue 15
     private List<Vector3Float> _balls = null;

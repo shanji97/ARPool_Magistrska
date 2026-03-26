@@ -101,7 +101,7 @@ public class AppSettings : MonoBehaviour
         if (!tableStateEntries.Any())
             Debug.Log("No table state entries are being loaded in.");
 
-        (Settings.TableStates ??= new List<TableStateEntry>()).AddRange(tableStateEntries);
+        //(Settings.TableStates ??= new List<TableStateEntry>()).AddRange(tableStateEntries);
         Save();
     }
 
