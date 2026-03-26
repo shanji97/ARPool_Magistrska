@@ -93,7 +93,7 @@ public class BallOverrideSelectable : MonoBehaviour
         RefreshEntryButtonVisibility();
 
         if (entryButtonLabel != null)
-            entryButtonLabel.text = "E"; // UPDATED: enforce the intended label for the entry button.
+            entryButtonLabel.text = "E";
 
         if (debugLabel != null && RuntimeBall != null)
         {
@@ -104,6 +104,10 @@ public class BallOverrideSelectable : MonoBehaviour
 
             debugLabel.text = $"{RuntimeBall.BallType} #{RuntimeBall.BallId}{ignoredText}{overridesText}";
         }
+
+        BallVisualView visualView = GetComponent<BallVisualView>();
+        if (visualView != null && RuntimeBall != null)
+            visualView.Bind(RuntimeBall);
     }
 
     public void RefreshEntryButtonVisibility()

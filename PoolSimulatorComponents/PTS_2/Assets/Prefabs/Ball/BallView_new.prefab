@@ -571,6 +571,7 @@ GameObject:
   - component: {fileID: 8932575191905221384}
   - component: {fileID: 5758667965569925296}
   - component: {fileID: 2788696238203225702}
+  - component: {fileID: 284934232907309069}
   m_Layer: 0
   m_Name: BallView_new
   m_TagString: Untagged
@@ -634,6 +635,23 @@ MonoBehaviour:
   debugLabel: {fileID: 0}
   entryButtonRoot: {fileID: 6969838810690718990}
   entryButtonLabel: {fileID: 6533279609200458780}
+--- !u!114 &284934232907309069
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7410811396468010674}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 068e3679d927d9346802bb93688dc0b0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Classes::BallVisualView
+  targetRenderer: {fileID: 725659394751819213}
+  cueMaterial: {fileID: 2100000, guid: 9317634876f6c384badb925685e4b158, type: 2}
+  eightballMaterial: {fileID: 2100000, guid: 41b5f73e68ef0434786c37322cc31b29, type: 2}
+  solidMaterial: {fileID: 2100000, guid: 29822117d621d6f478c0ee4ac247e276, type: 2}
+  stripedMaterial: {fileID: 2100000, guid: db97b0009d1ddd146a0976787d789ebf, type: 2}
 --- !u!1 &7527390611713688502
 GameObject:
   m_ObjectHideFlags: 0

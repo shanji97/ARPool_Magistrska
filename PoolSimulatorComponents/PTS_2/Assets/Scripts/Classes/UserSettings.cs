@@ -14,5 +14,5 @@ public class UserSettings
 
     public DeviceInformation DeviceInformation { get; set; } = DeviceInformation.PrimaryQuest;
 
-    public List<TableStateEntry> TableStates { get; set; } = null;
+    //public List<TableStateEntry> TableStates { get; set; } = null;
 }

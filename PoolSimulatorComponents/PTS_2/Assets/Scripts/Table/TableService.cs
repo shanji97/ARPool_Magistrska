@@ -287,7 +287,7 @@ public class TableService : MonoBehaviour
         EnsureBallBufferSize();
 
         RawDetectedPocketXZ = new Vector2[MAX_POCKET_COUNT];
-            }
+    }
 
     public void LateUpdate()
     {
@@ -1505,6 +1505,7 @@ public class TableService : MonoBehaviour
             ApplyMarkerEditState(marker, editingEnabled); // UPDATED: freeze/unfreeze entire marker interaction stack
         }
     }
+
     private void ApplyMarkerEditState(GameObject marker, bool editingEnabled)
     {
         if (marker == null) return;
@@ -1589,13 +1590,6 @@ public class TableService : MonoBehaviour
                 _balls[i].SetHeight(h);
         }
     }
-    private static short MToRoundedMm(float valueM) // UPDATED: save meters back into *_mm JSON fields correctly
-    {
-        int mm = Mathf.RoundToInt(valueM * 1000f);
-        mm = Mathf.Clamp(mm, short.MinValue, short.MaxValue);
-        return (short)mm;
-    }
-
     public void ResetNearPocketSuppressionState()
     {
         _nearPocketBallMemory.Clear();
@@ -2351,9 +2345,9 @@ public class TableService : MonoBehaviour
         if (selectable != null)
             selectable.Bind(runtimeBall);
 
-        BallDebugView debugView = ballView.GetComponent<BallDebugView>();
-        if (debugView != null)
-            debugView.ApplyVisualState(runtimeBall);
+        BallVisualView visualView = ballView.GetComponent<BallVisualView>();
+        if (visualView != null)
+            visualView.Bind(runtimeBall);
 
         ballView.name = $"RuntimeBall_{visualIndex}_{runtimeBall.BallType}_{runtimeBall.BallId}";
         ballView.SetActive(!runtimeBall.IsIgnoredByUser());
