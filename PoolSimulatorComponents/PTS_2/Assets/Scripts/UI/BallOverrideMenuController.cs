@@ -1,10 +1,10 @@
-using System.Collections.Generic;
+// Attach to: BallMenu GameObject in PoolSetup scene
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
-// Attach to: BallMenu GameObject in PoolSetup scene
 // Branch: ISSUE-84
-// Issue: #84 selected-ball world-space menu controller + type dropdown UI
+// Issue: #84 selected-ball world-space menu controller + type dropdown UI + ignore/include button
 public class BallOverrideMenuController : MonoBehaviour
 {
     [Header("Menu Root")]
@@ -32,8 +32,10 @@ public class BallOverrideMenuController : MonoBehaviour
     [SerializeField] private TMP_Text currentTypeText;
     [SerializeField] private TMP_Text typeSourceText;
     [SerializeField] private TMP_Text typeStatusText;
-    [SerializeField] private TMP_Text selectedNumberText;
     [SerializeField] private TMP_Text selectedOverrideFlagsText;
+    [SerializeField] private TMP_Text ignoreStateText;
+    [SerializeField] private TMP_Text ignoreButtonLabelText;
+    [SerializeField] private Button ignoreDetectedBallButton; // assign IgnoreDetectedBallButton here
 
     private BallOverrideSelectable _selectedSelectable;
     private Quaternion _initialRotation;
@@ -228,6 +230,19 @@ public class BallOverrideMenuController : MonoBehaviour
             RefreshTexts();
     }
 
+    public void ToggleIgnoreSelectedBall()
+    {
+        Ball selectedBall = ManualBallOverrideService.Instance != null
+            ? ManualBallOverrideService.Instance.SelectedBall
+            : null;
+
+        if (selectedBall == null)
+            return;
+
+        ManualBallOverrideService.Instance?.ToggleSelectedIgnoredState();
+        RefreshSelectedVisuals();
+    }
+
     private void UpdateDropdownFromSelectedBall()
     {
         if (ballTypeDropdown == null)
@@ -266,6 +281,9 @@ public class BallOverrideMenuController : MonoBehaviour
         if (ballTypeDropdown != null)
             ballTypeDropdown.interactable = selectedBall != null;
 
+        if (ignoreDetectedBallButton != null)
+            ignoreDetectedBallButton.interactable = selectedBall != null;
+
         if (selectedBall == null)
         {
             if (detectedTypeText != null)
@@ -280,11 +298,14 @@ public class BallOverrideMenuController : MonoBehaviour
             if (typeStatusText != null)
                 typeStatusText.text = "Type status: -";
 
-            if (selectedNumberText != null)
-                selectedNumberText.text = "Number: -";
-
             if (selectedOverrideFlagsText != null)
                 selectedOverrideFlagsText.text = "Overrides: -";
+
+            if (ignoreStateText != null)
+                ignoreStateText.text = "Ignored state: -";
+
+            if (ignoreButtonLabelText != null)
+                ignoreButtonLabelText.text = "Ignore detected ball";
 
             return;
         }
@@ -307,17 +328,16 @@ public class BallOverrideMenuController : MonoBehaviour
         if (typeStatusText != null)
             typeStatusText.text = $"Type status: {BuildTypeStatusLabel(selectedBall)}";
 
-        if (selectedNumberText != null)
-        {
-            string detectedNumberSuffix = selectedBall.HasDetectedBaseline()
-                ? $" (Python: {selectedBall.GetDetectedOrCurrentBallId()})"
-                : string.Empty;
-
-            selectedNumberText.text = $"Number: {selectedBall.BallId}{detectedNumberSuffix}";
-        }
-
         if (selectedOverrideFlagsText != null)
             selectedOverrideFlagsText.text = $"Overrides: {selectedBall.UserOverrides}";
+
+        if (ignoreStateText != null)
+            ignoreStateText.text = $"Ignored state: {BuildIgnoreStateLabel(selectedBall)}";
+
+        if (ignoreButtonLabelText != null)
+            ignoreButtonLabelText.text = selectedBall.IsIgnoredByUser()
+                ? "Include detected ball"
+                : "Ignore detected ball";
     }
 
     private void RefreshSelectedVisuals()
@@ -422,6 +442,13 @@ public class BallOverrideMenuController : MonoBehaviour
             _ => ballType.ToString()
         };
 
+    private static string BuildIgnoreStateLabel(Ball selectedBall) =>
+        selectedBall == null
+            ? "-"
+            : selectedBall.IsIgnoredByUser()
+                ? "Ignored by user override"
+                : "Included";
+
     private string BuildTypeSourceLabel(Ball selectedBall)
     {
         if (selectedBall == null)
@@ -451,9 +478,8 @@ public class BallOverrideMenuController : MonoBehaviour
             : "Waiting for Python App stream data.";
     }
 
-    private static int GetNextBallId(BallType ballType, int currentBallId, int direction)
-    {
-        return ballType switch
+    private static int GetNextBallId(BallType ballType, int currentBallId, int direction) =>
+        ballType switch
         {
             BallType.Cue => 0,
             BallType.Eight => 8,
@@ -461,7 +487,6 @@ public class BallOverrideMenuController : MonoBehaviour
             BallType.Stripe => Wrap(currentBallId, 9, 15, direction),
             _ => currentBallId
         };
-    }
 
     private static int Wrap(int value, int min, int max, int direction)
     {

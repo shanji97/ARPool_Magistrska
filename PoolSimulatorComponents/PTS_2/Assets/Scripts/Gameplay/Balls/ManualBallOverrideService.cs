@@ -1,9 +1,9 @@
+// Attach to: GameplaySystems/ManualBallOverrideService in PoolSetup scene
 using System;
 using UnityEngine;
 
-// Attach to: GameplaySystems/ManualBallOverrideService in PoolSetup scene
 // Branch: ISSUE-84
-// Issue: #84 manual ball override selection state + type dropdown validation
+// Issue: #84 manual ball override selection state + type dropdown validation + ignore toggle
 public class ManualBallOverrideService : MonoBehaviour
 {
     public static ManualBallOverrideService Instance { get; private set; }
@@ -85,7 +85,7 @@ public class ManualBallOverrideService : MonoBehaviour
         }
 
         SelectedBall.OverrideBallType(targetType);
-        SelectedBall.AssignBallId(resolvedBallId); // Changed for ISSUE-84.1: keep the resolved valid number without forcing a separate number-override flag.
+        SelectedBall.AssignBallId(resolvedBallId);
 
         SelectedBallChanged?.Invoke(SelectedSelectable);
 
@@ -108,6 +108,23 @@ public class ManualBallOverrideService : MonoBehaviour
 
         SelectedBall.OverrideBallId((byte)Mathf.Clamp(newBallId, 0, 15));
         SelectedBallChanged?.Invoke(SelectedSelectable);
+    }
+
+    public void SetSelectedIgnoredState(bool isIgnored) // UPDATED: explicit include/ignore control for the selected runtime ball
+    {
+        if (SelectedBall == null)
+            return;
+
+        SelectedBall.SetIgnoredByUser(isIgnored); // UPDATED: store ignore override on Ball
+        SelectedBallChanged?.Invoke(SelectedSelectable); // UPDATED: refresh all subscribed ball visuals and menu state
+    }
+
+    public void ToggleSelectedIgnoredState() // UPDATED: single-button workflow for Ignore/Include
+    {
+        if (SelectedBall == null)
+            return;
+
+        SetSelectedIgnoredState(!SelectedBall.IsIgnoredByUser());
     }
 
     public void ReleaseSelectedTypeOverride()

@@ -1437,7 +1437,7 @@ public class TableService : MonoBehaviour
         return new Vector3(world.x, y, world.z);
     }
 
-    private Vector3 FlattenDirectionToTablePlane(Vector3 direction) => new Vector3(direction.x, 0f, direction.z);
+    private Vector3 FlattenDirectionToTablePlane(Vector3 direction) => new(direction.x, 0f, direction.z);
 
     private float ProjectPocketLong(Vector3 world) => Vector3.Dot(FlattenToTablePlane(world) - _pocketEditingBasisOrigin, _pocketEditingLongAxis);
 
@@ -2344,7 +2344,7 @@ public class TableService : MonoBehaviour
             visualView.Bind(runtimeBall);
 
         ballView.name = $"RuntimeBall_{visualIndex}_{runtimeBall.BallType}_{runtimeBall.BallId}";
-        ballView.SetActive(!runtimeBall.IsIgnoredByUser());
+        ballView.SetActive(true); // UPDATED: ignored balls stay visible/selectable so the user can unignore them later
     }
 
     private Color GetFallbackBallColor(BallType ballType) =>

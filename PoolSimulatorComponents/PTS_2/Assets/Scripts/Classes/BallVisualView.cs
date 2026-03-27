@@ -1,3 +1,4 @@
+// Attach to: BallView_new prefab root used by TableService in PoolSetup scene
 using UnityEngine;
 
 public class BallVisualView : MonoBehaviour
@@ -6,10 +7,11 @@ public class BallVisualView : MonoBehaviour
     [SerializeField] private Renderer targetRenderer;
 
     [Header("Shared Materials")]
-    [SerializeField] private Material cueMaterial;
-    [SerializeField] private Material eightballMaterial;
-    [SerializeField] private Material solidMaterial;
-    [SerializeField] private Material stripedMaterial;
+    [SerializeField] private Material _cueMaterial;
+    [SerializeField] private Material _eightballMaterial;
+    [SerializeField] private Material _solidMaterial;
+    [SerializeField] private Material _stripedMaterial;
+    [SerializeField] private Material _ignoredMaterial;
 
     private Ball _runtimeBall;
 
@@ -28,21 +30,25 @@ public class BallVisualView : MonoBehaviour
         if (_runtimeBall == null || targetRenderer == null)
             return;
 
-        Material targetMaterial = ResolveMaterial(_runtimeBall.BallType);
+        Material targetMaterial = ResolveMaterial(_runtimeBall); // UPDATED: resolve by full runtime state, not only BallType
 
         if (targetMaterial != null && targetRenderer.sharedMaterial != targetMaterial)
             targetRenderer.sharedMaterial = targetMaterial;
     }
 
-    private Material ResolveMaterial(BallType ballType) =>
-        ballType switch
-        {
-            BallType.Cue => cueMaterial,
-            BallType.Eight => eightballMaterial,
-            BallType.Solid => solidMaterial,
-            BallType.Stripe => stripedMaterial,
-            _ => solidMaterial
-        };
+    private Material ResolveMaterial(Ball runtimeBall) => // UPDATED: ignored state now has its own material
+        runtimeBall == null
+            ? _solidMaterial
+            : runtimeBall.IsIgnoredByUser() && _ignoredMaterial != null
+                ? _ignoredMaterial
+                : runtimeBall.BallType switch
+                {
+                    BallType.Cue => _cueMaterial,
+                    BallType.Eight => _eightballMaterial,
+                    BallType.Solid => _solidMaterial,
+                    BallType.Stripe => _stripedMaterial,
+                    _ => _solidMaterial
+                };
 
     private void AutoResolveReferences()
     {
@@ -57,5 +63,4 @@ public class BallVisualView : MonoBehaviour
         if (targetRenderer == null)
             targetRenderer = GetComponentInChildren<Renderer>(includeInactive: true);
     }
-
 }

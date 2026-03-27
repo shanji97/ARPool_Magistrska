@@ -648,10 +648,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Classes::BallVisualView
   targetRenderer: {fileID: 725659394751819213}
-  cueMaterial: {fileID: 2100000, guid: 9317634876f6c384badb925685e4b158, type: 2}
-  eightballMaterial: {fileID: 2100000, guid: 41b5f73e68ef0434786c37322cc31b29, type: 2}
-  solidMaterial: {fileID: 2100000, guid: 29822117d621d6f478c0ee4ac247e276, type: 2}
-  stripedMaterial: {fileID: 2100000, guid: db97b0009d1ddd146a0976787d789ebf, type: 2}
+  _cueMaterial: {fileID: 2100000, guid: 9317634876f6c384badb925685e4b158, type: 2}
+  _eightballMaterial: {fileID: 2100000, guid: 41b5f73e68ef0434786c37322cc31b29, type: 2}
+  _solidMaterial: {fileID: 2100000, guid: 29822117d621d6f478c0ee4ac247e276, type: 2}
+  _stripedMaterial: {fileID: 2100000, guid: db97b0009d1ddd146a0976787d789ebf, type: 2}
+  _ignoredMaterial: {fileID: 2100000, guid: 09844c523c4c9a7419472c75f7057262, type: 2}
 --- !u!1 &7527390611713688502
 GameObject:
   m_ObjectHideFlags: 0

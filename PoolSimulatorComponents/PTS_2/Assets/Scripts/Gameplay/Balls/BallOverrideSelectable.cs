@@ -1,11 +1,11 @@
+// Attach to: BallView_new prefab root used by TableService in PoolSetup scene
 using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 
-// Attach to: BallView_new prefab root used by TableService in PoolSetup scene
 // Branch: ISSUE-84
-// Issue: #84 manual ball override UI entry-point visibility
+// Issue: #84 manual ball override UI entry-point visibility + ignored ball re-selection
 public class BallOverrideSelectable : MonoBehaviour
 {
     [Header("Selection Visuals")]
@@ -14,20 +14,17 @@ public class BallOverrideSelectable : MonoBehaviour
     [SerializeField] private TMP_Text debugLabel; // optional
 
     [Header("Entry Button Visuals")]
-    [SerializeField] private GameObject entryButtonRoot; // UPDATED: e.g. SelectButtonCanvas child with the "E" button
-    [SerializeField] private TMP_Text entryButtonLabel; // UPDATED: optional label inside the entry button
+    [SerializeField] private GameObject entryButtonRoot; // e.g. SelectButtonCanvas child with the "E" button
+    [SerializeField] private TMP_Text entryButtonLabel; // optional label inside the entry button
 
     public Ball RuntimeBall { get; private set; }
 
     public Transform MenuAnchor => menuAnchor != null ? menuAnchor : transform;
 
-    // UPDATED: global registry of all currently active spawned ball views.
     private static readonly HashSet<BallOverrideSelectable> ActiveSelectables = new();
 
-    // UPDATED: global toggle state for all "E" entry buttons.
     public static bool AreEntryButtonsGloballyVisible { get; private set; } = false;
 
-    // UPDATED: environment status menu and ball menu can react to global visibility changes.
     public static event Action<bool> EntryButtonsVisibilityChanged;
 
     public static int RegisteredSelectableCount => ActiveSelectables.Count;
@@ -44,7 +41,7 @@ public class BallOverrideSelectable : MonoBehaviour
 
     private void OnEnable()
     {
-        ActiveSelectables.Add(this); // UPDATED: register live spawned/selectable ball.
+        ActiveSelectables.Add(this); // UPDATED: register live spawned/selectable ball
 
         if (ManualBallOverrideService.Instance != null)
             ManualBallOverrideService.Instance.SelectedBallChanged += HandleSelectedBallChanged;
@@ -54,7 +51,7 @@ public class BallOverrideSelectable : MonoBehaviour
 
     private void OnDisable()
     {
-        ActiveSelectables.Remove(this); // UPDATED: unregister when hidden/destroyed.
+        ActiveSelectables.Remove(this); // UPDATED: unregister when hidden/destroyed
 
         if (ManualBallOverrideService.Instance != null)
             ManualBallOverrideService.Instance.SelectedBallChanged -= HandleSelectedBallChanged;
@@ -74,7 +71,6 @@ public class BallOverrideSelectable : MonoBehaviour
         if (RuntimeBall == null)
             return;
 
-        // UPDATED: selection is only valid while the global entry buttons are visible.
         if (!AreEntryButtonsGloballyVisible)
             return;
 
@@ -117,8 +113,7 @@ public class BallOverrideSelectable : MonoBehaviour
 
         bool shouldShow =
             RuntimeBall != null &&
-            !RuntimeBall.IsIgnoredByUser() &&
-            AreEntryButtonsGloballyVisible;
+            AreEntryButtonsGloballyVisible; // UPDATED: ignored balls must remain re-selectable so they can be unignored later
 
         if (entryButtonRoot.activeSelf != shouldShow)
             entryButtonRoot.SetActive(shouldShow);
@@ -132,7 +127,7 @@ public class BallOverrideSelectable : MonoBehaviour
             return;
         }
 
-        AreEntryButtonsGloballyVisible = isVisible; // UPDATED: shared global gate for all live ball views.
+        AreEntryButtonsGloballyVisible = isVisible;
         RefreshAllEntryButtons();
         EntryButtonsVisibilityChanged?.Invoke(isVisible);
     }
@@ -150,7 +145,6 @@ public class BallOverrideSelectable : MonoBehaviour
 
     private void AutoResolveReferences()
     {
-        // UPDATED: keep prefab setup resilient to missed Inspector assignments.
         if (entryButtonRoot == null)
         {
             Transform entryRoot = transform.Find("SelectButtonCanvas");
