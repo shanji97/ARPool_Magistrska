@@ -2392,4 +2392,112 @@ public class TableService : MonoBehaviour
     {
         _latestDetectedBallSnapshot.Clear();
     }
+
+
+    public bool TryGetBallRestingWorldY(out float ballRestingWorldY)
+    {
+        ballRestingWorldY = 0f;
+
+        if (TableY <= 0f || BallDiameterM <= 0f)
+            return false;
+
+        ballRestingWorldY = GetDefaultBallHeight(TableY);
+        return true;
+    }
+
+    public bool TryClampBallCenterToPlayableSurface(
+        Vector3 requestedWorldPosition,
+        out Vector3 clampedWorldPosition,
+        out bool wasClamped)
+    {
+        clampedWorldPosition = requestedWorldPosition;
+        wasClamped = false;
+
+        if (!TryBuildBallPlacementBasis(
+                out Vector3 center,
+                out Vector3 longAxisLeftToRight,
+                out Vector3 shortAxisBottomToTop,
+                out float halfLengthM,
+                out float halfWidthM,
+                out float ballRestingY))
+        {
+            return false;
+        }
+
+        Vector3 requestedOnPlane = new(requestedWorldPosition.x, 0f, requestedWorldPosition.z);
+        Vector3 centerOnPlane = new(center.x, 0f, center.z);
+        Vector3 delta = requestedOnPlane - centerOnPlane;
+
+        float requestedLong = Vector3.Dot(delta, longAxisLeftToRight);
+        float requestedShort = Vector3.Dot(delta, shortAxisBottomToTop);
+
+        float clampedLong = Mathf.Clamp(requestedLong, -halfLengthM, halfLengthM);
+        float clampedShort = Mathf.Clamp(requestedShort, -halfWidthM, halfWidthM);
+
+        clampedWorldPosition = center
+            + (longAxisLeftToRight * clampedLong)
+            + (shortAxisBottomToTop * clampedShort);
+
+        clampedWorldPosition.y = ballRestingY;
+
+        wasClamped =
+            Mathf.Abs(requestedLong - clampedLong) > 0.0001f ||
+            Mathf.Abs(requestedShort - clampedShort) > 0.0001f ||
+            Mathf.Abs(requestedWorldPosition.y - ballRestingY) > 0.0001f;
+
+        return true;
+    }
+
+    private bool TryBuildBallPlacementBasis(
+        out Vector3 center,
+        out Vector3 longAxisLeftToRight,
+        out Vector3 shortAxisBottomToTop,
+        out float halfLengthM,
+        out float halfWidthM,
+        out float ballRestingY)
+    {
+        center = Vector3.zero;
+        longAxisLeftToRight = Vector3.right;
+        shortAxisBottomToTop = Vector3.forward;
+        halfLengthM = 0f;
+        halfWidthM = 0f;
+        ballRestingY = 0f;
+
+        if (!HasAllPockets() || PocketPositions == null || PocketPositions.Length != MAX_POCKET_COUNT)
+            return false;
+
+        if (!TryGetBallRestingWorldY(out ballRestingY))
+            return false;
+
+        Vector3 tl = FlattenToTablePlane(PocketPositions[0]);
+        Vector3 tr = FlattenToTablePlane(PocketPositions[1]);
+        Vector3 bl = FlattenToTablePlane(PocketPositions[4]);
+        Vector3 br = FlattenToTablePlane(PocketPositions[5]);
+
+        Vector3 leftShortRailCenter = 0.5f * (tl + bl);
+        Vector3 rightShortRailCenter = 0.5f * (tr + br);
+        Vector3 bottomLongRailCenter = 0.5f * (bl + br);
+        Vector3 topLongRailCenter = 0.5f * (tl + tr);
+
+        longAxisLeftToRight = FlattenDirectionToTablePlane(rightShortRailCenter - leftShortRailCenter);
+        shortAxisBottomToTop = FlattenDirectionToTablePlane(topLongRailCenter - bottomLongRailCenter);
+
+        if (longAxisLeftToRight.sqrMagnitude <= 0.000001f || shortAxisBottomToTop.sqrMagnitude <= 0.000001f)
+            return false;
+
+        longAxisLeftToRight = longAxisLeftToRight.normalized;
+        shortAxisBottomToTop = shortAxisBottomToTop.normalized;
+
+        float tableLengthM = Vector3.Distance(leftShortRailCenter, rightShortRailCenter);
+        float tableWidthM = Vector3.Distance(bottomLongRailCenter, topLongRailCenter);
+        float ballRadiusM = Mathf.Max(0f, BallDiameterM * 0.5f);
+
+        halfLengthM = Mathf.Max(0.05f, (tableLengthM * 0.5f) - ballRadiusM);
+        halfWidthM = Mathf.Max(0.05f, (tableWidthM * 0.5f) - ballRadiusM);
+
+        center = 0.5f * (leftShortRailCenter + rightShortRailCenter);
+        center.y = ballRestingY;
+
+        return true;
+    }
 }

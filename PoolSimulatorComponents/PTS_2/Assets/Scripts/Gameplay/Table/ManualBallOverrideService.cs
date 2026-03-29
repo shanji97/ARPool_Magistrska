@@ -1,9 +1,6 @@
-// Attach to: GameplaySystems/ManualBallOverrideService in PoolSetup scene
 using System;
 using UnityEngine;
 
-// Branch: ISSUE-84
-// Issue: #84 manual ball override selection state + type dropdown validation + ignore toggle
 public class ManualBallOverrideService : MonoBehaviour
 {
     public static ManualBallOverrideService Instance { get; private set; }
@@ -14,7 +11,13 @@ public class ManualBallOverrideService : MonoBehaviour
 
     public bool HasSelection => SelectedBall != null;
 
+    public bool IsSelectedBallInPositionCorrectionMode { get; private set; }
+
     public event Action<BallOverrideSelectable> SelectedBallChanged;
+    public event Action<BallOverrideSelectable, bool> SelectedBallPositionCorrectionModeChanged;
+
+    private Vector2Float _selectedBallPositionBeforeCorrection;
+    private bool _selectedBallHadPositionOverrideBeforeCorrection;
 
     private void Awake()
     {
@@ -32,12 +35,16 @@ public class ManualBallOverrideService : MonoBehaviour
         if (selectable == null || selectable.RuntimeBall == null)
             return;
 
+        if (SelectedSelectable != selectable)
+            EndSelectedPositionCorrectionInternal(revertToOriginalPosition: true);
+
         SelectedSelectable = selectable;
         SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
     public void ClearSelection()
     {
+        EndSelectedPositionCorrectionInternal(revertToOriginalPosition: true);
         SelectedSelectable = null;
         SelectedBallChanged?.Invoke(null);
     }
@@ -110,21 +117,111 @@ public class ManualBallOverrideService : MonoBehaviour
         SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
-    public void SetSelectedIgnoredState(bool isIgnored) // UPDATED: explicit include/ignore control for the selected runtime ball
+    public void SetSelectedIgnoredState(bool isIgnored)
     {
         if (SelectedBall == null)
             return;
 
-        SelectedBall.SetIgnoredByUser(isIgnored); // UPDATED: store ignore override on Ball
-        SelectedBallChanged?.Invoke(SelectedSelectable); // UPDATED: refresh all subscribed ball visuals and menu state
+        SelectedBall.SetIgnoredByUser(isIgnored);
+        SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
-    public void ToggleSelectedIgnoredState() // UPDATED: single-button workflow for Ignore/Include
+    public void ToggleSelectedIgnoredState()
     {
         if (SelectedBall == null)
             return;
 
         SetSelectedIgnoredState(!SelectedBall.IsIgnoredByUser());
+    }
+
+    public bool BeginSelectedPositionCorrection(out string statusMessage)
+    {
+        if (SelectedBall == null)
+        {
+            statusMessage = "No ball is currently selected.";
+            return false;
+        }
+
+        if (TableService.Instance == null || !TableService.Instance.TryGetBallRestingWorldY(out _))
+        {
+            statusMessage = "Table geometry is not ready for manual ball correction.";
+            return false;
+        }
+
+        _selectedBallHadPositionOverrideBeforeCorrection = SelectedBall.IsPositionUserOverriden();
+        _selectedBallPositionBeforeCorrection = CopyPosition(SelectedBall.GetEffectivePosition());
+
+        IsSelectedBallInPositionCorrectionMode = true;
+        SelectedBallPositionCorrectionModeChanged?.Invoke(SelectedSelectable, true);
+        SelectedBallChanged?.Invoke(SelectedSelectable);
+
+        statusMessage = "Ball position correction mode started.";
+        return true;
+    }
+
+    public bool TryMoveSelectedBallToWorldPosition(Vector3 requestedWorldPosition, out string statusMessage)
+    {
+        if (SelectedBall == null)
+        {
+            statusMessage = "No ball is currently selected.";
+            return false;
+        }
+
+        if (!IsSelectedBallInPositionCorrectionMode)
+        {
+            statusMessage = "Ball position correction mode is not active.";
+            return false;
+        }
+
+        bool wasClamped = false;
+
+        if (TableService.Instance == null ||
+            !TableService.Instance.TryClampBallCenterToPlayableSurface(
+                requestedWorldPosition,
+                out Vector3 clampedWorldPosition,
+                out wasClamped))
+        {
+            statusMessage = "Could not clamp the selected ball to the playable table area.";
+            return false;
+        }
+
+        SelectedBall.ModifyPosition(new Vector2Float(clampedWorldPosition.x, clampedWorldPosition.z));
+        SelectedBallChanged?.Invoke(SelectedSelectable);
+
+        statusMessage = wasClamped
+            ? "Ball position corrected and clamped to the playable area."
+            : "Ball position corrected.";
+
+        return true;
+    }
+
+    public void ConfirmSelectedPositionCorrection()
+    {
+        if (!IsSelectedBallInPositionCorrectionMode)
+            return;
+
+        IsSelectedBallInPositionCorrectionMode = false;
+        _selectedBallPositionBeforeCorrection = null;
+        _selectedBallHadPositionOverrideBeforeCorrection = false;
+
+        SelectedBallPositionCorrectionModeChanged?.Invoke(SelectedSelectable, false);
+        SelectedBallChanged?.Invoke(SelectedSelectable);
+    }
+
+    public void CancelSelectedPositionCorrection()
+    {
+        EndSelectedPositionCorrectionInternal(revertToOriginalPosition: true);
+        SelectedBallChanged?.Invoke(SelectedSelectable);
+    }
+
+    public void ReleaseSelectedPositionOverride()
+    {
+        if (SelectedBall == null)
+            return;
+
+        SelectedBall.ReleasePositionOverride();
+        EndSelectedPositionCorrectionInternal(revertToOriginalPosition: false);
+        SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
     public void ReleaseSelectedTypeOverride()
@@ -150,12 +247,14 @@ public class ManualBallOverrideService : MonoBehaviour
         if (SelectedBall == null)
             return;
 
+        EndSelectedPositionCorrectionInternal(revertToOriginalPosition: false);
         SelectedBall.ResetUserOverrides();
         SelectedBallChanged?.Invoke(SelectedSelectable);
     }
 
     public void ResetOverridesForSession(TableStateEntry tableStateEntry, BallOverrideSelectable[] activeBallViews = null)
     {
+        EndSelectedPositionCorrectionInternal(revertToOriginalPosition: false);
         tableStateEntry?.ResetAllBallOverrides();
 
         if (activeBallViews != null)
@@ -166,6 +265,31 @@ public class ManualBallOverrideService : MonoBehaviour
 
         ClearSelection();
     }
+
+    private void EndSelectedPositionCorrectionInternal(bool revertToOriginalPosition)
+    {
+        if (!IsSelectedBallInPositionCorrectionMode)
+            return;
+
+        if (revertToOriginalPosition && SelectedBall != null)
+        {
+            if (_selectedBallHadPositionOverrideBeforeCorrection && _selectedBallPositionBeforeCorrection != null)
+                SelectedBall.ModifyPosition(CopyPosition(_selectedBallPositionBeforeCorrection));
+            else
+                SelectedBall.ReleasePositionOverride();
+        }
+
+        IsSelectedBallInPositionCorrectionMode = false;
+        _selectedBallPositionBeforeCorrection = null;
+        _selectedBallHadPositionOverrideBeforeCorrection = false;
+
+        SelectedBallPositionCorrectionModeChanged?.Invoke(SelectedSelectable, false);
+    }
+
+    private static Vector2Float CopyPosition(Vector2Float source) =>
+        source == null
+            ? null
+            : new Vector2Float(source.X, source.Y);
 
     private static BallTypeOverrideMenuOption MapBallTypeToMenuOption(BallType ballType) =>
         ballType switch
