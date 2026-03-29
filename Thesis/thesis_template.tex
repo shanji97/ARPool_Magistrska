@@ -1,0 +1,470 @@
+%================================================================
+% SLO
+%----------------------------------------------------------------
+% datoteka: 	thesis_template.tex
+%
+% opis: 		predloga za pisanje diplomskega dela v formatu LaTeX na
+% 				Univerza v Ljubljani, Fakulteti za računalništvo in informatiko
+%
+% pripravili: 	Matej Kristan, Zoran Bosnić, Andrej Čopar,
+%			  	po začetni predlogi Gašperja Fijavža
+%
+% popravil: 	Domen Rački, Jaka Cikač, Matej Kristan
+%
+% verzija: 		30. september 2016 (dodan razširjeni povzetek)
+%================================================================
+
+
+
+%================================================================
+% SLO: definiraj strukturo dokumenta
+% ENG: define file structure
+%================================================================
+\documentclass[a4paper, 12pt]{book}
+ 
+
+%================================================================
+% SLO: Odkomentiraj "\SLOtrue " za izbiro slovenskega jezika
+% ENG: Uncomment "\SLOfalse" to chose English languagge
+%================================================================
+\newif\ifSLO
+\newif\ifTRACKEXIST
+\newif\ifTRACKCS
+\newif\ifPROGRAMMM
+\newif\ifPROGRAMEMAI
+
+
+% ---------------------------------------------------------------------------------------
+% IMPORTANT: Adjust the thesis language, your study program and track within this block
+% ---------------------------------------------------------------------------------------
+% ** switch language ** %
+\SLOtrue % Enables Slovenian language
+%\SLOfalse  % Enables English language
+
+% ** Switch programs: ** %
+
+% ** Uncomment if Program: Computer Science, Track: Computer Science **%
+% \TRACKCStrue
+% \TRACKEXISTtrue
+
+% ** Uncomment if Program: Computer Science, Track: Data Science **%
+%\TRACKCSfalse
+%\TRACKEXISTtrue
+
+% ** Uncomment if Program: Multimedia **%
+\PROGRAMMMtrue 
+\TRACKEXISTfalse 
+
+% ** Uncomment if Program: EMAI **%
+%\PROGRAMEMAItrue
+%\SLOfalse 
+
+% -------------------------------------------------------------------------------------------
+% End of language, program and track adjustment
+% -------------------------------------------------------------------------------------------
+
+
+%================================================================
+% SLO: vključi oblikovanje in pakete
+% ENG: include design and packages
+%================================================================
+\input{style/thesis_style}
+
+%----------------------------------------------------------------
+% |||||||||||||||||||||| USTREZNO POPRAVI |||||||||||||||||||||||
+% |||||||||||||||||||||| EDIT ACCORDINGLY |||||||||||||||||||||||
+%----------------------------------------------------------------
+\newcommand{\ttitle}{Sistem za vadbo biljard igre osmica v obogateni resničnosti}
+\newcommand{\ttitleEn}{Augmented Reality Training System for Eight-Ball Pool}
+\newcommand{\tsubject}{\ttitle}
+\newcommand{\tsubjectEn}{\ttitleEn}
+\newcommand{\tauthor}{Aleksander Kovač}
+\newcommand{\temail}{aleksander.kovac97@hotmail.com}
+\newcommand{\myyear}{2026}
+\newcommand{\tkeywords}{računalnik, računalnik, računalnik}
+\newcommand{\tkeywordsEn}{computer, computer, computer}
+\newcommand{\mysupervisor}{ izr. prof.~dr.\ Matevž Pesek}
+% Uncomment and define the following definition if you have a co-supervisor
+%\newcommand{\mycosupervisor}{akad.~prof.~dr.\ Martin Krpan}
+ 
+
+%%  Code publication under GNU
+% NOTE: If you chose to publish the source code as part of the thesis, then put the url here and change the appropriate switch below !!
+\newcommand{\linktosourcecode}{https://github.com/shanji97/ARPool_Magistrska/}
+\newif\ifCODEPUBLISHED
+
+% Chosing the published code "true" will automatically generate the licence statement for the code on the licence page.
+ \CODEPUBLISHEDtrue % uncomment if the code is published
+% \CODEPUBLISHEDfalse % uncomment if the code is not published
+%% End of Code publication under GNU
+
+% include formatted front pages
+\input{style/thesis_front_pages}
+
+%================================================================
+% ENG: main pages of the thesis
+%================================================================
+\begin{document}
+
+
+
+%----------------------------------------------------------------
+% Poglavje (Chapter) 1
+%----------------------------------------------------------------
+\chapter{Uvod}
+\label{ch:uvod}
+Nekateri uporabniki si želijo ustvariti umetne, računalniško ustvarjene svetove, v navidezni resničnosti (angl. ``virtual reality''), predvsem zaradi želje po dodatni izkušnji v svetu videoiger, simulacij ali pa želijo nadgraditi izobraževalne vsebine iz dvo-razsežnostnega prostora v prostor, kje bi določene stvari preizkusili tudi sami, ne, da bi za to rabili kakršni-kolih posebnih priprav ali pogojev, ki jih ni mogoče zagotoviti v kratkem časovnem obdobju \cite{Qingtian2024}. V splošnem se za take izkušnje naglavni prikazovalniki (angl. ``head-mounted display'') oziroma, kot jih bolj pogosteje in enostavneje imenujemo, kar očala za navidezno resničnost.
+
+Današnja očala nam poleg navidezne resničnosti omogočajo tudi prikaz obogatene resničnosti (angl. ``augmented reality''), ki omogoča, da lahko umetne navidezne tro-razsežnostne objekte, ustvarjene s pomočjo računalniških programov, vidimo v v resničnem svetu. Prav tako lahko z njimi izvajamo določeno mero interakcij, kar lahko posledično lahko uporabimo predvsem v izobraževalne namene. Tehnologija, ki združuje integrirane kamere, strojno opremo za zaznavo globine ter zaznavo rok in kretenj, nam daje motivacijo, da izkoristimo njeno prilagodljivost za ustvarjanje popolne simulacije sveta, ter brez tveganja preizkušamo različne scenarije. Ti scenariji vključujejo na primer različna usposabljanja ali načrtovanja izdelkov.
+
+Obogatena resničnost uporabnikom omogoča, da vizualizacijo in manipulacijo z digitalnimi vsebinami, kot so arhitekturne rešitve, navidezne dirkalne steze ali analize šaha, kje sistem ponudi predloge za naslednje poteze in jih tudi ustrezno vizualizira na resničnih šahovskih figurah v resničnem prostoru. Prav tako se v prostoru izpišejo razni metapodatki, kot sta na primer hitrost avtomobilčkov ali število figure na igralni površini, ali pa na zahtevo v prostoru izpiše podatke o želenem avtomobilčku, brez, da bi morali zato odpreti spletni brskalnik pri čemer se izpis lahko prilagodi glede na trenutno situacijo v prostoru. 
+
+Če pa se osredotočimo na področje izobraževanja, pa nam obogatena resničnost lahko pomaga pri učenju kompleksnih spretnosti, kot so recimo igranje klavirja \cite{McKenzie2022PianoVision}, uvajanje zaposlenega pri sestavljanju avtodoma ali pa s pomočjo videoiger, ki uporabljajo obstoječ realen prostor, pomaga pri rehabilitaciji po poškodbah (angl. ``exergaming'')\cite{Chow2023Exergaming}. Te tehnologije nam tako ne olajšajo le dostop do znanja, temveč tudi spodbujajo kreativnost, fizično aktivnost in uporabniku prilagojeno prilagojeno učenje.  Tako izobraževanje se lahko aplicira tudi na na druga področja, mora pa se v splošnem poskrbeti, za zaznavo objektov, kar med drugim vključuje prilagajanja na različne svetlobne razmere ter izbiro algoritmov oziroma pred-definiranih semantičnih označb scene za razumevanje okolice \cite{MetaDevelopers2024b}. Te modele se mora izbrati glede na to, kako hitro in natančno se želi objekte zaznati ter pridobiti informacije o njihovi poziciji. Rešitve se s trenutnim nivojem tehnologije uporabljajo tudi za prikaz informacij, ki napovedujejo prihodnost. Primeri takih sistemov, so sistemi za zaznavo krogel za biljard in izris poti za uspešno potopitev ciljnih krogel z dvo-razsežnostnim naborom in prikazom informacij, pri katerih bomo v tem magistrskem delu preizkusili informacijam dodati tretjo prostorsko razsežnost.
+Sistemi za pomoč pri vadbi biljard igre osmica, že obstajajo v različnih oblikah in izvedbah, a so trenutno omejeni na več različnih faktorjev, kot so recimo dimenzija \cite{Sousa2016,BWisePool2025, schiott2025pix2pocketsshotsuggestions8ball}, omejena računska moč \cite{Yan2024Enhancing} in uporaba ne-vsakdanje strojne opreme, ki je hkrati tudi komercialno težje dostopna za povprečnega potrošnika, ter primarno uporablja za druga aplikativna področja, kot je recimo industrija \cite{Sousa2016, Yan2024Enhancing}, na področju zabavne elektronike pa na žalost v vseh letih obstoja ni pretirano prišla do izraza. Posledično dokazana učinkovitost ne prihaja do izraza, čeprav so napake prikaza in končnega predvidenega rezultata zanemarljivo majhne, pri čemer je največja napaka zaznave 4 milimetre odmika med resničnim, izmerjenim in prikazanim (s strani dodatnih projektorjev in druge prikazovalne opreme) stanjem. Taki sistemi bi s pomočjo premišljenega pristopa lahko odgovorili na vprašanje, "Ali je mogoče s cenovno dostopnimi naglavnimi prikazovalniki, snemalnimi napravami (kot je na primer pametni mobilni telefon) in (prenosnimi) osebnimi računalniki vzpostaviti (večuporabniški) sistem, ki zanesljivo prikaže navidezne objekte pomešane z resničnimi?", na primeru igre biljard. 
+Prav tega vprašanja smo se lotili v magistrski nalogi, kjer smo razvili prototip za vadbo igre osmica v obogateni resničnosti. Poudarek je bil pri vzpostavitvi osnovnih prikazov navidezni krogel in projekcij poti, ki se zlivajo z resničnimi kroglami, mizo za biljard in igralno palico. Sam sistem je pri tem zgrajen iz dveh delov. Prvi del se ukvarja z zajemom slikovne informacije s pomočjo pametnega telefona, zaznavo in klasifikacijo krogel na mizi ter pošiljanje informacije o lokaciji na cenovno dostopna očala za navidezno in obogateno resničnost Meta Quest 3. Slednja to informacijo obdelajo in jo prikažejo enemu ali več uporabnikom (v primeru uporabe več očal), s pomočjo aplikacije razvite v pogonu za izdelavo iger Unity 6. Za zgled smo si pri tem vzeli druge aplikacije \cite{Sousa2016, Yan2024Enhancing} in njihove pristope kombinirali v učinkovito izvedbo, ki hkrati smiselno uporabi sredstva, ki jih ima za to na voljo. To pomeni, da se za zahtevnejše računske operacije še vedno uporablja (prenosni) osebni računalnik, očala pa se osredotočijo večinoma na izris objektov ter interakcijo z navideznimi objekti.
+
+Pri razvoju aplikacije smo se soočili predvsem z izzivi testiranja v pravem okolju, ki je moralo biti ustreznih dimenzij glede na to, kako veliko mizo za biljard smo imeli na razpolago. Težave nakazujejo, da je potrebno sistem v prihodnosti dodelati na način, da se nam ni treba pretirano zanašati na različne dimenzije prostorov oziroma na točno določene druge naprave (na primer, da lahko uporabljamo več različnih znamk in modelov pametnih telefonov in/ali digitalnih fotoaparatov za zajem slikovnih informacij) in pripomočkov za postavitev teh snemalnih naprav v prostor. Sistem v prihodnje torej mora delovati tako v manjši garaži z nizkim stropom, kot tudi v telovadnici, kjer ni realne možnosti, da bi na strop namestili pametni telefon in pričakovali, da bi sistem lahko učinkovito razbral celotno situacijo. Hkrati je za kakovostno izkušnjo prenos podatkov moral biti zanesljiv in hiter, saj bi lahko pomanjkljiva in počasna komunikacija povzročila zamike in nekonsistentnost navideznega objektov z realnimi objekti. Sistem je moral teči v realnem času, kar je v takem okolju še posebej pomembno saj lahko lahko rahel palice premik pri igri popolnoma spremeni situacijo. 
+Pomembno je bilo, da je prikaz navideznih in realnih objektov na mizi ustrezno poravnan in prikazan na način, da nam daje kar-seda celovito in jasno informacijo o stanju na mizi. Zajem slike smo morali predhodno natančno umeriti, tako zaradi popačenja, ki se pojavi pri samem zajemu aplikacije
+
+
+
+
+Datoteka {\tt magistrska\_naloga.tex} na kratko opisuje, kako se pisanja magistrskega dela lotimo z uporabo programskega paketa \LaTeX. V tem dokumentu bomo predstavili nekaj njegovih prednosti in hib. Kar se slednjih tiče, mi pride na misel ena sama. Ko se srečamo z njim, nam izgleda kot kislo jabolko, nismo prepričani, da bi želeli vanj ugrizniti. Lahko pa z njim pripravimo odličen zavitek ali pa pridemo na okus.
+
+V Poglavju~\ref{ch:uvod} bomo na hitro spoznali besedilne konstrukte kot so izreki, enačbe in dokazi. Naučili se bomo, kako se na njih sklicujemo. V Poglavju~\ref{ch:sklicevanje} se bomo srečali s sklicevanjem na besedilne konstrukte. Poglavje~\ref{ch:plovke} bo predstavilo vključevanje plovk: slik in tabel. V Poglavju~\ref{ch3} se bomo srečali s sklicevanjem na literaturo.
+Sledil bo samo še zaključek.
+
+Bodite pozorni, da se v glavni mapi nahajata še datoteki \verb+ declaration.tex+ in \verb+ izjava.tex+. Ti datoteki se ločeno prevedeta, ju podpišete in oddate v referat ločeno od magistrske naloge.
+
+%----------------------------------------------------------------
+% Poglavje (Chapter) 2
+%----------------------------------------------------------------
+\chapter{Sklicevanje na besedilne konstrukte}
+\label{ch:sklicevanje}
+
+Matematična ali popolna indukcija je eno prvih orodij, ki jih spoznamo za dokazovanje trditev pri matematičnih predmetih.
+\begin{izrek}
+\label{iz:1}
+Za vsako naravno število $n$ velja
+\begin{equation}
+n < 2^n.
+\label{eq:1}
+\end{equation}
+\end{izrek}
+\begin{dokaz}
+Dokazovanje z indukcijo zahteva, da neenakost~\eqref{eq:1} najprej preverimo za najmanjše naravno število --- $0$. Res, ker je $0 < 1 = 2^0$, je neenačba~\eqref{eq:1} za $n=0$ izpolnjena.
+
+Sledi indukcijski korak. S predpostavko, da je neenakost~\eqref{eq:1} veljavna pri nekem naravnem številu $n$, je potrebno pokazati, da je ista neenakost v veljavi tudi pri njegovem nasledniku --- naravnem številu $n+1$. Izračun zapišemo s tremi vrsticami, ki jih končamo s piko, saj do del tega stavka:
+\begin{align}
+n+1 &< 2^n + 1,  \label{eq:2}\\
+    &\le 2^n + 2^n, \label{eq:3}\\
+    &= 2^{n+1}. \nonumber
+\end{align}
+Neenakost~\eqref{eq:2} je posledica indukcijske predpostavke, neenakost~\eqref{eq:3} pa enostavno dejstvo, da je za vsako naravno število $n$ izraz $2^n$ vsaj tako velik kot 1. S tem je dokaz Izreka~\ref{iz:1} zaključen.
+\end{dokaz}
+
+Opazimo, da je \LaTeX\ številko izreka podredil številki poglavja.
+
+
+
+%----------------------------------------------------------------
+% Poglavje (Chapter) 3
+%----------------------------------------------------------------
+\chapter{Plovke: slike in tabele}
+\label{ch:plovke}
+
+Slike in daljše tabele praviloma vključujemo v dokument kot plovke. Pozicija plovke v končnem izdelku ni pogojena s tekom besedila, temveč z izgledom strani. \LaTeX\ bo skušal plovko postaviti samostojno, praviloma na vrh strani, na kateri se na takšno plovko prvič sklicujemo. Pri tem pa bo na vsako stran končnega izdelka želel postaviti tudi sorazmerno velik del besedila. V skrajnem primeru, če imamo res preveč plovk, se bo odločil za stran popolnoma zapolnjeno s plovkami.
+
+\section{Formati slik}
+Bitne slike, vektorske slike, kakršnekoli slike, z \LaTeX{}om lahko vključimo vse.
+Slika~\ref{pic1} je v {\tt .pdf} formatu.
+\begin{figure}
+    \begin{center}
+        \includegraphics[width=10cm]{pic1.pdf}
+    \end{center}
+\caption{Herschelov graf, vektorska grafika.}
+\label{pic1}
+\end{figure}
+Pa res lahko vključimo slike katerihkoli formatov? Žal ne. Programski paket \LaTeX\ lahko uporabljamo v več dialektih. Ukaz {\tt latex} ne mara vključenih slik v formatu Portable Document Format {\tt .pdf}, ukaz {\tt pdflatex} pa ne prebavi slik v Encapsulated Postscript Formatu {\tt .eps}.
+Strnjeno v Tabeli~\ref{tbl:1}.
+
+\begin{table}
+\caption{}
+    \begin{center}
+        \begin{tabular}{l|ccc}
+            ukaz/format & {\tt .pdf} & {\tt .eps} & ostali formati \\ \hline
+                        {\tt pdflatex} & da & ne & da \\
+                        {\tt latex}   & ne & da  & da
+        \end{tabular}
+    \end{center}
+\label{tbl:1}
+\end{table}
+
+Nasvet? Odločite se za uporabo ukaza {\tt pdflatex}. Vaš izdelek bo brez vmesnih stopenj na voljo v {.pdf} formatu in ga lahko odnesete v vsako tiskarno. Če morate na vsak način vključiti sliko, ki jo imate v {\tt .eps} formatu, jo vnaprej pretvorite v alternativni format, denimo {\tt .pdf}.
+
+Včasih se da v okolju za uporabo programskega paketa \LaTeX\ nastaviti na kakšen način bomo prebavljali vhodne dokumente. Spustni meni na Sliki~\ref{pic2} odkriva uporabo \LaTeX{}a v njegovi pdf inkarnaciji --- {\tt pdflatex}.
+\begin{figure}
+\begin{center}
+\includegraphics[width=10cm]{pic2.png}
+\end{center}
+\caption{Kateri dialekt uporabljati?}
+\label{pic2}
+\end{figure}
+Vključena Slika~\ref{pic2} je seveda bitna.
+
+
+
+%----------------------------------------------------------------
+% Poglavje (Chapter) 4
+%----------------------------------------------------------------
+\chapter{Razno}
+\label{ch:razno}
+
+\section{Notacije}
+\label{sec:notacije}
+
+Za notacijo spremenljivk ter skalarjev uporabimo običajno notacijo, t.j., spremenljivka $x$ in skalar $a$. Pri notaciji matrik ter vektorjev pa se poslužujemo krepega fonta. Torej, matrika $\boldsymbol{A}$ ter vektor $\boldsymbol{v}$,
+\begin{equation}
+\boldsymbol{A} = \begin{bmatrix}
+       a_{11} & a_{12} & \dots & a_{1q}  \\
+       a_{21} & a_{22} & \dots & a_{2q}  \\
+       \vdots  \\
+       a_{p1} & a_{p2} & \dots & a_{pq}  \\
+     \end{bmatrix}, \quad
+     \boldsymbol{v} = \begin{bmatrix}
+       x_1  \\
+       x_2  \\
+       \vdots  \\
+       x_q  \\
+     \end{bmatrix}. \nonumber
+\end{equation}
+
+%----------------------------------------------------------------
+\section{Lepe tabele in psevdokoda}
+\label{sec:psevdokoda}
+
+Psevdokoda~\ref{alg:primer} prikazuje primer delovanja genetskega algoritma, medtem ko Tabela~\ref{tab:params} prikazuje primer lepe tabele brez vertikalnih črt.
+
+\begin{algorithm}
+\caption{Psevdokoda genetskega algoritma}
+\label{alg:primer}
+\begin{algorithmic}[1]
+\footnotesize
+\STATE $t \gets 0$
+\STATE $InitPopulation[P(t)] \gets$ inicializiraj populacijo
+\STATE $EvalPopulation[P(t)] \gets$ evaluiraj populacijo
+\REPEAT
+\STATE $P'(t) \gets Variation[P(t)] \gets $ generiraj novo populacijo
+\STATE $EvalPopulation[P'(t)] \gets$ evaluiraj novo populacijo
+\STATE $P(t+1) \gets ApplyGeneticOperators[P'(t) \in Q]$
+\STATE $t \gets t+1$
+\UNTIL{prekinitev}
+\IF{rezultat dovolj dober}
+\STATE shrani rezultat
+\ENDIF
+\end{algorithmic}
+\end{algorithm}
+
+%---------------------------------------------------------------
+\begin{table}
+\caption{Primer enostavne tabele.}
+\centering
+\scalebox{0.82}{
+\begin{tabular}{c c c}
+ \toprule
+ Ime & Vrednost & Opis \\
+ \midrule
+ \textit{ $a$ } & 0.03 &  skalar \\
+ \textit{ $x$ } & -1 & spremenljivka \\
+ \bottomrule
+\end{tabular}
+}
+\label{tab:params}
+\end{table}
+
+%----------------------------------------------------------------
+% Poglavje (Chapter) 5
+%----------------------------------------------------------------
+\chapter{Kaj pa literatura?}
+\label{ch3}
+Kot smo omenili že v uvodu, je pravi način za citiranje literature uporaba \BibTeX{}a~\cite{ubi}.
+Programski paket \LaTeX je prvotno predstavljen v priročniku~\cite{Lamport} in je v resnici nadgradnja sistema \TeX\ avtorja Donalda Knutha, znanega po denimo, če izpustim njegovo umetnost programiranja, Knuth-Bendixovem algoritmu~\cite{Knuth}.
+
+Vsem raziskovalcem s področja računalništva pa svetujem v branje mnenje L.\ Fortnowa~\cite{Fortnow}.
+
+%----------------------------------------------------------------
+% Poglavje (Chapter) 6
+%----------------------------------------------------------------
+\chapter{Sklepne ugotovitve}
+Izbira \LaTeX\ ali ne \LaTeX\ je seveda prepuščena vam samim. Res je, da so prvi koraki v \LaTeX{}u težavni. Ta dokument naj vam služi kot začetna opora pri hoji.
+
+% ---------------------------------------------------------------
+% Appendix
+% ---------------------------------------------------------------
+\appendix
+
+\chapter{Izbira kandidata za sodelovanje pri eksperimentalnem delu magistrske naloge}
+\label{app:izbira-kandidata}
+
+Ta dodatek vsebuje vprašalnik za izbor kandidatov za sodelovanje pri
+eksperimentalnem delu magistrske naloge \textit{Sistem za vadbo biljard igre
+osmica v obogateni resničnosti}. Vprašalnik je namenjen zbiranju osnovnih
+podatkov o kandidatih, njihovih izkušnjah z igranjem biljarda ter izkušnjah
+z uporabo navidezne in obogatene resničnosti. Zbrani podatki bodo uporabljeni
+za lažjo izbiro primernih kandidatov za testiranje aplikacije na očalih
+Meta Quest 3.
+
+\section{Uvod}
+
+Pozdravljeni!
+
+Sem študent magistrskega študijskega programa Multimedija, ki ga skupaj
+izvajata Fakulteta za računalništvo in informatiko ter Fakulteta za
+elektrotehniko Univerze v Ljubljani. Pri magistrskem delu \textit{Sistem za
+vadbo biljard igre osmica v obogateni resničnosti} z mentorjem
+izr. prof. dr. Matevžem Peskom ugotavljava učinkovitost aplikacije, ki
+deluje na očalih Meta Quest 3.
+
+Pri tem želiva preveriti:
+\begin{itemize}
+    \item točnost in natančnost prekrivanja realnih in navideznih objektov
+    na mizi za biljard, kjer celotno igro poganja potrošniku dostopna strojna
+    in programska oprema;
+    \item kako tehnologija pomaga uporabniku, pri čemer bova upoštevala
+    različno izkušene uporabnike pri igranju biljarda ter uporabnike z
+    različnimi izkušnjami s sistemi za navidezno ali obogateno resničnost;
+    \item uporabniško izkušnjo pri uporabi očal, na primer težo očal,
+    udobje in splošno počutje med uporabo.
+\end{itemize}
+
+Med izbiro kandidatov ter kasnejšo evalvacijo aplikacije bo potekalo tudi
+avdiovizualno snemanje igranja udeležencev s pomočjo mobilnih telefonov in
+očal Meta Quest 3. Snemali se bodo igranje, odzivi in komentarji igralcev
+ter druge podrobnosti, koristne za magistrsko nalogo. Vse podatke, ki jih
+boste zaupali v tej anketi, bomo po končani obdelavi rezultatov izbrisali.
+
+Iščemo kandidate z različnim predznanjem igranja biljarda, pri čemer
+izkušenost z VR/AR očali ni predpogoj.
+
+Ker smo s prostorom omejeni in ni realno pričakovati, da bi uporabniki
+večkrat prišli, da bi dobili občutek za Meta Quest 3, obogateno resničnost
+ali sam eksperiment oziroma igro, vas prosimo, da nam zaupate e-poštni
+naslov, na katerega vam lahko pošljemo navodila z avdiovizualnim gradivom
+za lažjo izvedbo testiranja na lokaciji.
+
+Če imate dodatna vprašanja, se lahko obrnete na avtorja ankete preko
+e-poštnega naslova \texttt{ak78348@student.uni-lj.si}.
+
+Hvala za sodelovanje!
+\newpage
+\section{Vprašanja}
+
+\begin{enumerate}
+    \item E-poštni naslov \dotfill
+
+    \item Spol (ustrezno obkrožite):
+    \begin{itemize}
+        \item moški,
+        \item ženski,
+        \item ne binarno,
+        \item na vprašanje ne želim odgovoriti.
+    \end{itemize}
+
+    \item Starost (vpišite): \dotfill
+
+    \item Kolikšna znaša vaša višina v centimetrih (vpišite): \dotfill
+
+    \item Koliko časa približno igrate biljard (čim bolj natančno opišite)?
+    \dotfill
+
+    \item Kako izkušeni ste pri igranju biljarda (na kratko opišite)?
+    \dotfill
+
+    \item Kako pogosto igrate biljard (ustrezno obkrožite)?
+    \begin{itemize}
+        \item redno igram večkrat na dan,
+        \item vsak dan,
+        \item pogosto (enkrat na teden ali več),
+        \item občasno (enkrat na mesec ali več),
+        \item redko (enkrat na leto ali več),
+        \item do 15-krat vse skupaj,
+        \item nikoli še nisem igral/-a biljarda.
+    \end{itemize}
+
+    \item Katera je vaša dominantna roka, s katero večinoma držite palico
+    (ustrezno obkrožite)?
+    \begin{itemize}
+        \item leva,
+        \item desna,
+        \item palico lahko držim z obema rokama enako,
+        \item drugo: \dotfill
+    \end{itemize}
+
+    \item Ali ste že preizkusili katero koli aplikacijo v razširjeni
+    resničnosti (angl. \textit{augmented reality}) ali vsaj v navidezni
+    resničnosti (angl. \textit{virtual reality})? Če da, prosimo, opišite
+    svojo izkušnjo. \dotfill
+
+    \item Če ste na prejšnje vprašanje odgovorili pritrdilno: kako ste
+    upravljali aplikacijo v navidezni ali razširjeni resničnosti, ki ste jo
+    preizkusili v preteklosti (ustrezno obkrožite)?
+    \begin{itemize}
+        \item s priloženimi krmilniki naglavnega sistema,
+        \item z rokami (sledenje dlani, kretnje ipd.),
+        \item z glasovnim upravljanjem,
+        \item aplikacije nisem upravljal/-a neposredno
+        (skozi očala sem samo gledal/-a, upravljali so jo drugi),
+        \item drugo: \dotfill
+    \end{itemize}
+
+    \item Trenutno nimamo na voljo posebnih leč za Meta Quest 3, zato bo
+    smiselnost vaše izbire kot kandidata za testiranje aplikacije ocenjena
+    tudi na tej podlagi. Na izbiro vpliva tudi morebitna posebna hiba.
+    Ali imate kaj takšnega, kar se vam zdi, da bi vas lahko oviralo pri
+    testiranju očal (ustrezno obkrožite)?
+    \begin{itemize}
+        \item da,
+        \item ne,
+        \item ne vem, očala bi moral/-a najprej preizkusiti.
+    \end{itemize}
+
+    \item Kolikšna je vaša dioptrija? Vnesite vrednosti za levo in desno oko.
+    Navedite po vzorcu npr. \texttt{+0.25,+0.25}. \dotfill
+
+    \item Ali bi prišli vnaprej preizkusit očala, da bi bolje razumeli
+    aplikacijo, ki jo želite preizkusiti? Igrali bi naključne aplikacije
+    (\textit{First Encounters}, \textit{Project AEROES}), da bi dobili
+    občutek, kako bo potekalo testiranje aplikacije na kasnejši datum
+    (ustrezno obkrožite)?
+    \begin{itemize}
+        \item da,
+        \item ne.
+    \end{itemize}
+
+    \item Pri naslednjem sklopu vprašanj nas zanimajo vaše osebne nastavitve,
+    fizične in programske, za Meta Quest 3. Kot prvo navedite razdaljo med
+    zenicama v milimetrih (vpišite): \dotfill
+
+    \item Nastavitev privzete razdalje pene na očalih. Najbolj notranja
+    stopnja je 1, najbolj zunanja 4. Trenutno je izbrana stopnja 3
+    (bela pika levo od majhnega gumba). Vnesite vrednosti za levo in desno
+    stran. Navedite po vzorcu npr. \texttt{1,4}. \dotfill
+
+    \item Navedite nastavitev svetlosti uporabniškega vmesnika očal
+    (približno v \%): \dotfill
+\end{enumerate}
+%----------------------------------------------------------------
+% SLO: bibliografija
+% ENG: bibliography
+%----------------------------------------------------------------
+\bibliographystyle{elsarticle-num}
+
+%----------------------------------------------------------------
+% SLO: odkomentiraj za uporabo zunanje datoteke .bib (ne pozabi je potem prevesti!)
+% ENG: uncomment to use .bib file (don't forget to compile it!)
+%----------------------------------------------------------------
+\bibliography{bibliography}
+
+%----------------------------------------------------------------
+% SLO: zakomentiraj spodnji del, če uporabljaš zunanjo .bib datoteko
+\end{document}
