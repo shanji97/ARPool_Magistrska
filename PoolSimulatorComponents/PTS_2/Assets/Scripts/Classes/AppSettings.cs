@@ -11,13 +11,14 @@ public class AppSettings : MonoBehaviour
 
     public GameMode GameMode { get; private set; } = GameMode.InMenu;
 
-    public UserSettings Settings { get; private set; } = new UserSettings();
+    public UserSettings Settings { get; private set; } = new();
 
     public static event Action<UserSettings> OnSettingsChanged;
 
     public static bool HasInstance => _instance != null;
 
     private static AppSettings _instance;
+    private bool _hasLoadedSettings;
 
     public static AppSettings Instance
     {
@@ -26,15 +27,16 @@ public class AppSettings : MonoBehaviour
             if (_instance == null)
             {
                 _instance = FindObjectOfType<AppSettings>();
+
                 if (_instance == null)
                 {
-
                     var gameObject = new GameObject("AppSettings");
                     _instance = gameObject.AddComponent<AppSettings>();
                     DontDestroyOnLoad(gameObject);
                 }
             }
 
+            _instance.EnsureLoaded();
             return _instance;
         }
     }
@@ -46,9 +48,10 @@ public class AppSettings : MonoBehaviour
             Destroy(gameObject);
             return;
         }
+
         _instance = this;
         DontDestroyOnLoad(gameObject);
-        Load();
+        EnsureLoaded();
     }
 
     private void OnApplicationQuit()
@@ -56,15 +59,30 @@ public class AppSettings : MonoBehaviour
         Save();
     }
 
+    private void EnsureLoaded()
+    {
+        if (_hasLoadedSettings)
+            return;
+
+        Load();
+        _hasLoadedSettings = true;
+    }
+
     public void Save()
     {
+        Settings ??= new UserSettings();
+        Settings.EnsureDefaults();
+
         File.WriteAllText(Path, JsonConvert.SerializeObject(Settings, Formatting.Indented));
         OnSettingsChanged?.Invoke(Settings);
     }
 
     public void SetAndSave(Action<UserSettings> action)
     {
+        EnsureLoaded();
+
         action(Settings);
+        Settings.EnsureDefaults();
         Save();
     }
 
@@ -73,26 +91,30 @@ public class AppSettings : MonoBehaviour
         if (!File.Exists(Path))
         {
             Settings = new UserSettings();
+            Settings.EnsureDefaults();
             Save();
+            return;
         }
-        else
+
+        var json = File.ReadAllText(Path);
+
+        try
         {
-            var json = File.ReadAllText(Path);
-            try
-            {
-                Settings = JsonConvert.DeserializeObject<UserSettings>(json) ?? new UserSettings();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError("Failed to load settings. Default settings are going to be applied. \r\nException message: " + e.Message);
-                Settings = new UserSettings();
-            }
+            Settings = JsonConvert.DeserializeObject<UserSettings>(json) ?? new UserSettings();
+            Settings.EnsureDefaults();
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("Failed to load settings. Default settings are going to be applied. \r\nException message: " + e.Message);
+            Settings = new UserSettings();
+            Settings.EnsureDefaults();
         }
     }
 
     public void ResetSettings()
     {
         Settings = new UserSettings();
+        Settings.EnsureDefaults();
         Save();
     }
 
@@ -101,7 +123,6 @@ public class AppSettings : MonoBehaviour
         if (!tableStateEntries.Any())
             Debug.Log("No table state entries are being loaded in.");
 
-        //(Settings.TableStates ??= new List<TableStateEntry>()).AddRange(tableStateEntries);
         Save();
     }
 

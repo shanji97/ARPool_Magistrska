@@ -60,9 +60,9 @@ public class TableService : MonoBehaviour
     private List<DiamondMarkerData> _computedDiamondMarkerData = new();
 
     [Header("Diamond Rail Anchor Calibration")]
-    public float DiamondLongRailCornerInsetM = 0.09f; // MODIFIED: long rail corner-pocket inset
+    public float DiamondLongRailCornerInsetM = 0.09f;
     public float DiamondLongRailSidePocketInsetM = 0.07f;
-    public float DiamondShortRailCornerInsetM = 0.06f; // MODIFIED: short rail corner-pocket inset 
+    public float DiamondShortRailCornerInsetM = 0.06f;
 
 
     [Tooltip("Offset above table surface to avoid z-fighting")]
@@ -2391,6 +2391,36 @@ public class TableService : MonoBehaviour
     public void ClearCachedDetectedBallSnapshot()
     {
         _latestDetectedBallSnapshot.Clear();
+    }
+
+    public bool TryGetBallCorrectionAxes(out Vector3 xAxis, out Vector3 zAxis)
+    {
+        xAxis = Vector3.right;
+        zAxis = Vector3.forward;
+
+        if (!HasAllPockets() || PocketPositions == null || PocketPositions.Length != MAX_POCKET_COUNT)
+            return false;
+
+        Vector3 tl = FlattenToTablePlane(PocketPositions[0]);
+        Vector3 tr = FlattenToTablePlane(PocketPositions[1]);
+        Vector3 bl = FlattenToTablePlane(PocketPositions[4]);
+        Vector3 br = FlattenToTablePlane(PocketPositions[5]);
+
+        Vector3 leftShortRailCenter = 0.5f * (tl + bl);
+        Vector3 rightShortRailCenter = 0.5f * (tr + br);
+        Vector3 bottomLongRailCenter = 0.5f * (bl + br);
+        Vector3 topLongRailCenter = 0.5f * (tl + tr);
+
+        xAxis = FlattenDirectionToTablePlane(rightShortRailCenter - leftShortRailCenter);
+        zAxis = FlattenDirectionToTablePlane(topLongRailCenter - bottomLongRailCenter);
+
+        if (xAxis.sqrMagnitude <= 0.000001f || zAxis.sqrMagnitude <= 0.000001f)
+            return false;
+
+        xAxis = xAxis.normalized;
+        zAxis = zAxis.normalized;
+
+        return true;
     }
 
 

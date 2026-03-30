@@ -1,3 +1,4 @@
+// Attach to: GameplaySystems/ManualBallOverrideService in PoolSetup scene
 using System;
 using UnityEngine;
 
@@ -173,13 +174,11 @@ public class ManualBallOverrideService : MonoBehaviour
             return false;
         }
 
-        bool wasClamped = false;
-
         if (TableService.Instance == null ||
             !TableService.Instance.TryClampBallCenterToPlayableSurface(
                 requestedWorldPosition,
                 out Vector3 clampedWorldPosition,
-                out wasClamped))
+                out bool wasClamped))
         {
             statusMessage = "Could not clamp the selected ball to the playable table area.";
             return false;
