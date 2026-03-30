@@ -1,4 +1,3 @@
-// Attach to: BallView_new prefab root used by TableService in PoolSetup scene
 using System;
 using System.Collections.Generic;
 using TMPro;

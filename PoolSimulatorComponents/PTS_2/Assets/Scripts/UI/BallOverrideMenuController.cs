@@ -1,22 +1,31 @@
-// Attach to: BallMenu GameObject in PoolSetup scene
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-// Branch: ISSUE-84
-// Issue: #84 selected-ball world-space menu controller + type dropdown UI + ignore/include button
+// Attach to: BallMenu GameObject in PoolSetup scene
 public class BallOverrideMenuController : MonoBehaviour
 {
+    [Header("Dependencies")]
+    [SerializeField] private BallPositionCorrectionController ballPositionCorrectionController;
+
     [Header("Menu Root")]
-    [SerializeField] private GameObject menuCanvasRoot; // BallMenu/MenuCanvas
+    [SerializeField] private GameObject menuCanvasRoot;
+
+    [Header("Panels")]
+    [SerializeField] private GameObject mainOverridePanel;
+    [SerializeField] private GameObject positionOverrideMenuPanel;
 
     [Header("Optional Rect Used For Height Clamping")]
-    [SerializeField] private RectTransform menuHeightReferenceRect; // assign BallMenu/MenuCanvas or the main panel rect
+    [SerializeField] private RectTransform menuHeightReferenceRect;
 
     [Header("Follow Target")]
     [SerializeField] private Vector3 worldOffset = new(0f, 0.24f, 0f);
     [SerializeField] private bool followSelectedBall = true;
     [SerializeField] private bool keepCurrentRotation = true;
+
+    [Header("Frozen Position Correction Menu")]
+    [SerializeField] private bool freezeMenuWhilePositionCorrectionIsActive = true;
+    [SerializeField] private Vector3 correctionMenuExtraOffset = Vector3.zero;
 
     [Header("Height Clamp")]
     [SerializeField] private bool clampBottomHeight = true;
@@ -24,9 +33,10 @@ public class BallOverrideMenuController : MonoBehaviour
     [SerializeField] private float fallbackHalfHeightWorld = 0.18f;
 
     [Header("Behavior")]
-    [SerializeField] private bool closeMenuWhenEntryButtonsAreHidden = true;
+    [SerializeField] private bool closeMenuWhenSelectionIsCleared = true;
+    [SerializeField] private bool verboseLogs = false;
 
-    [Header("Optional Labels")]
+    [Header("Type UI")]
     [SerializeField] private TMP_Dropdown ballTypeDropdown;
     [SerializeField] private TMP_Text detectedTypeText;
     [SerializeField] private TMP_Text currentTypeText;
@@ -35,12 +45,29 @@ public class BallOverrideMenuController : MonoBehaviour
     [SerializeField] private TMP_Text selectedOverrideFlagsText;
     [SerializeField] private TMP_Text ignoreStateText;
     [SerializeField] private TMP_Text ignoreButtonLabelText;
-    [SerializeField] private Button ignoreDetectedBallButton; // assign IgnoreDetectedBallButton here
+    [SerializeField] private Button ignoreDetectedBallButton;
+
+    [Header("Position UI")]
+    [SerializeField] private TMP_Text overridePositionText;
+    [SerializeField] private Button adjustPositionButton;
+    [SerializeField] private Button increaseXPositionButton;
+    [SerializeField] private Button decreaseXPositionButton;
+    [SerializeField] private Button increaseZPositionButton;
+    [SerializeField] private Button decreaseZPositionButton;
+    [SerializeField] private Button showOriginalDetectedPositionIfOverrideIsUsedButton;
+    [SerializeField] private TMP_Text showOriginalDetectedPositionIfOverrideIsUsedButtonText;
+    [SerializeField] private Button resetPositionToPythonDetectionButton;
+    [SerializeField] private Button adjustBasicOverridesButton;
+    [SerializeField] private Button resetAllOverridesButton;
 
     private BallOverrideSelectable _selectedSelectable;
     private Quaternion _initialRotation;
     private bool _suppressDropdownCallback;
     private string _lastTypeStatusMessage = string.Empty;
+
+    private bool _hasFrozenMenuPose;
+    private Vector3 _frozenMenuWorldPosition;
+    private Quaternion _frozenMenuWorldRotation;
 
     private static readonly string[] DropdownOptionLabels =
     {
@@ -53,8 +80,15 @@ public class BallOverrideMenuController : MonoBehaviour
 
     private void Awake()
     {
+        ResolveDependencies();
+
         _initialRotation = transform.rotation;
         InitializeBallTypeDropdown();
+
+        if (menuHeightReferenceRect == null && menuCanvasRoot != null)
+            menuHeightReferenceRect = menuCanvasRoot.GetComponent<RectTransform>();
+
+        SetPanelState(showPositionPanel: false);
 
         if (menuCanvasRoot != null)
             menuCanvasRoot.SetActive(false);
@@ -64,10 +98,15 @@ public class BallOverrideMenuController : MonoBehaviour
 
     private void OnEnable()
     {
+        ResolveDependencies();
+
         if (ManualBallOverrideService.Instance != null)
             ManualBallOverrideService.Instance.SelectedBallChanged += HandleSelectedBallChanged;
 
         BallOverrideSelectable.EntryButtonsVisibilityChanged += HandleEntryButtonsVisibilityChanged;
+
+        if (ballPositionCorrectionController != null)
+            ballPositionCorrectionController.StateChanged += HandlePositionControllerStateChanged;
 
         if (ballTypeDropdown != null)
         {
@@ -75,7 +114,7 @@ public class BallOverrideMenuController : MonoBehaviour
             ballTypeDropdown.onValueChanged.AddListener(HandleBallTypeDropdownChanged);
         }
 
-        UpdateDropdownFromSelectedBall();
+        SyncSelectionFromService(forceRefresh: true);
         RefreshTexts();
     }
 
@@ -86,13 +125,149 @@ public class BallOverrideMenuController : MonoBehaviour
 
         BallOverrideSelectable.EntryButtonsVisibilityChanged -= HandleEntryButtonsVisibilityChanged;
 
+        if (ballPositionCorrectionController != null)
+            ballPositionCorrectionController.StateChanged -= HandlePositionControllerStateChanged;
+
         if (ballTypeDropdown != null)
             ballTypeDropdown.onValueChanged.RemoveListener(HandleBallTypeDropdownChanged);
     }
 
     private void LateUpdate()
     {
-        if (_selectedSelectable == null || !followSelectedBall)
+        SyncSelectionFromService(forceRefresh: false);
+
+        bool shouldShow = ShouldShowMenuForCurrentSelection();
+
+        if (menuCanvasRoot != null && menuCanvasRoot.activeSelf != shouldShow)
+            menuCanvasRoot.SetActive(shouldShow);
+
+        if (!shouldShow)
+        {
+            RefreshTexts();
+            return;
+        }
+
+        if (ShouldUseFrozenMenuPose())
+            ApplyFrozenMenuPose();
+        else if (followSelectedBall)
+            SnapMenuToSelectedBall();
+
+        RefreshTexts();
+    }
+
+    private void ResolveDependencies()
+    {
+        if (ballPositionCorrectionController == null)
+            ballPositionCorrectionController = FindFirstObjectByType<BallPositionCorrectionController>();
+    }
+
+    private void InitializeBallTypeDropdown()
+    {
+        if (ballTypeDropdown == null)
+            return;
+
+        ballTypeDropdown.options.Clear();
+
+        for (int i = 0; i < DropdownOptionLabels.Length; i++)
+            ballTypeDropdown.options.Add(new TMP_Dropdown.OptionData(DropdownOptionLabels[i]));
+
+        ballTypeDropdown.SetValueWithoutNotify((int)BallTypeOverrideMenuOption.FromPythonStream);
+        ballTypeDropdown.RefreshShownValue();
+        ballTypeDropdown.interactable = false;
+    }
+
+    private void HandleSelectedBallChanged(BallOverrideSelectable _)
+    {
+        SyncSelectionFromService(forceRefresh: true);
+    }
+
+    private void HandleEntryButtonsVisibilityChanged(bool _)
+    {
+        RefreshTexts();
+    }
+
+    private void HandlePositionControllerStateChanged()
+    {
+        if (!ShouldUseFrozenMenuPose())
+            ClearFrozenMenuPose();
+
+        RefreshTexts();
+    }
+
+    private void SyncSelectionFromService(bool forceRefresh)
+    {
+        BallOverrideSelectable serviceSelection =
+            ManualBallOverrideService.Instance != null
+                ? ManualBallOverrideService.Instance.SelectedSelectable
+                : null;
+
+        if (!forceRefresh && ReferenceEquals(_selectedSelectable, serviceSelection))
+            return;
+
+        bool changed = !ReferenceEquals(_selectedSelectable, serviceSelection);
+        _selectedSelectable = serviceSelection;
+
+        if (changed)
+        {
+            _lastTypeStatusMessage = string.Empty;
+            ClearFrozenMenuPose();
+
+            if (verboseLogs)
+                Debug.Log($"[BallOverrideMenuController] Selection changed. HasSelection={_selectedSelectable != null}");
+        }
+
+        if (_selectedSelectable == null)
+        {
+            ballPositionCorrectionController?.HideOriginalDetectedPositionPreview();
+            SetPanelState(showPositionPanel: false);
+
+            if (menuCanvasRoot != null)
+                menuCanvasRoot.SetActive(false);
+
+            RefreshTexts();
+            return;
+        }
+
+        UpdateDropdownFromSelectedBall();
+
+        if (menuCanvasRoot != null && !menuCanvasRoot.activeSelf)
+            menuCanvasRoot.SetActive(true);
+
+        SnapMenuToSelectedBall();
+        RefreshTexts();
+    }
+
+    private bool ShouldShowMenuForCurrentSelection() =>
+        _selectedSelectable != null &&
+        _selectedSelectable.RuntimeBall != null;
+
+    private bool ShouldUseFrozenMenuPose() =>
+        freezeMenuWhilePositionCorrectionIsActive &&
+        ballPositionCorrectionController != null &&
+        ballPositionCorrectionController.IsPositionCorrectionActive &&
+        _hasFrozenMenuPose;
+
+    private void CacheFrozenMenuPose()
+    {
+        _frozenMenuWorldPosition = transform.position + correctionMenuExtraOffset;
+        _frozenMenuWorldRotation = keepCurrentRotation ? _initialRotation : transform.rotation;
+        _hasFrozenMenuPose = true;
+    }
+
+    private void ApplyFrozenMenuPose()
+    {
+        transform.position = _frozenMenuWorldPosition;
+        transform.rotation = _frozenMenuWorldRotation;
+    }
+
+    private void ClearFrozenMenuPose()
+    {
+        _hasFrozenMenuPose = false;
+    }
+
+    private void SnapMenuToSelectedBall()
+    {
+        if (_selectedSelectable == null)
             return;
 
         Transform anchor = _selectedSelectable.MenuAnchor;
@@ -114,81 +289,101 @@ public class BallOverrideMenuController : MonoBehaviour
 
         if (keepCurrentRotation)
             transform.rotation = _initialRotation;
+    }
 
+    public void OpenPositionOverridePanel()
+    {
+        Ball selectedBall = GetSelectedBall();
+        if (selectedBall == null)
+            return;
+
+        if (followSelectedBall)
+            SnapMenuToSelectedBall();
+
+        CacheFrozenMenuPose();
+        ballPositionCorrectionController?.BeginSelectedBallPositionCorrection();
+        SetPanelState(showPositionPanel: true);
         RefreshTexts();
     }
 
-    private void InitializeBallTypeDropdown()
+    public void ReturnToMainOverridePanel()
     {
-        if (ballTypeDropdown == null)
-            return;
-
-        ballTypeDropdown.options.Clear();
-
-        for (int i = 0; i < DropdownOptionLabels.Length; i++)
-            ballTypeDropdown.options.Add(new TMP_Dropdown.OptionData(DropdownOptionLabels[i]));
-
-        ballTypeDropdown.SetValueWithoutNotify((int)BallTypeOverrideMenuOption.FromPythonStream);
-        ballTypeDropdown.RefreshShownValue();
-        ballTypeDropdown.interactable = false;
+        ballPositionCorrectionController?.ConfirmSelectedBallPositionCorrection();
+        ClearFrozenMenuPose();
+        SetPanelState(showPositionPanel: false);
+        RefreshTexts();
     }
 
-    private void HandleSelectedBallChanged(BallOverrideSelectable selectable)
+    public void IncreaseXPosition()
     {
-        bool selectionObjectChanged = _selectedSelectable != selectable;
-        _selectedSelectable = selectable;
+        ballPositionCorrectionController?.NudgeSelectedBallPositiveX();
+        RefreshTexts();
+    }
 
-        if (selectionObjectChanged)
-            _lastTypeStatusMessage = string.Empty;
+    public void DecreaseXPosition()
+    {
+        ballPositionCorrectionController?.NudgeSelectedBallNegativeX();
+        RefreshTexts();
+    }
 
-        bool shouldShow =
-            _selectedSelectable != null &&
-            _selectedSelectable.RuntimeBall != null &&
-            BallOverrideSelectable.AreEntryButtonsGloballyVisible;
+    public void IncreaseZPosition()
+    {
+        ballPositionCorrectionController?.NudgeSelectedBallPositiveZ();
+        RefreshTexts();
+    }
 
-        if (menuCanvasRoot != null)
-            menuCanvasRoot.SetActive(shouldShow);
+    public void DecreaseZPosition()
+    {
+        ballPositionCorrectionController?.NudgeSelectedBallNegativeZ();
+        RefreshTexts();
+    }
 
-        if (shouldShow)
-        {
-            Transform anchor = _selectedSelectable.MenuAnchor;
-            if (anchor != null)
-            {
-                Vector3 desiredPosition = anchor.position + worldOffset;
+    public void ToggleShowOriginalDetectedPositionPreview()
+    {
+        ballPositionCorrectionController?.ToggleOriginalDetectedPositionPreview();
+        RefreshTexts();
+    }
 
-                if (clampBottomHeight)
-                {
-                    float halfHeightWorld = GetHalfHeightWorld();
-                    float currentBottomY = desiredPosition.y - halfHeightWorld;
+    public void RevertSelectedBallToDetectedPosition()
+    {
+        ballPositionCorrectionController?.RevertSelectedBallToDetectedPosition();
+        ClearFrozenMenuPose();
+        SetPanelState(showPositionPanel: false);
+        RefreshTexts();
+    }
 
-                    if (currentBottomY < minimumMenuBottomWorldY)
-                        desiredPosition.y += minimumMenuBottomWorldY - currentBottomY;
-                }
+    public void ResetSelectedBallOverrides()
+    {
+        ballPositionCorrectionController?.HideOriginalDetectedPositionPreview();
+        ManualBallOverrideService.Instance?.ResetSelectedOverrides();
 
-                transform.position = desiredPosition;
-            }
+        _lastTypeStatusMessage = "All selected-ball overrides were reset.";
 
-            if (keepCurrentRotation)
-                transform.rotation = _initialRotation;
-        }
-
+        ClearFrozenMenuPose();
+        SetPanelState(showPositionPanel: false);
         UpdateDropdownFromSelectedBall();
-        RefreshTexts();
+        RefreshSelectedVisuals();
     }
 
-    private void HandleEntryButtonsVisibilityChanged(bool areVisible)
+    public void ResetAllRuntimeBallOverridesForSession()
     {
-        if (areVisible)
-            return;
+        ballPositionCorrectionController?.HideOriginalDetectedPositionPreview();
 
-        if (closeMenuWhenEntryButtonsAreHidden)
-        {
-            ManualBallOverrideService.Instance?.ClearSelection();
-            return;
-        }
+        if (ballPositionCorrectionController != null && ballPositionCorrectionController.IsPositionCorrectionActive)
+            ballPositionCorrectionController.ConfirmSelectedBallPositionCorrection();
+
+        TableService.Instance?.ResetRuntimeBallOverridesAndRefreshViews();
+        ManualBallOverrideService.Instance?.ClearSelection();
+
+        _lastTypeStatusMessage = "All runtime ball overrides were reset for this session.";
+
+        ClearFrozenMenuPose();
+        SetPanelState(showPositionPanel: false);
 
         if (menuCanvasRoot != null)
             menuCanvasRoot.SetActive(false);
+
+        RefreshTexts();
     }
 
     public void HandleBallTypeDropdownChanged(int selectedIndex)
@@ -196,10 +391,7 @@ public class BallOverrideMenuController : MonoBehaviour
         if (_suppressDropdownCallback)
             return;
 
-        Ball selectedBall = ManualBallOverrideService.Instance != null
-            ? ManualBallOverrideService.Instance.SelectedBall
-            : null;
-
+        Ball selectedBall = GetSelectedBall();
         if (selectedBall == null)
         {
             _lastTypeStatusMessage = "No ball is currently selected.";
@@ -217,12 +409,15 @@ public class BallOverrideMenuController : MonoBehaviour
         }
 
         BallTypeOverrideMenuOption option = (BallTypeOverrideMenuOption)selectedIndex;
-        string statusMessage = string.Empty;
-        bool applied =
-            ManualBallOverrideService.Instance != null &&
-            ManualBallOverrideService.Instance.TryApplySelectedTypeOverrideOption(option, out statusMessage);
+
+        string statusMessage = "Manual ball override service is not available.";
+        bool applied = false;
+
+        if (ManualBallOverrideService.Instance != null)
+            applied = ManualBallOverrideService.Instance.TryApplySelectedTypeOverrideOption(option, out statusMessage);
 
         _lastTypeStatusMessage = statusMessage;
+
         UpdateDropdownFromSelectedBall();
         RefreshSelectedVisuals();
 
@@ -232,10 +427,7 @@ public class BallOverrideMenuController : MonoBehaviour
 
     public void ToggleIgnoreSelectedBall()
     {
-        Ball selectedBall = ManualBallOverrideService.Instance != null
-            ? ManualBallOverrideService.Instance.SelectedBall
-            : null;
-
+        Ball selectedBall = GetSelectedBall();
         if (selectedBall == null)
             return;
 
@@ -243,15 +435,49 @@ public class BallOverrideMenuController : MonoBehaviour
         RefreshSelectedVisuals();
     }
 
+    public void ReleaseTypeOverride()
+    {
+        ManualBallOverrideService.Instance?.ReleaseSelectedTypeOverride();
+        _lastTypeStatusMessage = "Type now follows Python App stream.";
+        UpdateDropdownFromSelectedBall();
+        RefreshSelectedVisuals();
+    }
+
+    public void CloseMenu()
+    {
+        ballPositionCorrectionController?.HideOriginalDetectedPositionPreview();
+
+        if (ballPositionCorrectionController != null && ballPositionCorrectionController.IsPositionCorrectionActive)
+            ballPositionCorrectionController.ConfirmSelectedBallPositionCorrection();
+
+        ManualBallOverrideService.Instance?.ClearSelection();
+
+        ClearFrozenMenuPose();
+
+        if (closeMenuWhenSelectionIsCleared && menuCanvasRoot != null)
+            menuCanvasRoot.SetActive(false);
+    }
+
+    private Ball GetSelectedBall() =>
+        ManualBallOverrideService.Instance != null
+            ? ManualBallOverrideService.Instance.SelectedBall
+            : null;
+
+    private void SetPanelState(bool showPositionPanel)
+    {
+        if (mainOverridePanel != null)
+            mainOverridePanel.SetActive(!showPositionPanel);
+
+        if (positionOverrideMenuPanel != null)
+            positionOverrideMenuPanel.SetActive(showPositionPanel);
+    }
+
     private void UpdateDropdownFromSelectedBall()
     {
         if (ballTypeDropdown == null)
             return;
 
-        Ball selectedBall = ManualBallOverrideService.Instance != null
-            ? ManualBallOverrideService.Instance.SelectedBall
-            : null;
-
+        Ball selectedBall = GetSelectedBall();
         BallTypeOverrideMenuOption option = BallTypeOverrideMenuOption.FromPythonStream;
 
         if (selectedBall != null && selectedBall.IsTypeUserOverriden())
@@ -274,17 +500,70 @@ public class BallOverrideMenuController : MonoBehaviour
 
     private void RefreshTexts()
     {
-        Ball selectedBall = ManualBallOverrideService.Instance != null
-            ? ManualBallOverrideService.Instance.SelectedBall
-            : null;
+        Ball selectedBall = GetSelectedBall();
+
+        bool hasSelectedBall = selectedBall != null;
+        bool correctionActive =
+            ballPositionCorrectionController != null &&
+            ballPositionCorrectionController.IsPositionCorrectionActive;
 
         if (ballTypeDropdown != null)
-            ballTypeDropdown.interactable = selectedBall != null;
+            ballTypeDropdown.interactable = hasSelectedBall;
 
         if (ignoreDetectedBallButton != null)
-            ignoreDetectedBallButton.interactable = selectedBall != null;
+            ignoreDetectedBallButton.interactable = hasSelectedBall;
 
-        if (selectedBall == null)
+        if (adjustPositionButton != null)
+            adjustPositionButton.interactable = hasSelectedBall;
+
+        if (increaseXPositionButton != null)
+            increaseXPositionButton.interactable = correctionActive;
+
+        if (decreaseXPositionButton != null)
+            decreaseXPositionButton.interactable = correctionActive;
+
+        if (increaseZPositionButton != null)
+            increaseZPositionButton.interactable = correctionActive;
+
+        if (decreaseZPositionButton != null)
+            decreaseZPositionButton.interactable = correctionActive;
+
+        if (showOriginalDetectedPositionIfOverrideIsUsedButton != null)
+            showOriginalDetectedPositionIfOverrideIsUsedButton.interactable =
+                ballPositionCorrectionController != null &&
+                ballPositionCorrectionController.CanToggleOriginalDetectedPositionPreview;
+
+        if (resetPositionToPythonDetectionButton != null)
+            resetPositionToPythonDetectionButton.interactable =
+                ballPositionCorrectionController != null &&
+                ballPositionCorrectionController.CanRevertSelectedBallToDetectedPosition;
+
+        if (showOriginalDetectedPositionIfOverrideIsUsedButtonText != null)
+        {
+            bool showingPreview =
+                ballPositionCorrectionController != null &&
+                ballPositionCorrectionController.IsShowingOriginalDetectedPositionPreview;
+
+            showOriginalDetectedPositionIfOverrideIsUsedButtonText.text =
+                showingPreview
+                    ? "Hide original detected position"
+                    : "Show original detected position";
+        }
+
+        if (overridePositionText != null)
+        {
+            string xStep = ballPositionCorrectionController != null
+                ? ballPositionCorrectionController.GetXAxisCorrectionStepDisplay()
+                : "-";
+
+            string zStep = ballPositionCorrectionController != null
+                ? ballPositionCorrectionController.GetZAxisCorrectionStepDisplay()
+                : "-";
+
+            overridePositionText.text = $"Override position | X step {xStep} | Z step {zStep}";
+        }
+
+        if (!hasSelectedBall)
         {
             if (detectedTypeText != null)
                 detectedTypeText.text = "Detected type: -";
@@ -346,82 +625,6 @@ public class BallOverrideMenuController : MonoBehaviour
         RefreshTexts();
     }
 
-    public void SelectCue() => ApplyTypeSelection(BallTypeOverrideMenuOption.Cue);
-
-    public void SelectEight() => ApplyTypeSelection(BallTypeOverrideMenuOption.Eightball);
-
-    public void SelectSolid() => ApplyTypeSelection(BallTypeOverrideMenuOption.Solid);
-
-    public void SelectStripe() => ApplyTypeSelection(BallTypeOverrideMenuOption.Striped);
-
-    private void ApplyTypeSelection(BallTypeOverrideMenuOption option)
-    {
-        if (ballTypeDropdown != null)
-        {
-            _suppressDropdownCallback = true;
-            ballTypeDropdown.SetValueWithoutNotify((int)option);
-            ballTypeDropdown.RefreshShownValue();
-            _suppressDropdownCallback = false;
-        }
-
-        HandleBallTypeDropdownChanged((int)option);
-    }
-
-    public void IncrementBallNumber()
-    {
-        Ball selectedBall = ManualBallOverrideService.Instance != null
-            ? ManualBallOverrideService.Instance.SelectedBall
-            : null;
-
-        if (selectedBall == null)
-            return;
-
-        int next = GetNextBallId(selectedBall.BallType, selectedBall.BallId, +1);
-        ManualBallOverrideService.Instance.ApplySelectedBallIdOverride(next);
-        RefreshSelectedVisuals();
-    }
-
-    public void DecrementBallNumber()
-    {
-        Ball selectedBall = ManualBallOverrideService.Instance != null
-            ? ManualBallOverrideService.Instance.SelectedBall
-            : null;
-
-        if (selectedBall == null)
-            return;
-
-        int next = GetNextBallId(selectedBall.BallType, selectedBall.BallId, -1);
-        ManualBallOverrideService.Instance.ApplySelectedBallIdOverride(next);
-        RefreshSelectedVisuals();
-    }
-
-    public void ReleaseTypeOverride()
-    {
-        ManualBallOverrideService.Instance?.ReleaseSelectedTypeOverride();
-        _lastTypeStatusMessage = "Type now follows Python App stream.";
-        UpdateDropdownFromSelectedBall();
-        RefreshSelectedVisuals();
-    }
-
-    public void ReleaseBallNumberOverride()
-    {
-        ManualBallOverrideService.Instance?.ReleaseSelectedBallIdOverride();
-        RefreshSelectedVisuals();
-    }
-
-    public void ResetSelectedBallOverrides()
-    {
-        ManualBallOverrideService.Instance?.ResetSelectedOverrides();
-        _lastTypeStatusMessage = "All selected-ball overrides were reset.";
-        UpdateDropdownFromSelectedBall();
-        RefreshSelectedVisuals();
-    }
-
-    public void CloseMenu()
-    {
-        ManualBallOverrideService.Instance?.ClearSelection();
-    }
-
     private static BallTypeOverrideMenuOption MapBallTypeToMenuOption(BallType ballType) =>
         ballType switch
         {
@@ -476,28 +679,5 @@ public class BallOverrideMenuController : MonoBehaviour
         return selectedBall.HasDetectedBaseline()
             ? "Type follows Python App stream."
             : "Waiting for Python App stream data.";
-    }
-
-    private static int GetNextBallId(BallType ballType, int currentBallId, int direction) =>
-        ballType switch
-        {
-            BallType.Cue => 0,
-            BallType.Eight => 8,
-            BallType.Solid => Wrap(currentBallId, 1, 7, direction),
-            BallType.Stripe => Wrap(currentBallId, 9, 15, direction),
-            _ => currentBallId
-        };
-
-    private static int Wrap(int value, int min, int max, int direction)
-    {
-        int next = value + direction;
-
-        if (next > max)
-            return min;
-
-        if (next < min)
-            return max;
-
-        return next;
     }
 }

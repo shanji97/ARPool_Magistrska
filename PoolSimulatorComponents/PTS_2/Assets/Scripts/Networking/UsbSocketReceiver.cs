@@ -70,7 +70,9 @@ public class UsbSocketReceiver : MonoBehaviour
             }
             processedThisFrame++;
         }
-
+#if UNITY_EDITOR
+        HandleIssue84OverrideRegressionRepeat();
+#endif
     }
 
     public void StartServer()
@@ -486,71 +488,6 @@ public class UsbSocketReceiver : MonoBehaviour
         );
     }
 
-    //private void ParseBalls(ReadOnlySpan<char> line, BallType balltype)
-    //{
-    //    // UPDATED: supports both single-ball lines (cue/eight)
-    //    // and grouped multi-ball lines (solid/stripe) separated by ';'.
-    //    // Wire format examples:
-    //    // c  x,y,id,conf,vx,vy
-    //    // e  x,y,id,conf,vx,vy
-    //    // st x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
-    //    // so x,y,id,conf,vx,vy; x,y,id,conf,vx,vy; ...
-
-    //    int spaceIndex = line.IndexOf(' ');
-    //    if (spaceIndex < 0 || spaceIndex >= line.Length - 1)
-    //        return;
-
-    //    ReadOnlySpan<char> data = line[(spaceIndex + 1)..].Trim();
-    //    if (data.IsEmpty)
-    //        return;
-
-    //    string[] entries = data.ToString().Split(';', StringSplitOptions.RemoveEmptyEntries);
-
-    //    for (int entryIndex = 0; entryIndex < entries.Length; entryIndex++)
-    //    {
-    //        string entry = entries[entryIndex].Trim();
-    //        if (string.IsNullOrWhiteSpace(entry))
-    //            continue;
-
-    //        string[] parts = entry.Split(',', StringSplitOptions.None);
-    //        if (parts.Length < 6)
-    //        {
-    //            if (VerboseLogs)
-    //                Debug.LogWarning($"[USB] Skipping malformed ball entry (expected 6 fields): '{entry}'");
-    //            continue;
-    //        }
-
-    //        if (!TryParseFlexibleFloat(parts[0], out float x) ||
-    //            !TryParseFlexibleFloat(parts[1], out float y))
-    //        {
-    //            if (VerboseLogs)
-    //                Debug.LogWarning($"[USB] Skipping ball entry due to invalid position: '{entry}'");
-    //            continue;
-    //        }
-
-    //        // NOTE:
-    //        // parts[2] is the Python-side record id / placeholder.
-    //        // For now Unity uses the token-derived BallType as the authoritative type,
-    //        // so this field is intentionally ignored here.
-    //        byte id = (byte)balltype;
-
-    //        // Confidence should ideally be numeric. If it is malformed, skip the record.
-    //        if (!TryParseFlexibleFloat(parts[3], out float conf))
-    //        {
-    //            if (VerboseLogs)
-    //                Debug.LogWarning($"[USB] Skipping ball entry due to invalid confidence: '{entry}'");
-    //            continue;
-    //        }
-
-    //        // Velocity fields are optional / best-effort right now.
-    //        // Placeholder values like "\", "/", "u", "", "''" are treated as 0.
-    //        TryParseFlexibleFloat(parts[4], out float vx, defaultValue: 0f);
-    //        TryParseFlexibleFloat(parts[5], out float vy, defaultValue: 0f);
-
-    //        svc.PlaceBalls(x, y, id, conf, vx, vy);
-    //    }
-    //}
-
     private void ParseBalls(ReadOnlySpan<char> line, BallType ballType, List<IncomingDetectedBallRecord> targetSnapshot)
     {
         int spaceIndex = line.IndexOf(' ');
@@ -643,6 +580,11 @@ public class UsbSocketReceiver : MonoBehaviour
     }
 
 #if UNITY_EDITOR
+
+    [SerializeField] private bool repeatIssue84OverrideRegressionBlock = false;
+    [SerializeField] private float repeatIssue84OverrideRegressionIntervalSec = 0.25f;
+    private float _nextIssue84OverrideRegressionInjectTime = 0f;
+
     [ContextMenu("USB/Test Inject Sample Block (full balls set)")]
     private void TestInjectSampleBlock()
     {
@@ -687,8 +629,6 @@ public class UsbSocketReceiver : MonoBehaviour
         ParseBlock(block, pocketsXZ);
     }
 
-    // UPDATED: dedicated raw-wire regression payload for ISSUE-83.
-    // This intentionally uses the exact grouped wire format that the receiver parses in production.
     private static string BuildIssue83StripeNearLowerMiddlePocketBlock()
     {
         return
@@ -699,6 +639,44 @@ public class UsbSocketReceiver : MonoBehaviour
             "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n" +
             "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n";
 
+    }
+
+
+    [ContextMenu("USB/Start Repeating ISSUE-84 Override Regression Block")]
+    private void StartRepeatingIssue84OverrideRegressionBlock()
+    {
+        repeatIssue84OverrideRegressionBlock = true;
+        _nextIssue84OverrideRegressionInjectTime = 0f;
+        Debug.Log("[USB] Started repeating ISSUE-84 override regression block.");
+    }
+
+    [ContextMenu("USB/Stop Repeating ISSUE-84 Override Regression Block")]
+    private void StopRepeatingIssue84OverrideRegressionBlock()
+    {
+        repeatIssue84OverrideRegressionBlock = false;
+        Debug.Log("[USB] Stopped repeating ISSUE-84 override regression block.");
+    }
+
+    [ContextMenu("USB/Test Inject ISSUE-84 Override Regression Block")]
+    private void TestInjectIssue84OverrideRegressionBlock()
+    {
+        TestInjectIssue83StripeNearLowerMiddlePocket();
+    }
+
+    private void HandleIssue84OverrideRegressionRepeat()
+    {
+        if (!repeatIssue84OverrideRegressionBlock)
+            return;
+
+        if (Time.unscaledTime < _nextIssue84OverrideRegressionInjectTime)
+            return;
+
+        _nextIssue84OverrideRegressionInjectTime =
+            Time.unscaledTime + Mathf.Max(0.05f, repeatIssue84OverrideRegressionIntervalSec);
+
+        Debug.Log("Looop executed");
+
+        TestInjectIssue83StripeNearLowerMiddlePocket();
     }
 #endif
 }
