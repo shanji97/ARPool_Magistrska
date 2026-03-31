@@ -1,15 +1,15 @@
 {
   "_schema_version": 2,
   "table": {
-    "name": "Test environment",
+    "name": "Custom",
     "playfield_mm": [
-      1170,
-      6000,
-      730
+      1850,
+      925,
+      733.0
     ],
     "overall_mm": [
-      1500,
-      600
+      2160,
+      1235
     ],
     "notes": "User-defined",
     "cloth_profile": "Custom",

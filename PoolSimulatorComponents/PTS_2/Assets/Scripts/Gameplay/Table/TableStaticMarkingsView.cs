@@ -167,8 +167,7 @@ public class TableStaticMarkingsView : MonoBehaviour
 
     public bool CanFinalizeStaticMarkingsPlacement()
     {
-        return _tableService != null
-            && _tableService.LockFinalized
+        return _tableService?.LockFinalized == true
             && _currentGeometry.IsValid;
     }
 
@@ -233,7 +232,7 @@ public class TableStaticMarkingsView : MonoBehaviour
 
     private void ResolveDependencies()
     {
-        _tableService = TableServiceOverride != null ? TableServiceOverride : TableService.Instance;
+        _tableService = TableServiceOverride ?? TableService.Instance;
     }
 
     private void RefreshRuntimeGeometryAndVisuals()
@@ -757,11 +756,9 @@ public class TableStaticMarkingsView : MonoBehaviour
         if (_rackGuideRenderer != null)
             _rackGuideRenderer.enabled = false;
 
-        if (_quarterLineHandleMarker != null)
-            _quarterLineHandleMarker.SetActive(false);
+        _quarterLineHandleMarker?.SetActive(false);
 
-        if (_rackHandleMarker != null)
-            _rackHandleMarker.SetActive(false);
+        _rackHandleMarker?.SetActive(false);
     }
 
     private static Vector3 Flatten(Vector3 value)

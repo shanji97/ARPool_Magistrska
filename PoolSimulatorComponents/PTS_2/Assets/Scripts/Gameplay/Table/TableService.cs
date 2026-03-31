@@ -64,7 +64,6 @@ public class TableService : MonoBehaviour
     public float DiamondLongRailSidePocketInsetM = 0.07f;
     public float DiamondShortRailCornerInsetM = 0.06f;
 
-
     [Tooltip("Offset above table surface to avoid z-fighting")]
     public float SurfaceLift = 0.01f;
 
@@ -76,11 +75,36 @@ public class TableService : MonoBehaviour
 
     private List<DiamondMarkerData> _diamondMarkerData = new();
 
+    private PythonTableSnapshot2D _latestPythonRawSnapshot = new();
+    private PythonTableSnapshot2D _latestProjectedSnapshot = null;
+
     public float TableY { get; private set; } = -1f;
     public bool IsTableHeightSet() => TableY > 0;
 
     public Vector2 TableSize = new(-1, -1);
     public bool Is2DTableSet() => TableSize.x > -1 && TableSize.y > -1;
+
+    private IncomingCueStickRecord _latestCueStickRecord;
+    private bool _hasCueStickRecord = false;
+
+    public bool HasCueStickRecord => _hasCueStickRecord;
+    public IncomingCueStickRecord LatestCueStickRecord => _latestCueStickRecord;
+
+    public event Action<IncomingCueStickRecord> CueStickRecordReceived;
+    public void ApplyCueStickRecord(in IncomingCueStickRecord cueStickRecord)
+    {
+        _latestCueStickRecord = cueStickRecord;
+        _hasCueStickRecord = true;
+        CueStickRecordReceived?.Invoke(cueStickRecord);
+    }
+
+    public void ClearCueStickRecord()
+    {
+        _latestCueStickRecord = default;
+        _hasCueStickRecord = false;
+    }
+
+
 
     [Header("Locked edit behaviour")]
     public bool MaintainRectangleWhenLocked = true;
@@ -363,19 +387,16 @@ public class TableService : MonoBehaviour
 
         HasRawDetectedPocketData = true;
     }
-
     public void IncrementSuccessfullyParsedPocketCount()
     {
         if (PocketCount == MAX_POCKET_COUNT) return;
         PocketCount++;
     }
-
     public void IncrementSuccessfullyParsedDiamondEdgeCount()
     {
         if (DiamondCount == MAX_DIAMOND_COUNT) return;
         DiamondCount++;
     }
-
     private void PrivateSetEdgeDiamonds((float x, float z, byte i, float c)[] diamonds, float tableY)
     {
         if (IsLockedToJitter) return;
@@ -396,7 +417,6 @@ public class TableService : MonoBehaviour
 
         return (byte)(startIndex + source.Count);
     }
-
     private bool CanPreviewComputedDiamonds()
     {
         // ADDED: ISSUE-82 preview only requires a valid table height and all six pockets.
@@ -1108,6 +1128,191 @@ public class TableService : MonoBehaviour
         SetBallHeight();
     }
 
+    public bool TryBuildQuestTableFrame(out TableFrame2D frame)
+    {
+        frame = default;
+
+        if (!HasAllPockets() || PocketPositions?.Length != MAX_POCKET_COUNT)
+            return false;
+
+        if (!Is2DTableSet())
+            return false;
+
+        Vector3 tl = FlattenToTablePlane(PocketPositions[0]);
+        Vector3 tr = FlattenToTablePlane(PocketPositions[1]);
+        Vector3 bl = FlattenToTablePlane(PocketPositions[4]);
+        Vector3 br = FlattenToTablePlane(PocketPositions[5]);
+
+        Vector3 leftShortRailCenter = 0.5f * (tl + bl);
+        Vector3 rightShortRailCenter = 0.5f * (tr + br);
+
+        Vector3 longAxis3 = FlattenDirectionToTablePlane(rightShortRailCenter - leftShortRailCenter);
+        if (longAxis3.sqrMagnitude <= 0.000001f)
+            return false;
+
+        longAxis3 = longAxis3.normalized;
+        Vector3 center3 = 0.5f * (leftShortRailCenter + rightShortRailCenter);
+
+        frame = new TableFrame2D
+        {
+            CenterXZ = new Vector2Float(center3.x, center3.z),
+            LongAxis = new Vector2Float(longAxis3.x, longAxis3.z),
+            LenghtM = TableSize.x,
+            WidthM = TableSize.y
+        };
+
+        return frame.IsValid();
+    }
+
+    private bool TryBuildPythonSourceFrame(
+    IReadOnlyList<DetectedPocketSnapshot2D> rawPockets,
+    out TableFrame2D frame)
+    {
+        frame = default;
+
+        if (rawPockets == null || rawPockets.Count != MAX_POCKET_COUNT)
+            return false;
+
+        DetectedPocketSnapshot2D? tlPocket = rawPockets.FirstOrDefault(p => p.PocketIndex == 0);
+        DetectedPocketSnapshot2D? trPocket = rawPockets.FirstOrDefault(p => p.PocketIndex == 1);
+        DetectedPocketSnapshot2D? blPocket = rawPockets.FirstOrDefault(p => p.PocketIndex == 4);
+        DetectedPocketSnapshot2D? brPocket = rawPockets.FirstOrDefault(p => p.PocketIndex == 5);
+
+        if (!tlPocket.HasValue || !trPocket.HasValue || !blPocket.HasValue || !brPocket.HasValue)
+            return false;
+
+        Vector2Float tl = tlPocket.Value.PositionXZ;
+        Vector2Float tr = trPocket.Value.PositionXZ;
+        Vector2Float bl = blPocket.Value.PositionXZ;
+        Vector2Float br = brPocket.Value.PositionXZ;
+
+        if (tl == null || tr == null || bl == null || br == null)
+            return false;
+
+        float centerX = (tl.X + tr.X + bl.X + br.X) * 0.25f;
+        float centerZ = (tl.Y + tr.Y + bl.Y + br.Y) * 0.25f;
+
+        float longAxisX = ((tr.X - tl.X) + (br.X - bl.X)) * 0.5f;
+        float longAxisZ = ((tr.Y - tl.Y) + (br.Y - bl.Y)) * 0.5f;
+
+        frame = new TableFrame2D
+        {
+            CenterXZ = new Vector2Float(centerX, centerZ),
+            LongAxis = Vector2Float.NormalizeAxis(new Vector2Float(longAxisX, longAxisZ)),
+            LenghtM = TableSize.x,
+            WidthM = TableSize.y
+        };
+
+        return frame.IsValid();
+    }
+
+    public void ApplyPythonRawSnapshot(
+    string environmentKey,
+    IReadOnlyList<DetectedPocketSnapshot2D> rawPockets,
+    IReadOnlyList<DetectedBallSnapshot2D> rawBalls,
+    bool hasCueStick,
+    DetectedCueStickSnapshot2D rawCueStick,
+    bool allowBootstrapQuestPocketsFromPython = true)
+    {
+        _latestPythonRawSnapshot ??= new PythonTableSnapshot2D();
+        _latestPythonRawSnapshot.Clear();
+
+        _latestPythonRawSnapshot.EnvironmentKey = environmentKey ?? string.Empty;
+        _latestPythonRawSnapshot.ReplacePockets(rawPockets);
+        _latestPythonRawSnapshot.ReplaceBalls(rawBalls);
+
+        if (hasCueStick && rawCueStick.IsValid())
+            _latestPythonRawSnapshot.ReplaceCueStick(rawCueStick);
+        else
+            _latestPythonRawSnapshot.ClearCueStick();
+
+        if (TryBuildPythonSourceFrame(_latestPythonRawSnapshot.RawPockets, out TableFrame2D sourceFrame))
+        {
+            _latestPythonRawSnapshot.SourceFrame = sourceFrame;
+            _latestPythonRawSnapshot.HasValidSourceFrame = true;
+        }
+
+        _latestPythonRawSnapshot.StampNewRevision(environmentKey);
+
+        if (allowBootstrapQuestPocketsFromPython &&
+            !LockFinalized &&
+            _latestPythonRawSnapshot.RawPockets != null &&
+            _latestPythonRawSnapshot.RawPockets.Count == MAX_POCKET_COUNT)
+        {
+            ApplyBootstrapQuestPocketsFromPython(_latestPythonRawSnapshot.RawPockets);
+        }
+
+        TryReprojectLatestPythonSnapshot();
+    }
+
+    private void ApplyBootstrapQuestPocketsFromPython(IReadOnlyList<DetectedPocketSnapshot2D> rawPockets)
+    {
+        if (rawPockets == null || rawPockets.Count != MAX_POCKET_COUNT)
+            return;
+
+        (float x, float z)[] provisionalPockets = new (float x, float z)[MAX_POCKET_COUNT];
+
+        for (int i = 0; i < rawPockets.Count; i++)
+        {
+            DetectedPocketSnapshot2D pocket = rawPockets[i];
+            if (!pocket.IsValid())
+                return;
+
+            if (pocket.PocketIndex >= MAX_POCKET_COUNT)
+                return;
+
+            provisionalPockets[pocket.PocketIndex] = (pocket.PositionXZ.X, pocket.PositionXZ.Y);
+        }
+
+        SetPocketsXZ(provisionalPockets);
+    }
+
+    private void TryReprojectLatestPythonSnapshot()
+    {
+        if (_latestPythonRawSnapshot == null || !_latestPythonRawSnapshot.CanReproject())
+            return;
+
+        if (!TryBuildQuestTableFrame(out TableFrame2D targetFrame))
+            return;
+
+        if (!TableFrameReprojectionUtility.TryReprojectSnapshot(
+                _latestPythonRawSnapshot,
+                targetFrame,
+                out PythonTableSnapshot2D projectedSnapshot))
+        {
+            return;
+        }
+
+        _latestProjectedSnapshot = projectedSnapshot;
+
+        List<IncomingDetectedBallRecord> projectedBallRecords = projectedSnapshot.RawBalls
+            .ConvertAll(ball => new IncomingDetectedBallRecord(
+                ball.BallType,
+                ball.RawIncomingId,
+                ball.PositionXZ,
+                ball.Confidence,
+                ball.VelocityXZ));
+
+        if (projectedBallRecords.Count > 0)
+            ApplyDetectedBallSnapshot(projectedBallRecords, replaceCurrentSnapshot: true);
+
+        if (projectedSnapshot.HasCueStick)
+        {
+            DetectedCueStickSnapshot2D cue = projectedSnapshot.RawCueStick;
+
+            ApplyCueStickRecord(
+                new IncomingCueStickRecord(
+                    cue.LinePointXZ,
+                    cue.DirectionXZ,
+                    cue.HitPointXZ,
+                    cue.Confidence));
+        }
+        else
+        {
+            ClearCueStickRecord();
+        }
+    }
+
     public void SetLocked(bool locked)
     {
         IsLockedToJitter = locked;
@@ -1152,6 +1357,9 @@ public class TableService : MonoBehaviour
         _enviromentSaved = true;
         return _enviromentSaved;
     }
+
+
+
 
     public void PlaceBalls(float x, float y, byte id, float conf, float vx, float vy)
     {
@@ -1644,7 +1852,7 @@ public class TableService : MonoBehaviour
         if (targetState == PocketZoneBallState.Visible)
         {
             // MODIFIED: remove transient memory once the ball has clearly left the suppression zone.
-            if (existing != null && !existing.IsSpecialBall)
+            if (existing?.IsSpecialBall == false)
                 _nearPocketBallMemory.Remove(existing);
 
             return false;
@@ -1933,15 +2141,10 @@ public class TableService : MonoBehaviour
     private void EnsureNearPocketDebugMarkers(int requiredCount)
     {
         while (_runtimeNearPocketMarkers.Count < requiredCount)
-        {
             _runtimeNearPocketMarkers.Add(CreateNearPocketDebugMarker(_runtimeNearPocketMarkers.Count));
-        }
 
         for (int i = 0; i < _runtimeNearPocketMarkers.Count; i++)
-        {
-            if (_runtimeNearPocketMarkers[i] != null)
-                _runtimeNearPocketMarkers[i].SetActive(i < requiredCount);
-        }
+            _runtimeNearPocketMarkers[i]?.SetActive(i < requiredCount);
     }
 
     private GameObject CreateNearPocketDebugMarker(int index)
@@ -2336,12 +2539,10 @@ public class TableService : MonoBehaviour
             Quaternion.identity);
 
         BallOverrideSelectable selectable = ballView.GetComponent<BallOverrideSelectable>();
-        if (selectable != null)
-            selectable.Bind(runtimeBall);
+        selectable?.Bind(runtimeBall);
 
         BallVisualView visualView = ballView.GetComponent<BallVisualView>();
-        if (visualView != null)
-            visualView.Bind(runtimeBall);
+        visualView?.Bind(runtimeBall);
 
         ballView.name = $"RuntimeBall_{visualIndex}_{runtimeBall.BallType}_{runtimeBall.BallId}";
         ballView.SetActive(true); // UPDATED: ignored balls stay visible/selectable so the user can unignore them later

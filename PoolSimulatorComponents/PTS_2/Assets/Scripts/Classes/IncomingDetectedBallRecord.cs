@@ -1,7 +1,7 @@
 using System;
 
 [Serializable]
-public sealed class IncomingDetectedBallRecord
+public class IncomingDetectedBallRecord
 {
     public IncomingDetectedBallRecord(
         BallType ballType,
