@@ -23,18 +23,16 @@ public class Vector3Float
     public void SetHeight(float height) => Y = height;
 
     // XZ axis.
-    public UnityEngine.Vector2 ToAxisXZ() => new(X, Z);
-    public void ToVector3FromXZAxis(Vector2Float XZ)
+    public Vector2Float ToAxisXZVector2Float() => new(X, Z);
+
+    public void ToVector3FloatFromXZAxis(Vector2Float XZ)
     {
         X = XZ.X;
         Z = XZ.Y; // Unity's Y coordinate is the height coordinate.
     }
 
-    public void ToVector3FromXZAxis(UnityEngine.Vector2 axisXZ)
-    {
-        X = axisXZ.x;
-        Z = axisXZ.y;
-    }
+    public void ToVector3FloatFromXZAxis(UnityEngine.Vector2 axisXZ) => ToVector3FloatFromXZAxis(new Vector2Float(axisXZ.x, axisXZ.y));
+    public void ToVector3FloatFromXZAxis(UnityEngine.Vector3 axisXZ) => ToVector3FloatFromXZAxis(new Vector2Float(axisXZ.x, axisXZ.z));
 
     public UnityEngine.Vector2 ToAxisXY() => new(X, Y);
     public void ToVector3FromXYAxis(Vector2Float XY)

@@ -1,16 +1,12 @@
 {
-    "name": "Networking",
+    "name": "RootAssembly",
     "rootNamespace": "",
-    "references": [
-        "GUID:93680faf858eb7641bc7a85c7cd82afa",
-        "GUID:e0a28f8aa9466444297cb8b06f6d8354",
-        "GUID:d57657dfcac605a4686698618c1b7e83",
-        "GUID:64dca168057442b4db6994092aa157d9"
-    ],
+    "references": [],
     "includePlatforms": [
         "Android",
         "Editor",
-        "WindowsStandalone64"
+        "WindowsStandalone64",
+        "WindowsStandalone64Server"
     ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

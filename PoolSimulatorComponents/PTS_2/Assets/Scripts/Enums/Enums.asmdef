@@ -5,7 +5,8 @@
     "includePlatforms": [
         "Android",
         "Editor",
-        "WindowsStandalone64"
+        "WindowsStandalone64",
+        "WindowsStandalone64Server"
     ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

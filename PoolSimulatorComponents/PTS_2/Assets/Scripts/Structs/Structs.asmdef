@@ -1,7 +1,10 @@
 {
     "name": "Structs",
     "rootNamespace": "",
-    "references": [],
+    "references": [
+        "GUID:93680faf858eb7641bc7a85c7cd82afa",
+        "GUID:64dca168057442b4db6994092aa157d9"
+    ],
     "includePlatforms": [
         "Android",
         "Editor",

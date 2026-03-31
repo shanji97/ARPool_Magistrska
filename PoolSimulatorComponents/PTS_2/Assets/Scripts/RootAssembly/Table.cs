@@ -2,25 +2,6 @@ using Newtonsoft.Json;
 using System;
 
 [Serializable]
-public class EnvironmentInfo
-{
-    [JsonProperty("_schema_version")]
-    public byte _schema_version { get; set; }
-
-    [JsonProperty("table")]
-    public Table Table { get; set; }
-
-    [JsonProperty("pockets")]
-    public Pockets Pockets { get; set; }
-
-    [JsonProperty("ball_spec")]
-    public BallSpec BallSpec { get; set; }
-
-    [JsonProperty("camera")]
-    public CameraData CameraData { get; set; }
-}
-
-[Serializable]
 public class Table
 {
     private const byte MaxArrayLenght = 3;
@@ -90,37 +71,4 @@ public class Table
 
     [JsonProperty("cloth_upper_hsv")]
     public byte[] ClothUpperHsv { get; set; }
-}
-
-[Serializable]
-public class Pockets
-{
-    [JsonProperty("corner_pocket_diameter_mm")]
-    public short CornerPocketDiameterMM { get; set; }
-
-    [JsonProperty("side_pocket_diameter_mm")]
-    public short SidePocketDiameterMM { get; set; }
-
-    [JsonProperty("corner_jaw_diameter_mm")]
-    public short CornerJawDiameterMM { get; set; }
-
-    [JsonProperty("side_jaw_diameters_mm")]
-    public int SideJawDiametersMM { get; set; }
-}
-
-[Serializable]
-public class BallSpec
-{
-    [JsonProperty("diameter_m")]
-    public float DiameterM { get; set; } = 0.05715f;
-
-    [JsonProperty("ball_circumference_m")]
-    public float BallCircumferenceM { get; set; } = .068f;
-}
-
-[Serializable]
-public class CameraData
-{
-    [JsonProperty("height_from_floor_m")]
-    public float HeightFromFloorM { get; set; }
 }

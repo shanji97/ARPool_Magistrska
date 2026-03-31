@@ -2,15 +2,13 @@
     "name": "Table",
     "rootNamespace": "",
     "references": [
-        "GUID:d57657dfcac605a4686698618c1b7e83",
+        "GUID:93680faf858eb7641bc7a85c7cd82afa",
         "GUID:64dca168057442b4db6994092aa157d9",
         "GUID:42be8676e8cdf0648a638eb7de6c8202",
+        "GUID:d57657dfcac605a4686698618c1b7e83",
+        "GUID:6055be8ebefd69e48b49212b09b47b2f",
         "GUID:f5eda1afa2a1241a59c4db6830e1c890",
-        "GUID:f64c9ebcd7899c3448a08dc9f9ddbe30",
-        "GUID:029883b9242b02a49a2f6ebae81b1db0",
-        "GUID:9bc8ab820c8b8204db161516d51bf78c",
-        "GUID:9bc8ab820c8b8204db161516d51bf78c",
-        "GUID:6055be8ebefd69e48b49212b09b47b2f"
+        "GUID:f64c9ebcd7899c3448a08dc9f9ddbe30"
     ],
     "includePlatforms": [
         "Android",
