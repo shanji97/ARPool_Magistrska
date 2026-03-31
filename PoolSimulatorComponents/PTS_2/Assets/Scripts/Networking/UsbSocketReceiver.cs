@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using UnityEngine;
+using System.Linq;
 
 public class UsbSocketReceiver : MonoBehaviour
 {
@@ -262,7 +263,8 @@ public class UsbSocketReceiver : MonoBehaviour
         ReadOnlySpan<char> span = block.AsSpan().Trim();
         int start = 0;
         List<IncomingDetectedBallRecord> parsedBallSnapshot = null;
-
+        bool hasParsedCueStickRecord = false;
+        IncomingCueStickRecord parsedCueStickRecord = default;
         while (start < span.Length)
         {
             int newLine = span[start..].IndexOf('\n');
@@ -274,58 +276,14 @@ public class UsbSocketReceiver : MonoBehaviour
                 int separator = line.IndexOf(' ');
                 ReadOnlySpan<char> token = separator > 0 ? line[..separator] : line;
                 ReadOnlySpan<char> body = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
+
                 if (BallTypeWire.TryParseToken(token, out var ballType))
                 {
                     parsedBallSnapshot ??= new List<IncomingDetectedBallRecord>(svc.MAX_BALL_COUNT);
                     ParseBalls(line, ballType, parsedBallSnapshot);
                 }
-                else if (!svc.LockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
-                {
-                    var parsedPockets = new (float x, float z)[svc.MAX_POCKET_COUNT];
-                    byte parsedPocketCount = 0;
-                    var pocketBody = body;
 
-                    while (parsedPocketCount < svc.MAX_POCKET_COUNT && !pocketBody.IsEmpty)
-                    {
-                        TryNextToken(ref pocketBody, ';', out var pair);
-                        if (pair.IsEmpty)
-                            break;
-
-                        TryNextToken(ref pair, ',', out var xS);
-                        var zS = pair;
-
-                        xS = xS.Trim();
-                        zS = zS.Trim();
-
-                        if (!TryParseFloat(xS, out float x) || !TryParseFloat(zS, out float z))
-                        {
-                            parsedPocketCount = 0;
-                            break;
-                        }
-
-                        parsedPockets[parsedPocketCount] = (x, z);
-                        parsedPocketCount++;
-                    }
-
-                    if (parsedPocketCount == svc.MAX_POCKET_COUNT)
-                    {
-                        pocketsXZ ??= new (float x, float z)[svc.MAX_POCKET_COUNT];
-                        Array.Copy(parsedPockets, pocketsXZ, svc.MAX_POCKET_COUNT);
-
-                        for (byte i = 0; i < svc.MAX_POCKET_COUNT; i++)
-                            svc.IncrementSuccessfullyParsedPocketCount();
-
-                        svc.SetPocketsXZ(pocketsXZ);
-
-                        if (VerboseLogs)
-                            Debug.Log("[USB] Parsed and applied all 6 pockets.");
-                    }
-                    else if (VerboseLogs)
-                    {
-                        Debug.LogWarning($"[USB] Ignored malformed pocket line. Parsed count={parsedPocketCount}.");
-                    }
-                }
-                else if (!svc.LockFinalized && token.SequenceEqual("E"))
+                if (!svc.LockFinalized && token.SequenceEqual("E"))
                 {
                     var environmentJsonData = body.ToString().Trim().Replace(".json", string.Empty);
                     if (string.Equals(_lastAppliedEnvironmentKey, environmentJsonData, StringComparison.Ordinal))
@@ -383,6 +341,74 @@ public class UsbSocketReceiver : MonoBehaviour
                         }
                     }
                 }
+                else if (!svc.LockFinalized && !svc.HasAllPockets() && token.SequenceEqual("p"))
+                {
+                    var parsedPockets = new (float x, float z)[svc.MAX_POCKET_COUNT];
+                    byte parsedPocketCount = 0;
+                    var pocketBody = body;
+
+                    while (parsedPocketCount < svc.MAX_POCKET_COUNT && !pocketBody.IsEmpty)
+                    {
+                        TryNextToken(ref pocketBody, ';', out var pair);
+                        if (pair.IsEmpty)
+                            break;
+
+                        TryNextToken(ref pair, ',', out var xS);
+                        var zS = pair;
+
+                        xS = xS.Trim();
+                        zS = zS.Trim();
+
+                        if (!TryParseFloat(xS, out float x) || !TryParseFloat(zS, out float z))
+                        {
+                            parsedPocketCount = 0;
+                            break;
+                        }
+
+                        parsedPockets[parsedPocketCount] = (x, z);
+                        parsedPocketCount++;
+                    }
+
+                    if (parsedPocketCount == svc.MAX_POCKET_COUNT)
+                    {
+                        pocketsXZ ??= new (float x, float z)[svc.MAX_POCKET_COUNT];
+                        Array.Copy(parsedPockets, pocketsXZ, svc.MAX_POCKET_COUNT);
+
+                        for (byte i = 0; i < svc.MAX_POCKET_COUNT; i++)
+                            svc.IncrementSuccessfullyParsedPocketCount();
+
+                        svc.SetPocketsXZ(pocketsXZ);
+
+                        if (VerboseLogs)
+                            Debug.Log("[USB] Parsed and applied all 6 pockets.");
+                    }
+                    else if (VerboseLogs)
+                    {
+                        Debug.LogWarning($"[USB] Ignored malformed pocket line. Parsed count={parsedPocketCount}.");
+                    }
+                }
+                else if (token.SequenceEqual("s"))
+                {
+                    if (TryParseCueStick(body, out var cueStickRecord))
+                    {
+                        parsedCueStickRecord = cueStickRecord;
+                        hasParsedCueStickRecord = true;
+
+                        if (VerboseLogs)
+                        {
+                            Debug.Log(
+                                $"[USB] Parsed cue stick: " +
+                                $"line=({cueStickRecord.LinePointXZ.X:F3},{cueStickRecord.LinePointXZ.Y:F3}) " +
+                                $"dir=({cueStickRecord.DirectionXZ.X:F4},{cueStickRecord.DirectionXZ.Y:F4}) " +
+                                $"hit=({cueStickRecord.HitPointXZ.X:F3},{cueStickRecord.HitPointXZ.Y:F3}) " +
+                                $"conf={cueStickRecord.Confidence:F2}");
+                        }
+                    }
+                    else if (VerboseLogs)
+                    {
+                        Debug.LogWarning($"[USB] Ignored malformed cue stick line: '{line.ToString()}'");
+                    }
+                }
             }
 
             if (newLine < 0)
@@ -391,8 +417,10 @@ public class UsbSocketReceiver : MonoBehaviour
             start += newLine + 1;
         }
 
-        if (parsedBallSnapshot != null && parsedBallSnapshot.Count > 0)
+        if (parsedBallSnapshot != null && parsedBallSnapshot.Any())
             svc.ApplyDetectedBallSnapshot(parsedBallSnapshot);
+        if (hasParsedCueStickRecord)
+            svc.ApplyCueStickRecord(parsedCueStickRecord);
     }
 
     private bool ApplyEnvironment(float playfieldLength = -1,
@@ -547,6 +575,47 @@ public class UsbSocketReceiver : MonoBehaviour
         }
     }
 
+    private static bool TryParseCueStick(ReadOnlySpan<char> body, out IncomingCueStickRecord cueStickRecord)
+    {
+        cueStickRecord = default;
+
+        ReadOnlySpan<char> payload = body.Trim();
+        if (payload.IsEmpty)
+            return false;
+
+        if (!TryNextToken(ref payload, ';', out var linePointRaw))
+            return false;
+
+        if (!TryNextToken(ref payload, ';', out var directionRaw))
+            return false;
+
+        if (!TryNextToken(ref payload, ';', out var hitPointRaw))
+            return false;
+
+        var confidenceRaw = payload.Trim();
+
+        if (!TryParseVector2Float(linePointRaw, out var linePointXZ))
+            return false;
+
+        if (!TryParseVector2Float(directionRaw, out var directionXZ))
+            return false;
+
+        if (!TryParseVector2Float(hitPointRaw, out var hitPointXZ))
+            return false;
+
+        if (!TryParseFloat(confidenceRaw, out float confidence))
+            return false;
+
+        cueStickRecord = new IncomingCueStickRecord(
+            linePointXZ,
+            directionXZ,
+            hitPointXZ,
+            confidence);
+
+        return true;
+    }
+
+
     private static bool TryParseFlexibleFloat(string raw, out float value, float defaultValue = 0f)
     {
         value = defaultValue;
@@ -571,6 +640,29 @@ public class UsbSocketReceiver : MonoBehaviour
         }
 
         return float.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    private static bool TryParseVector2Float(ReadOnlySpan<char> raw, out Vector2Float value)
+    {
+        value = default;
+
+        ReadOnlySpan<char> pair = raw.Trim();
+        if (pair.IsEmpty)
+            return false;
+
+        if (!TryNextToken(ref pair, ',', out var xS))
+            return false;
+
+        var yS = pair;
+
+        xS = xS.Trim();
+        yS = yS.Trim();
+
+        if (!TryParseFloat(xS, out float x) || !TryParseFloat(yS, out float y))
+            return false;
+
+        value = new Vector2Float(x, y);
+        return true;
     }
 
 
@@ -677,6 +769,23 @@ public class UsbSocketReceiver : MonoBehaviour
         Debug.Log("Looop executed");
 
         TestInjectIssue83StripeNearLowerMiddlePocket();
+    }
+
+    [ContextMenu("USB/Test Inject Cue Stick Block")]
+    private void TestInjectCueStickBlock()
+    {
+        (float x, float z)[] pocketsXZ = null;
+        EnsureSvc();
+        if (svc == null)
+        {
+            Debug.LogError("[USB] TableService.Instance is still null — make sure a TableService is in the scene.");
+            return;
+        }
+
+        const string block ="s 0.3069,0.8606;-0.2317,-0.9728;0.2485,0.6155;0.98\n";
+
+        Debug.Log("[USB] Injecting cue stick test block.");
+        ParseBlock(block, pocketsXZ);
     }
 #endif
 }
