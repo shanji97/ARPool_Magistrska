@@ -20,12 +20,13 @@ from helpers import (
 from connection import UsbTcpSender
 from formatters import (
     LABEL_MAP,
-    p2p_classification_to_balltype,
-    line_pockets,
     build_conf_transfer_block,
+    group_entries_by_type,
     line_configuration_name,
     line_cue_stick,
-    group_entries_by_type,
+    line_pockets,
+    line_quest_peers,
+    p2p_classification_to_balltype
 )
 
 def _estimate_ball_layout_delta_m(previous_entries, current_entries):
@@ -176,6 +177,41 @@ CUE_TRACK_STABLE_REQUIRED_FRAMES = 8
 CUE_TRACK_MAX_BALL_DELTA_M = 0.0035
 CUE_TRACK_MIN_BALLS = 2
 CUE_MIN_CONFIDENCE = 0.35
+
+QUEST_SECONDARY_QUEST_IP = "192.168.0.41"  # UPDATED: replace with the actual LAN IP of Quest 3 #2.
+QUEST_SECONDARY_QUEST_PORT = "5005"        # UPDATED: kept explicit for future protocol growth.
+QUEST_CONNECT_TIMEOUT_SEC = 0.25           # UPDATED: short timeout so missing Quest does not stall detection.
+QUEST_SEND_TIMEOUT_SEC = 0.25              # UPDATED: short send timeout for the same reason.
+QUEST_RETRY_INITIAL_DELAY_SEC = 0.25       # UPDATED: kept small because detection must stay responsive.
+QUEST_RETRY_MAX_DELAY_SEC = 1.0            # UPDATED: bounded retry window for Quest reconnects.
+QUEST_BOOTSTRAP_RESEND_INTERVAL_SEC = 2.0  # UPDATED: periodic resend so Quest app restarts recover automatically.
+
+def _build_bootstrap_payloads(primary_ip: Optional[str], configuration_name: Optional[str]):
+    payloads = []
+
+    if configuration_name:
+        payloads.append(line_configuration_name(configuration_name))
+
+    if primary_ip and QUEST_SECONDARY_QUEST_IP:
+        payloads.append(line_quest_peers([
+            {"ip": primary_ip, "role": "p"},
+            {"ip": QUEST_SECONDARY_QUEST_IP, "role": "s"},
+        ]))
+
+    return payloads
+
+def _send_bootstrap_payloads(usb_sender: UsbTcpSender, payloads, debug: bool = False):
+    if usb_sender is None or not payloads:
+        return
+
+    for payload in payloads:
+        if not payload:
+            continue
+
+        sent = usb_sender.send(payload)
+        if debug and not sent:
+            print(f"[USB] Bootstrap payload transfer failed: {payload!r}")
+
 
 # Runtime state
 _controller = None
@@ -383,58 +419,70 @@ def main(
          debug_detection: bool = False,
          process_unknowns: Optional[bool] = False
          ):
-    
+
     usb_sender = None
-    
+
     # Compute environment and static things, such as pockets.
     config = None
-    
+
     env = EnvironmentConfig.__new__(EnvironmentConfig)
-    
+
     if debug and debug_config_name:
         config = env.get_debug_env_config(debug_config_name)
     else:
         config = env.get_environment_config(interactive = True, use_last_known= True)
-    
+
+    if config is None:
+        return
+
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
     (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
     Lmm, Wmm, Hmm = config.table.playfield_mm
     ball_diameter_m = config.ball_spec.diameter_m
-    expected_aspect_ratio = Lmm / Wmm    # Consider the units in the future. Regardless of this, the 
+    expected_aspect_ratio = Lmm / Wmm
     camera_height_m = config.camera.height_from_floor_m
-    
-    if config is None:
-        return
-    
-    # Don't need to wait for the application to be opened. 
+    configuration_name_for_unity = config.get_json_name_for_unity()  # UPDATED: reused for periodic bootstrap resend.
+
+    del config
+    del env
+
+    global _calib
+    _calib = Calibrator(allow_center_crop=True, force_recalib=False)
+
+    q_ip, q_port = setup_connection(True, is_editor_build, debug_offline)
+    usb_sender = UsbTcpSender(
+        host=q_ip,                                           
+        port=q_port,                                         
+        auto_reconnect=True,
+        connect_timeout_s=QUEST_CONNECT_TIMEOUT_SEC,         
+        send_timeout_s=QUEST_SEND_TIMEOUT_SEC,               
+        retry_initial_delay_s=QUEST_RETRY_INITIAL_DELAY_SEC,
+        retry_max_delay_s=QUEST_RETRY_MAX_DELAY_SEC,
+        is_offline_run=debug_offline                        
+    )
+    bootstrap_payloads = _build_bootstrap_payloads(q_ip, configuration_name_for_unity) 
+    last_bootstrap_attempt_time = 0.0
+
     if not debug_offline:
         print("Open Unity application. After 10 seconds the application is going to continue.")
         time.sleep(10)
-        q_ip, q_port = setup_connection(True, is_editor_build)
-        usb_sender = UsbTcpSender(q_ip, q_port, debug_offline)
-        if not usb_sender.send(line_configuration_name(config.get_json_name_for_unity())):
-            print("[USB] Failed to send environment name on persistent connection.")
-            
-    del config
-    del env
-    
+
+        initial_usb_connection_ready = usb_sender.connect()
+        if (not initial_usb_connection_ready) and is_editor_build:
+            open_ports(5005, is_editor_build)
+            initial_usb_connection_ready = usb_sender.connect()
+
+        if not initial_usb_connection_ready:
+            print("[USB] Initial connection to the primary Quest failed. Detection will continue and the sender will retry automatically.")
+        else:
+            _send_bootstrap_payloads(usb_sender, bootstrap_payloads, debug)
+
     debug_frame = None
     dimensions = None
     capture = None
 
-    global _calib
-    _calib = Calibrator(allow_center_crop=True, force_recalib=False)
-    
-    q_ip, q_port = setup_connection(True, is_editor_build, debug_offline)
-    usb_sender = UsbTcpSender(q_ip, q_port, debug_offline)
-    if not usb_sender.connect() and not debug_offline:
-        open_ports(5005, is_editor_build)
-        if not usb_sender.connect():
-            print("Could not connect to Quest 3. Check port forwarding. Ensure the application is up and running.")
-        exit()
-    
-    # Set up connection and open stream 
+    # Set up connection and open stream
     if debug_static and debug_image_path:
         debug_frame = cv2.imread(debug_image_path, cv2.IMREAD_COLOR) if debug_image_path else None
         if debug_frame is None:
@@ -451,7 +499,7 @@ def main(
         global _controller
         _controller = DroidCamController(ip, port)
         capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
-        
+
         if capture is None:
             print("Could not open stream.")
             return
@@ -464,17 +512,17 @@ def main(
                 print_precompute_results(pre)
         except Exception as e:
                 print("Precompute failed:", e)
-        
+
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
-    
+
     retry_count = 0
     pockets_px_raw = None
     global _table_fail_streak
     _table_fail_streak = 0
     frame_counter = 0
     H_new = None
-    
+
     global _is_changing_camera
     global _H_cached
     global _pockets_px_cached
@@ -487,15 +535,14 @@ def main(
     global _map1, _map2
     global _pockets_have_been_sent
     global _last_pocket_send_time
-    
-    
+
     _pockets_have_been_sent = False
     pockets_xy_m = None
-    
+
     global _pockets_xy_m_adjusted_cached
     global _pockets_px_before_adjust_cache
     _pockets_px_before_adjust_cached = None
-    
+
     stable = False
 
     ball_transport = BallTransportAggregator(
@@ -506,35 +553,41 @@ def main(
         reset_max_position_delta_m=BALL_RESET_MAX_POSITION_DELTA_M,
         force_send_interval_sec=BALL_FORCE_SEND_INTERVAL_SEC
     )
-    
+
     previous_ball_entries = None
     stable_ball_frames = 0
     cue_info = None
     ball_data = None
-    
+
     start_time = time.time() if debug else None
-    
-    
+
     # Main execution loop detection
     while True:
         _frame_index += 1
+
+        now_bootstrap_sec = time.time()
+        if (
+            bootstrap_payloads
+            and not debug_offline
+            and (now_bootstrap_sec - last_bootstrap_attempt_time) >= QUEST_BOOTSTRAP_RESEND_INTERVAL_SEC
+        ):
+            last_bootstrap_attempt_time = now_bootstrap_sec
+            _send_bootstrap_payloads(usb_sender, bootstrap_payloads, debug)
+
         # Camera switching lock
         if _is_changing_camera:
             print("Changing camera - skipping current frame(s).")
             retry_count = 0
-            # Sometime in the future this won't be need, since the pockets are stationary and a loopback from the Quest
-            # is going to be available that the pockets have been comnputed.
             continue
-            
+
         if not debug_static:
             ret, frame = capture.read()
         elif debug_static and debug_image_path:
-            ret, frame = True, debug_frame.copy() 
-        
+            ret, frame = True, debug_frame.copy()
+
         # Frame error lock
         if not ret or frame is None:
             if debug:
-                # Static image = no recovery possible, just stop
                 print("[debug] Static debug frame invalid. Exiting loop.")
                 break
 
@@ -559,10 +612,9 @@ def main(
                 elapsed = time.time() - start_time
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
-                
-        frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame 
 
-        # 1) Detect cloth area (rough)
+        frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame
+
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
         if table_bounding_box is None or corners is None:
             retry_count += 1
@@ -571,10 +623,9 @@ def main(
                 _pockets_ready = False
                 _detector.reset_pocket_tracking()
             continue
-        # 2) Smooth cloth-corners (still useful as a fallback / ROI)
+
         corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
 
-        # 3) Compute inner cushion corners (markerless)
         inner_corners, edges_dbg = _detector.detect_inner_cushion_corners(
             frame_bgr=frame,
             approx_table_corners_px=corners,
@@ -586,30 +637,26 @@ def main(
             max_line_gap=35,
             debug=debug_pocket_display
         )
-        
+
         if inner_corners is None:
-            # Fall back to cloth corners if inner cannot be computed this frame
             inner_corners = corners
 
-        # 4) Homography based on INNER rectangle
         H_new = _detector.homography_mm_to_px(inner_corners, Lmm, Wmm)
 
         if H_new is None:
             continue
-        
+
         if _force_rescan:
             reset_globals()
             ball_transport.reset()
             print("[pockets] Re-scan started.")
 
-        # Compute only until locked, and only every N frame
         should_scan_this_frame = (not _pockets_ready) and ((_frame_index % POCKET_SCAN_INTERVAL_FRAMES) == 0)
-        
+
         raw_frame = frame
-        
+
         if not _pockets_ready:
             if should_scan_this_frame:
-                # Detect pockets from image evidence in rectified plane
                 pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
                     frame_bgr=frame,
                     corners_px_inner=inner_corners,
@@ -624,7 +671,6 @@ def main(
                     debug=debug_pocket_display
                 )
 
-                # Fallback: if any pockets are missing, fall back to projected pockets_mm for those
                 if pockets_px_raw is None:
                     pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
                 else:
@@ -634,63 +680,59 @@ def main(
                         for i, p in enumerate(pockets_px_raw)
                     ]
 
-                # Stabilize
-                pockets_px, stable, max_delta_px = _detector.stabilize_pockets(pockets_px_raw, max_delta_px=POCKET_STABLE_MAX_DELTA_PX, required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES)
+                pockets_px, stable, max_delta_px = _detector.stabilize_pockets(
+                    pockets_px_raw,
+                    max_delta_px=POCKET_STABLE_MAX_DELTA_PX,
+                    required_stable_frames=POCKET_STABLE_REQUIRED_FRAMES
+                )
 
-                # Cache the latest *attempt* so debug drawing can still work
                 _pockets_px_cached = pockets_px
                 _H_cached = H_new
 
                 if stable:
-                    # LOCK NOW (independent of sending)
                     _pockets_ready = True
                     _pockets_have_been_sent = False
                     _last_pocket_send_time = 0.0
                     print(f"[pockets] Locked (max delta {max_delta_px:.3f}px).")
                     if (not _pockets_adjusted) and (_pockets_px_cached is not None):
-                            _pockets_px_before_adjust_cached = [tuple(p) if p is not None else None for p in _pockets_px_cached]
-                            TL, TR, BM, TM, BL, BR = _pockets_px_before_adjust_cached
-                            if (TL is not None) and (TR is not None) and (BL is not None) and (BR is not None) and (TM is not None) and (BM is not None):
-                                x_left  = min(TL[0], BL[0])
-                                x_right = max(TR[0], BR[0])
-                                y_top    = min(TL[1], TM[1], TR[1])
-                                y_bottom = max(BL[1], BM[1], BR[1])
-                                x_mid = 0.5 * (x_left + x_right)
-                                pockets_px_new = [
-                                (x_left,  y_top),     # TL
-                                (x_right, y_top),     # TR
-                                (x_mid,   y_bottom),  # BM
-                                (x_mid,   y_top),     # TM
-                                (x_left,  y_bottom),  # BL
-                                (x_right, y_bottom),  # BR
-                                ]
-                                _pockets_px_cached = pockets_px_new 
-                                
-                                _pockets_adjusted = True
-                # 2) If pockets READY -> always reuse cached (no recompute)
+                        _pockets_px_before_adjust_cached = [tuple(p) if p is not None else None for p in _pockets_px_cached]
+                        TL, TR, BM, TM, BL, BR = _pockets_px_before_adjust_cached
+                        if (TL is not None) and (TR is not None) and (BL is not None) and (BR is not None) and (TM is not None) and (BM is not None):
+                            x_left  = min(TL[0], BL[0])
+                            x_right = max(TR[0], BR[0])
+                            y_top = min(TL[1], TM[1], TR[1])
+                            y_bottom = max(BL[1], BM[1], BR[1])
+                            x_mid = 0.5 * (x_left + x_right)
+                            pockets_px_new = [
+                                (x_left,  y_top),
+                                (x_right, y_top),
+                                (x_mid,   y_bottom),
+                                (x_mid,   y_top),
+                                (x_left,  y_bottom),
+                                (x_right, y_bottom),
+                            ]
+                            _pockets_px_cached = pockets_px_new
+                            _pockets_adjusted = True
                 else:
                     H_new = _H_cached if _H_cached is not None else H_new
                     pockets_px_raw = _pockets_px_cached
 
-        # 3) Sending cached pockets (cheap, independent of computing)
         if _pockets_ready and (_H_cached is not None) and (_pockets_px_cached is not None):
             now = time.time()
             should_send_pockets = (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC)
             if should_send_pockets:
                 if debug:
-
                     pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)
-                
+
                 if usb_sender.send(line_pockets(pockets_xy_m)):
                     _pockets_have_been_sent = True
                     _last_pocket_send_time = now
                 else:
                     _pockets_have_been_sent = False
-                    
+
                 if debug and debug_pocket_display:
                     labels = ["TL", "TR", "BM", "TM", "BL", "BR"]
 
-                    # Draw OLD (yellow) if we have it
                     if _pockets_px_before_adjust_cached is not None:
                         for i, p in enumerate(_pockets_px_before_adjust_cached):
                             if p is None:
@@ -698,23 +740,22 @@ def main(
                             x, y = p
                             cv2.circle(raw_frame, (int(x), int(y)), 14, (0, 255, 255), 2)
                     if _pockets_px_cached is not None:
-                         for i, p in enumerate(_pockets_px_cached):
+                        for i, p in enumerate(_pockets_px_cached):
                             if p is None:
                                 continue
                             x, y = p
                             xm, ym = pockets_xy_m[i]
-                            cv2.circle(raw_frame, (int(x), int(y)), 9, (0, 255, 0), -1)  # filled green
+                            cv2.circle(raw_frame, (int(x), int(y)), 9, (0, 255, 0), -1)
                             text = f"SEND:{labels[i]} ({xm:.3f}m,{ym:.3f}m)"
                             cv2.putText(raw_frame, text, (int(x) + 8, int(y) - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-                    cv2.imshow("debug",raw_frame)
+                    cv2.imshow("debug", raw_frame)
                     if (cv2.waitKey(1) & 0xFF) == ord("q"):
                         break
 
         if not _pockets_ready or (_H_cached is None) or (_pockets_px_cached is None):
             continue
-        
-        # BALL DETECTION and DETERMINATION IF THEY SHOULD BE CONSIDERED
+
         yolo_detections = []
         try:
             yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame, img_size=960)
@@ -722,7 +763,6 @@ def main(
             print("[yolov5] ball detection failed:", e)
             yolo_detections = []
 
-        # Convert detections from pixels -> meters using the current homography.
         centers_px = [(int(d["cx"]), int(d["cy"])) for d in yolo_detections]
         centers_m = _detector.warp_px_to_m(_H_cached, centers_px)
 
@@ -734,7 +774,6 @@ def main(
 
             type = p2p_classification_to_balltype(int(det.get("cls", -1)))
 
-            # We do not need diamonds and other stuff to be processed, which is classified as unknown
             if type == "u" and not process_unknowns:
                 continue
 
@@ -751,7 +790,6 @@ def main(
             stable_ball_frames
         )
 
-        # Convert entries to current transport format from issues 64 and 70.
         now_sec = time.time()
         entries_to_send = ball_transport.push(entries, now_sec)
 
@@ -836,7 +874,7 @@ def main(
                         cue_payload = line_cue_stick(cue_transport)
                         cue_sent = usb_sender.send(cue_payload)
 
-                        if debug: 
+                        if debug:
                             if cue_sent and sent_ball_data and cue_payload is not None and ball_data is not None:
                                 print(ball_data)
                                 print(cue_payload)
@@ -848,8 +886,7 @@ def main(
                 print("[cue] Cue ball not detected by YOLO in this frame.")
             elif debug_cue_stick and not cue_tracking_enabled and not debug_static:
                 print(f"[cue] Waiting for stable layout: {stable_ball_frames}/{CUE_TRACK_STABLE_REQUIRED_FRAMES}")
-                
-        
+
         if debug_detection:
             _show_ball_debug_windows(raw_frame, yolo_detections)
 
@@ -860,8 +897,7 @@ def main(
             if (cv2.waitKey(1) & 0xFF) == ord("q"):
                 break
 
-    if debug_detection or debug_static or debug_pocket_display or debug_cue_stick or  debug:
-        # log_file.close()
+    if debug_detection or debug_static or debug_pocket_display or debug_cue_stick or debug:
         cv2.destroyAllWindows()
     if capture is not None:
         capture.release()

@@ -31,6 +31,7 @@ public class UsbSocketReceiver : MonoBehaviour
     private readonly ConcurrentQueue<string> _blocks = new();
 
     private TableService svc;
+    private QuestSessionService _questSessionSvc;
     private (float x, float z)[] pocketsXZ = null;
 
     private int _connectionSequence = 0;
@@ -40,6 +41,8 @@ public class UsbSocketReceiver : MonoBehaviour
     public void Start()
     {
         EnsureSvc();
+        EnsureQuestSessionSvc();
+
         pocketsXZ ??= new (float x, float z)[6];
 
         EnvironmentInfo env = AppSettings.Instance.Settings.EnviromentInfo;
@@ -57,11 +60,13 @@ public class UsbSocketReceiver : MonoBehaviour
     public void Update()
     {
         if (svc == null)
-        {
             EnsureSvc();
-            if (svc == null)
-                return;
-        }
+
+        if (_questSessionSvc == null)
+            EnsureQuestSessionSvc();
+
+        if (svc == null || _questSessionSvc == null)
+            return;
 
         byte processedThisFrame = 0;
         while (processedThisFrame < MaxBlocksPerFrame && _blocks.TryDequeue(out string block))
@@ -128,6 +133,15 @@ public class UsbSocketReceiver : MonoBehaviour
         if (svc == null)
             Debug.LogWarning("[UsbSocketReceiver] 'svc' is not assigned.");
     }
+
+    private void EnsureQuestSessionSvc()
+    {
+        if (_questSessionSvc != null) return;
+        _questSessionSvc = QuestSessionService.Instance;
+        if (_questSessionSvc == null)
+            Debug.LogWarning("[UsbSocketReceiver] '_questSessionSvc' is not assigned.");
+    }
+
 
     private void AcceptLoop()
     {
@@ -278,9 +292,17 @@ public class UsbSocketReceiver : MonoBehaviour
     private void ParseBlock(string block, (float x, float z)[] cachedPocketsXZ)
     {
         EnsureSvc();
+
         if (svc == null)
         {
             Debug.LogWarning("[USB] ParseBlock skipped because TableService is not available yet.");
+            return;
+        }
+
+        EnsureQuestSessionSvc();
+        if (_questSessionSvc == null)
+        {
+            Debug.LogWarning("[USB] ParseBlock skipped because QuestSessionService is not available yet.");
             return;
         }
 
@@ -289,6 +311,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
         List<DetectedPocketSnapshot2D> parsedPocketSnapshot = null;
         List<DetectedBallSnapshot2D> parsedBallSnapshot2D = null;
+        List<QuestPeerRuntimeState> parsedQuestPeerSnapshot = null; // UPDATED: q token snapshot.
         bool hasParsedCueStickSnapshot = false;
         DetectedCueStickSnapshot2D parsedCueStickSnapshot = default;
 
@@ -308,6 +331,26 @@ public class UsbSocketReceiver : MonoBehaviour
                 {
                     parsedBallSnapshot2D ??= new List<DetectedBallSnapshot2D>(svc.MAX_BALL_COUNT);
                     ParseBalls(line, ballType, parsedBallSnapshot2D);
+                }
+                else if (token.SequenceEqual("q"))
+                {
+                    if (TryParseQuestPeers(body, out List<QuestPeerRuntimeState> questPeerSnapshot))
+                    {
+                        parsedQuestPeerSnapshot = questPeerSnapshot;
+
+                        if (VerboseLogs)
+                        {
+                            Debug.Log(
+                                "[USB] Parsed quest peer snapshot: " +
+                                $"{parsedQuestPeerSnapshot.Count} peer(s), " +
+                                $"authoritative=" +
+                                $"{parsedQuestPeerSnapshot.Find(p => p.Role == DeviceInformation.PrimaryQuest)?.IpAddress ?? "<none>"}");
+                        }
+                    }
+                    else if (VerboseLogs)
+                    {
+                        Debug.LogWarning($"[USB] Ignored malformed quest peer line: '{line.ToString()}'");
+                    }
                 }
                 else if (!svc.LockFinalized && token.SequenceEqual("E"))
                 {
@@ -424,6 +467,19 @@ public class UsbSocketReceiver : MonoBehaviour
             start += newLine + 1;
         }
 
+        bool hasParsedQuestPeerContent = (parsedQuestPeerSnapshot?.Count ?? 0) > 0;
+        if (hasParsedQuestPeerContent)
+        {
+            if (_questSessionSvc != null)
+            {
+                _questSessionSvc.ApplyPeerSnapshot(parsedQuestPeerSnapshot); // UPDATED: q token is stored outside TableService.
+            }
+            else
+            {
+                Debug.LogWarning("[USB] q token parsed but QuestSessionService is not available.");
+            }
+        }
+
         bool hasRawSnapshotContent =
             (parsedPocketSnapshot?.Count ?? 0) > 0 ||
             (parsedBallSnapshot2D?.Count ?? 0) > 0 ||
@@ -474,6 +530,69 @@ public class UsbSocketReceiver : MonoBehaviour
 
         parsedPockets = provisionalPockets;
         return true;
+    }
+
+    private bool TryParseQuestPeers(ReadOnlySpan<char> body, out List<QuestPeerRuntimeState> parsedQuestPeers)
+    {
+        parsedQuestPeers = null;
+
+        ReadOnlySpan<char> remaining = body.Trim();
+        if (remaining.IsEmpty)
+            return false;
+
+        List<QuestPeerRuntimeState> provisionalPeers = new(4);
+        float now = Time.unscaledTime; // UPDATED: session liveness timestamp for q snapshot.
+
+        while (!remaining.IsEmpty)
+        {
+            TryNextToken(ref remaining, ';', out ReadOnlySpan<char> entryRaw);
+            entryRaw = entryRaw.Trim();
+
+            if (entryRaw.IsEmpty)
+                continue;
+
+            ReadOnlySpan<char> entry = entryRaw;
+            if (!TryNextToken(ref entry, ',', out ReadOnlySpan<char> ipRaw))
+                return false;
+
+            ReadOnlySpan<char> roleRaw = entry.Trim();
+            string ip = ipRaw.Trim().ToString();
+
+            if (string.IsNullOrWhiteSpace(ip) || !IPAddress.TryParse(ip, out _))
+                return false;
+
+            if (!TryParseQuestPeerRole(roleRaw, out DeviceInformation role))
+                return false;
+
+            provisionalPeers.Add(new QuestPeerRuntimeState(ip, role, now));
+        }
+
+        if (provisionalPeers.Count <= 0)
+            return false;
+
+        parsedQuestPeers = provisionalPeers;
+        return true;
+    }
+
+
+    private static bool TryParseQuestPeerRole(ReadOnlySpan<char> raw, out DeviceInformation role)
+    {
+        role = DeviceInformation.Unknown;
+        ReadOnlySpan<char> cleaned = raw.Trim();
+
+        if (cleaned.SequenceEqual("p"))
+        {
+            role = DeviceInformation.PrimaryQuest;
+            return true;
+        }
+
+        if (cleaned.SequenceEqual("s"))
+        {
+            role = DeviceInformation.SecondaryQuest;
+            return true;
+        }
+
+        return false;
     }
 
     private bool ApplyEnvironment(
@@ -797,6 +916,91 @@ public class UsbSocketReceiver : MonoBehaviour
             "or marked ambiguous by the near-pocket logic.");
 
         ParseBlock(block, localPocketsXZ);
+    }
+
+    [ContextMenu("USB/Test Inject Full Session Block (queue path)")]
+    private void TestInjectFullSessionBlockQueue()
+    {
+        EnsureSvc();
+        EnsureQuestSessionSvc();
+
+        if (svc == null)
+        {
+            Debug.LogError("[USB] TableService.Instance is still null — make sure a TableService is in the scene.");
+            return;
+        }
+
+        if (_questSessionSvc == null)
+        {
+            Debug.LogError("[USB] QuestSessionService.Instance is still null — make sure QuestSessionService is in the scene.");
+            return;
+        }
+
+        string block = BuildFullSessionIntegrationBlock();
+
+        Debug.Log("[USB] Injecting full session integration block through the receiver queue.");
+        EnqueueBlock(block); // UPDATED: tests the same queued Update() -> ParseBlock() path as live data.
+    }
+
+    [ContextMenu("USB/Test Inject Full Session Block (over local TCP)")]
+    private void TestInjectFullSessionBlockOverTcp()
+    {
+        EnsureSvc();
+        EnsureQuestSessionSvc();
+
+        if (svc == null)
+        {
+            Debug.LogError("[USB] TableService.Instance is still null — make sure a TableService is in the scene.");
+            return;
+        }
+
+        if (_questSessionSvc == null)
+        {
+            Debug.LogError("[USB] QuestSessionService.Instance is still null — make sure QuestSessionService is in the scene.");
+            return;
+        }
+
+        if (!_running)
+            StartServer(); // UPDATED: make the test self-contained in Editor.
+
+        string block = BuildFullSessionIntegrationBlock();
+
+        try
+        {
+            SendLocalTcpPayload(block);
+            Debug.Log("[USB] Injected full session integration block over local TCP.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[USB] Failed to inject full session integration block over local TCP: {ex}");
+        }
+    }
+    private void SendLocalTcpPayload(string block)
+    {
+        using TcpClient client = new TcpClient();
+        client.NoDelay = true;
+        client.Connect(IPAddress.Loopback, Port);
+
+        using NetworkStream stream = client.GetStream();
+
+        string payloadText = block.EndsWith("\n", StringComparison.Ordinal) ? block : block + "\n";
+        byte[] payload = Encoding.UTF8.GetBytes(payloadText);
+
+        stream.Write(payload, 0, payload.Length);
+        stream.Flush();
+    }
+
+    private static string BuildFullSessionIntegrationBlock()
+    {
+        return
+            "E last_environment.json\n" +
+            "q 192.168.0.40,p;192.168.0.41,s\n" +
+            "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
+            "e 0.6196690,0.5729381,8,0.91796875,\\,\\\n" +
+            "c 0.1438348,0.5885691,/,0.935546875,\\,\\\n" +
+            "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n" +
+            "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n" +
+            "s 0.3069,0.8606;-0.2317,-0.9728;0.2485,0.6155;0.98\n";
     }
 
     private static string BuildIssue83StripeNearLowerMiddlePocketBlock()

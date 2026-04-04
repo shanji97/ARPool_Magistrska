@@ -1,5 +1,6 @@
 public enum DeviceInformation : byte
 {
-    PrimaryQuest = 0,
-    SecondaryQuest = 1,
+    Unknown = 0,
+    PrimaryQuest = 1,
+    SecondaryQuest = 2
 }

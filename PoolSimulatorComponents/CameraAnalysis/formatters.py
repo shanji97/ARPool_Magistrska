@@ -4,11 +4,11 @@ from ball_type import BallType
 
 LABEL_MAP = {
     BallType.EIGHT.value:   ("e", "8"),
-    BallType.CUE.value:      ("c",   "/"),
-    BallType.STRIPE.value:  ("st",    "u"),
-    BallType.SOLID.value:    ("so",    "u"),
-    BallType.UNKNOWN.value:  ("na",    "u"),
-}   
+    BallType.CUE.value:     ("c", "/"),
+    BallType.STRIPE.value:  ("st", "u"),
+    BallType.SOLID.value:   ("so", "u"),
+    BallType.UNKNOWN.value: ("na", "u"),
+}
 
 # helpers
 def _f32(x: float) -> float: return float(np.float32(x))
@@ -18,7 +18,7 @@ def _round_or_none(value, decimals: int):
         return None
     return round(float(value), decimals)
 
-def _fmt_float(value: float, decimals: int) -> str: 
+def _fmt_float(value: float, decimals: int) -> str:
     return f"{_f32(value):.{decimals}f}"
 
 def _fmt2(x, y, decimals: int = 4):
@@ -38,6 +38,15 @@ def line_pockets(pockets_xy, decimals: int = 7):
 
 def line_configuration_name(configuration_name: str):
     return "E " + configuration_name
+
+def line_quest_peers(quest_entries: List[Dict[str, str]]) -> str:
+    # UPDATED: bootstrap payload for Quest-to-Quest session awareness.
+    parts = [
+        f"{str(entry.get('ip', '')).strip()},{str(entry.get('role', '')).strip()}"
+        for entry in (quest_entries or [])
+        if str(entry.get("ip", "")).strip() and str(entry.get("role", "")).strip()
+    ]
+    return "" if not parts else "q " + ";".join(parts)
 
 def line_cue_stick(cue_data, pos_decimals=4, dir_decimals=4, conf_decimals=2):
     line_x, line_y = cue_data["line_point_m"]
@@ -123,8 +132,6 @@ def build_detection_signature(
         ))
     return tuple(signature)
 
-
-
 def _serialize_all_balls(
     entries_px: List[Dict],
     discard_diamonds: bool = True,
@@ -177,7 +184,6 @@ def _serialize_all_balls(
 
     return [eight_line, cue_line, st_line, so_line, edge_d_line]
 
-
 def line_diamonds(diamond_entries: List[Dict], discard_diamonds: bool = True, pos_decimals: int = 7, conf_decimals: int = 4) -> str:
     if discard_diamonds:
         return ""
@@ -193,11 +199,11 @@ def line_diamonds(diamond_entries: List[Dict], discard_diamonds: bool = True, po
 def p2p_classification_to_balltype(ball_id: int) -> str:
     if ball_id == 0:
         return BallType.STRIPE.value
-    elif ball_id == 1: 
+    elif ball_id == 1:
         return BallType.SOLID.value
-    elif ball_id == 2: 
+    elif ball_id == 2:
         return BallType.CUE.value
-    elif ball_id == 3: 
+    elif ball_id == 3:
         return BallType.EIGHT.value
     return BallType.UNKNOWN.value
 
