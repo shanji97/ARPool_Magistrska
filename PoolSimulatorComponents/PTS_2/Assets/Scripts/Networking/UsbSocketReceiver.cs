@@ -560,7 +560,7 @@ public class UsbSocketReceiver : MonoBehaviour
         float widthM = MmToM(env.Table.Width);
         float heightM = MmToM(env.Table.Height);
 
-        return ApplyEnvironment(
+        bool applied = ApplyEnvironment(
             lengthM,
             widthM,
             heightM,
@@ -568,6 +568,11 @@ public class UsbSocketReceiver : MonoBehaviour
             env.BallSpec?.BallCircumferenceM ?? -1f,
             env.CameraData?.HeightFromFloorM ?? -1f,
             isLoadedFromBackup);
+
+        if (applied && svc != null)
+            svc.SetPocketSpec(env.Pockets);
+
+        return applied;
     }
 
     private void ParseBalls(ReadOnlySpan<char> line, BallType ballType, List<DetectedBallSnapshot2D> targetSnapshot)

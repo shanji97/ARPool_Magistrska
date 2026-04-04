@@ -18,7 +18,8 @@ public class TableService : MonoBehaviour
     public GameObject BallViewPrefab;
     public Transform BallViewsParent;
     public bool EnableBallVisualization = true;
-    public bool RequireQrAlignmentBeforeBallVisualization = true;
+    [Tooltip("Temporarily disabled while QR workflow is out of the active setup path.")]
+    public bool RequireQrAlignmentBeforeBallVisualization = false;
     public bool DebugBypassQrAlignmentGate = false;
     public float BallViewSurfaceLiftM = 0.002f;
     public float BallReuseMatchRadiusM = 0.09f;
@@ -72,6 +73,11 @@ public class TableService : MonoBehaviour
 
     [Header("State (read-only)")]
     public Vector3[] PocketPositions { get; private set; }  // TL,TR,ML,MR,BL,BR
+    [Header("Pocket Environment Data")]
+    public float CornerPocketDiameterM { get; private set; } = -1f;
+    public float SidePocketDiameterM { get; private set; } = -1f;
+
+    public bool ArePocketDiametersSet() => CornerPocketDiameterM > 0f && SidePocketDiameterM > 0f;
 
     private List<DiamondMarkerData> _diamondMarkerData = new();
 
@@ -201,20 +207,6 @@ public class TableService : MonoBehaviour
     }
 
     private bool _enviromentSaved = false;
-
-    [Header("QR Alignment")]
-    public string[] QR_CODE_MARKER_VALUES =
-{
-    "ARPOOL_MARKER_01",
-    "ARPOOL_MARKER_02",
-    "ARPOOL_MARKER_03",
-    "ARPOOL_MARKER_04",
-    "ARPOOL_MARKER_05",
-    "ARPOOL_MARKER_06"
-};
-
-    [Range(4, 6)]
-    public byte QR_MARKER_COUNT = 6;
 
     [Min(0.05f)]
     public float QR_CODE_WHOLE_PAPER_SIZE_M = 0.16f;
@@ -1039,6 +1031,19 @@ public class TableService : MonoBehaviour
 
     public void SetEdgeDiamonds((float x, float z, byte i, float c)[] diamonds) => PrivateSetEdgeDiamonds(diamonds, TableY);
     public void SetPocketsXZ((float x, float z)[] pocketXZ) => PrivateSetPocketsXZ(pocketXZ, TableY);
+
+    public void SetPocketSpec(Pocket pocketSpec)
+    {
+        if (pocketSpec == null)
+            return;
+
+        if (pocketSpec.CornerPocketDiameterMM > 0)
+            CornerPocketDiameterM = pocketSpec.CornerPocketDiameterMM / 1000f;
+
+        if (pocketSpec.SidePocketDiameterMM > 0)
+            SidePocketDiameterM = pocketSpec.SidePocketDiameterMM / 1000f;
+    }
+
     public void EnsureMarkers()
     {
         if (_markers?.Length == MAX_POCKET_COUNT) return;

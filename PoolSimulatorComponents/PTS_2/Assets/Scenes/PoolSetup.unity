@@ -329,6 +329,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 425371869}
     m_Modifications:
+    - target: {fileID: 1087457118923394504, guid: 28716d26c6c28f3469c44ab48dfde872, type: 3}
+      propertyPath: m_Enabled
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 2394891458464122025, guid: 28716d26c6c28f3469c44ab48dfde872, type: 3}
       propertyPath: m_Name
       value: EnvironmentStatusPanel
@@ -1465,7 +1469,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.x
@@ -1473,7 +1477,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_SizeDelta.x
@@ -1517,11 +1521,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -421
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -1538,6 +1542,10 @@ PrefabInstance:
     - target: {fileID: 9054075607072371714, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_Name
       value: LockQrPositionButton
+      objectReference: {fileID: 0}
+    - target: {fileID: 9054075607072371714, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
+      propertyPath: m_IsActive
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -1792,7 +1800,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.x
@@ -1800,7 +1808,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_SizeDelta.x
@@ -1840,11 +1848,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -267
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -1939,6 +1947,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cb23af5b6fd422b4582f9416fdbb6f3f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Classes::TableQrAligmentController
+  AlignmentMode: 0
+  AllowAdjacentCornerFallback: 1
+  AllowSingleMarkerFallback: 1
+  AllowManualPocketAnchorsFallback: 1
   TableServiceOverride: {fileID: 1796661024}
   EnableQrTrackingWorkflow: 1
   ScanIntervalSeconds: 0.05
@@ -2028,7 +2040,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.x
@@ -2036,7 +2048,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_SizeDelta.x
@@ -2080,11 +2092,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -690
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -3424,7 +3436,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.x
@@ -3432,7 +3444,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_SizeDelta.x
@@ -3472,11 +3484,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -168
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -3781,7 +3793,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.x
@@ -3789,7 +3801,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_SizeDelta.x
@@ -3829,11 +3841,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -27
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -4166,7 +4178,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.x
@@ -4174,7 +4186,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_SizeDelta.x
@@ -4218,11 +4230,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -764
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -5219,10 +5231,11 @@ MonoBehaviour:
   disabledButtonLabelColor: {r: 1, g: 1, b: 1, a: 1}
   disableConfirmButtonAfterClick: 1
   invokeParsedEventOnlyOnce: 1
-  requireQrReadyBeforePocketConfirmation: 1
-  hideQrLockButtonAfterPocketConfirmation: 1
+  requireQrReadyBeforePocketConfirmation: 0
+  hideQrLockButtonAfterPocketConfirmation: 0
   showBallEntryToggleAfterPocketConfirmation: 1
   forceHideBallEntryButtonsWhenSetupIsInvalid: 1
+  _isQrTemporarilyDisabled: 1
   OnEnvironmentParsed:
     m_PersistentCalls:
       m_Calls: []
@@ -5322,7 +5335,7 @@ MonoBehaviour:
   BallViewsParent: {fileID: 1481800618}
   EnableBallVisualization: 1
   RequireQrAlignmentBeforeBallVisualization: 0
-  DebugBypassQrAlignmentGate: 1
+  DebugBypassQrAlignmentGate: 0
   BallViewSurfaceLiftM: 0.002
   BallReuseMatchRadiusM: 1
   VerboseBallLogs: 1
@@ -5364,14 +5377,6 @@ MonoBehaviour:
   NearPocketSpecialColor: {r: 1, g: 0, b: 1, a: 1}
   BallDiameterM: 0.05715
   BallCircumferenceM: 0.1795
-  QR_CODE_MARKER_VALUES:
-  - ARPOOL_MARKER_01
-  - ARPOOL_MARKER_02
-  - ARPOOL_MARKER_03
-  - ARPOOL_MARKER_04
-  - ARPOOL_MARKER_05
-  - ARPOOL_MARKER_06
-  QR_MARKER_COUNT: 4
   QR_CODE_WHOLE_PAPER_SIZE_M: 0.16
   QR_USE_DIRECT_CENTER_SPAN_VALUES: 1
   QR_CORNER_CENTER_TOP_BOTTOM_M: 0.445
@@ -6345,7 +6350,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.x
@@ -6353,7 +6358,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_SizeDelta.x
@@ -6393,11 +6398,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -377.12067
       objectReference: {fileID: 0}
     - target: {fileID: 4654377391644919557, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -6426,6 +6431,10 @@ PrefabInstance:
     - target: {fileID: 7430465767842360550, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
       propertyPath: m_Name
       value: QrCodeScanStatusText
+      objectReference: {fileID: 0}
+    - target: {fileID: 7430465767842360550, guid: be57ddb1dd75ea542a1e242e9edcc06c, type: 3}
+      propertyPath: m_IsActive
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -6755,7 +6764,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMax.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.x
@@ -6763,7 +6772,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchorMin.y
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_SizeDelta.x
@@ -6807,11 +6816,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 0
+      value: 247.71
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: 0
+      value: -618
       objectReference: {fileID: 0}
     - target: {fileID: 5978655425657237307, guid: a65196b1101a5304cbdc6e60aa477203, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x

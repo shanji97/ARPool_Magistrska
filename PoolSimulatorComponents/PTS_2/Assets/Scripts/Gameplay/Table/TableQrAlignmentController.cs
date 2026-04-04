@@ -13,11 +13,23 @@ public class TableQrAlignmentController : MonoBehaviour
     private const string DefaultOptionalPayload05 = "ARPOOL_MARKER_05";
     private const string DefaultOptionalPayload06 = "ARPOOL_MARKER_06";
 
+    [Header("Solve Mode")]
+    public TableAlignmentMode AlignmentMode = TableAlignmentMode.AutoBestEffort;
+
+    [Tooltip("If true, 2 adjacent corner QR markers may solve the table when 4-corner and diagonal solves are unavailable.")]
+    public bool AllowAdjacentCornerFallback = true;
+
+    [Tooltip("If true, a single visible QR marker may seed an experimental solve using marker rotation.")]
+    public bool AllowSingleMarkerFallback = true;
+
+    [Tooltip("If true, manual pocket anchors may be used when QR solving is unavailable or disabled.")]
+    public bool AllowManualPocketAnchorsFallback = true;
+
     [Header("Dependencies")]
     public TableService TableServiceOverride;
 
     [Header("Workflow")]
-    public bool EnableQrTrackingWorkflow = true;
+    public bool EnableQrTrackingWorkflow = false;
 
     [Min(0.05f)]
     public float ScanIntervalSeconds = 0.25f;
@@ -681,55 +693,140 @@ public class TableQrAlignmentController : MonoBehaviour
             return false;
         }
 
-        if (!TryResolveCornerSetFromDetections(_lockedDetections, out ResolvedCornerSet corners))
+        if (!_tableService.ArePocketDiametersSet())
         {
-            Debug.LogWarning("[TableQrAlignmentController] Pocket initialization failed because the locked QR corner set could not be resolved.");
+            Debug.LogWarning(
+                "[TableQrAlignmentController] Pocket initialization failed because corner/side pocket diameters are not loaded from EnvironmentInfo.");
             return false;
         }
 
-        ValidateCornerMarkerDimensions(corners);
+        //float cornerOffsetM = _tableService.GetQrCornerToPocketCenterOffsetM();
+        //float sideOffsetM = _tableService.GetQrSideToPocketCenterOffsetM();
+        float cornerOffsetM = 0f;
+        float sideOffsetM = 0f;
 
-        float cornerOffsetM = GetConfiguredCornerMarkerToCornerPocketOffsetM();
-        float middleOffsetM = GetConfiguredMiddleMarkerToRailOffsetM();
+        bool has01 = _lockedDetections.ContainsKey(DefaultMandatoryPayload01);
+        bool has02 = _lockedDetections.ContainsKey(DefaultMandatoryPayload02);
+        bool has03 = _lockedDetections.ContainsKey(DefaultMandatoryPayload03);
+        bool has04 = _lockedDetections.ContainsKey(DefaultMandatoryPayload04);
 
-        Vector3 topLeftPocketSeed = corners.TopLeft - (corners.ShortAxisBottomToTop * cornerOffsetM);
-        Vector3 topRightPocketSeed = corners.TopRight - (corners.ShortAxisBottomToTop * cornerOffsetM);
-        Vector3 bottomLeftPocketSeed = corners.BottomLeft + (corners.ShortAxisBottomToTop * cornerOffsetM);
-        Vector3 bottomRightPocketSeed = corners.BottomRight + (corners.ShortAxisBottomToTop * cornerOffsetM);
+        bool hasAllFourLockedCorners = has01 && has02 && has03 && has04;
 
-        float leftLong = 0.5f * (
-            Vector3.Dot(topLeftPocketSeed - corners.Center, corners.LongAxisLeftToRight) +
-            Vector3.Dot(bottomLeftPocketSeed - corners.Center, corners.LongAxisLeftToRight));
+        bool solved = false;
+        string solveModeLabel = "none";
 
-        float rightLong = 0.5f * (
-            Vector3.Dot(topRightPocketSeed - corners.Center, corners.LongAxisLeftToRight) +
-            Vector3.Dot(bottomRightPocketSeed - corners.Center, corners.LongAxisLeftToRight));
+        Vector3 topLeft = default;
+        Vector3 topRight = default;
+        Vector3 bottomMiddle = default;
+        Vector3 topMiddle = default;
+        Vector3 bottomLeft = default;
+        Vector3 bottomRight = default;
 
-        List<float> topShortSamples = new()
+        if (AlignmentMode != TableAlignmentMode.ManualPocketAnchors &&
+            TryResolveCornerSetFromDetections(_lockedDetections, out ResolvedCornerSet corners))
         {
-            Vector3.Dot(topLeftPocketSeed - corners.Center, corners.ShortAxisBottomToTop),
-            Vector3.Dot(topRightPocketSeed - corners.Center, corners.ShortAxisBottomToTop)
-        };
+            ValidateCornerMarkerDimensions(corners);
 
-        List<float> bottomShortSamples = new()
+            if (hasAllFourLockedCorners &&
+                (AlignmentMode == TableAlignmentMode.AutoBestEffort ||
+                 AlignmentMode == TableAlignmentMode.QrFourCornersPreferred ||
+                 AlignmentMode == TableAlignmentMode.QrAdjacentAllowed ||
+                 AlignmentMode == TableAlignmentMode.QrSingleMarkerExperimental))
+            {
+                solved = TryBuildQrAveragedPocketSolve(
+                    corners,
+                    cornerOffsetM,
+                    sideOffsetM,
+                    out topLeft,
+                    out topRight,
+                    out bottomMiddle,
+                    out topMiddle,
+                    out bottomLeft,
+                    out bottomRight);
+
+                if (solved)
+                    solveModeLabel = "4-corner averaging";
+            }
+
+            if (!solved &&
+                (AlignmentMode == TableAlignmentMode.AutoBestEffort ||
+                 AlignmentMode == TableAlignmentMode.QrDiagonalOnly ||
+                 AlignmentMode == TableAlignmentMode.QrAdjacentAllowed ||
+                 AlignmentMode == TableAlignmentMode.QrSingleMarkerExperimental) &&
+                TryGetBestDiagonalPair(GetMandatoryNamedPoses(_lockedDetections), out _, out _))
+            {
+                solved = TryBuildQrDiagonalFallbackPocketSolve(
+                    corners,
+                    cornerOffsetM,
+                    sideOffsetM,
+                    out topLeft,
+                    out topRight,
+                    out bottomMiddle,
+                    out topMiddle,
+                    out bottomLeft,
+                    out bottomRight);
+
+                if (solved)
+                    solveModeLabel = "2-diagonal fallback";
+            }
+
+            if (!solved &&
+                AllowAdjacentCornerFallback &&
+                (AlignmentMode == TableAlignmentMode.AutoBestEffort ||
+                 AlignmentMode == TableAlignmentMode.QrAdjacentAllowed ||
+                 AlignmentMode == TableAlignmentMode.QrSingleMarkerExperimental))
+            {
+                solved = TryBuildQrAdjacentPairPocketSolve(
+                    cornerOffsetM,
+                    sideOffsetM,
+                    out topLeft,
+                    out topRight,
+                    out bottomMiddle,
+                    out topMiddle,
+                    out bottomLeft,
+                    out bottomRight);
+
+                if (solved)
+                    solveModeLabel = "2-adjacent fallback";
+            }
+
+            if (!solved &&
+                AllowSingleMarkerFallback &&
+                (AlignmentMode == TableAlignmentMode.AutoBestEffort ||
+                 AlignmentMode == TableAlignmentMode.QrSingleMarkerExperimental))
+            {
+                solved = TryBuildQrSingleMarkerPocketSolve(
+                    cornerOffsetM,
+                    sideOffsetM,
+                    out topLeft,
+                    out topRight,
+                    out bottomMiddle,
+                    out topMiddle,
+                    out bottomLeft,
+                    out bottomRight);
+
+                if (solved)
+                    solveModeLabel = "1-marker experimental fallback";
+            }
+        }
+
+        if (!solved && AllowManualPocketAnchorsFallback)
         {
-            Vector3.Dot(bottomLeftPocketSeed - corners.Center, corners.ShortAxisBottomToTop),
-            Vector3.Dot(bottomRightPocketSeed - corners.Center, corners.ShortAxisBottomToTop)
-        };
+            //if (!_tableService.HasAllPockets())
+            //    _tableService.SpawnManualPocketTemplateFromEnvironment();
 
-        if (UseMiddleQrMarkersWhenPresent && _tableService.QR_USE_MIDDLE_MARKERS_WHEN_PRESENT)
-            AddOptionalRailSamples(corners, middleOffsetM, topShortSamples, bottomShortSamples);
+            Debug.LogWarning(
+                "[TableQrAlignmentController] QR solve failed. Manual pocket template spawned. " +
+                "Adjust the pocket markers manually and then continue with normal reprojected Python snapshots.");
 
-        float topShort = Average(topShortSamples);
-        float bottomShort = Average(bottomShortSamples);
-        float centerLong = 0.5f * (leftLong + rightLong);
+            return _tableService.HasAllPockets();
+        }
 
-        Vector3 topLeft = corners.Center + (corners.LongAxisLeftToRight * leftLong) + (corners.ShortAxisBottomToTop * topShort);
-        Vector3 topRight = corners.Center + (corners.LongAxisLeftToRight * rightLong) + (corners.ShortAxisBottomToTop * topShort);
-        Vector3 bottomLeft = corners.Center + (corners.LongAxisLeftToRight * leftLong) + (corners.ShortAxisBottomToTop * bottomShort);
-        Vector3 bottomRight = corners.Center + (corners.LongAxisLeftToRight * rightLong) + (corners.ShortAxisBottomToTop * bottomShort);
-        Vector3 bottomMiddle = corners.Center + (corners.LongAxisLeftToRight * centerLong) + (corners.ShortAxisBottomToTop * bottomShort);
-        Vector3 topMiddle = corners.Center + (corners.LongAxisLeftToRight * centerLong) + (corners.ShortAxisBottomToTop * topShort);
+        if (!solved)
+        {
+            Debug.LogWarning("[TableQrAlignmentController] Pocket initialization failed because no QR/manual solve path succeeded.");
+            return false;
+        }
 
         (float x, float z)[] pocketXZ = new (float x, float z)[_tableService.MAX_POCKET_COUNT];
 
@@ -746,12 +843,335 @@ public class TableQrAlignmentController : MonoBehaviour
         if (VerboseQrLogs)
         {
             Debug.Log(
-                "[TableQrAlignmentController] Pocket positions initialized from locked QR markers. " +
-                $"leftLong={leftLong:F3}, rightLong={rightLong:F3}, topShort={topShort:F3}, bottomShort={bottomShort:F3}");
+                "[TableQrAlignmentController] Pocket positions initialized from locked inputs. " +
+                $"SolveMode={solveModeLabel}, " +
+                $"CornerOffset={cornerOffsetM:F3}m, SideOffset={sideOffsetM:F3}m.");
         }
 
         return _tableService.HasAllPockets();
     }
+
+    private bool TryBuildQrSingleMarkerPocketSolve(
+    float cornerOffsetM,
+    float sideOffsetM,
+    out Vector3 topLeft,
+    out Vector3 topRight,
+    out Vector3 bottomMiddle,
+    out Vector3 topMiddle,
+    out Vector3 bottomLeft,
+    out Vector3 bottomRight)
+    {
+        topLeft = default;
+        topRight = default;
+        bottomMiddle = default;
+        topMiddle = default;
+        bottomLeft = default;
+        bottomRight = default;
+
+        if (!TryResolveCornerSetFromSingleMarker(_lockedDetections, out ResolvedCornerSet corners))
+            return false;
+
+        float leftLong = Average(new List<float>
+    {
+        ProjectLong(corners.TopLeft, corners),
+        ProjectLong(corners.BottomLeft, corners)
+    });
+
+        float rightLong = Average(new List<float>
+    {
+        ProjectLong(corners.TopRight, corners),
+        ProjectLong(corners.BottomRight, corners)
+    });
+
+        float topShort = Average(new List<float>
+    {
+        ProjectShort(corners.TopLeft, corners),
+        ProjectShort(corners.TopRight, corners)
+    });
+
+        float bottomShort = Average(new List<float>
+    {
+        ProjectShort(corners.BottomLeft, corners),
+        ProjectShort(corners.BottomRight, corners)
+    });
+
+        float centerLong = 0.5f * (leftLong + rightLong);
+
+        topLeft = ComposeFromBasis(corners, leftLong, topShort - cornerOffsetM);
+        topRight = ComposeFromBasis(corners, rightLong, topShort - cornerOffsetM);
+        bottomLeft = ComposeFromBasis(corners, leftLong, bottomShort + cornerOffsetM);
+        bottomRight = ComposeFromBasis(corners, rightLong, bottomShort + cornerOffsetM);
+        topMiddle = ComposeFromBasis(corners, centerLong, topShort - sideOffsetM);
+        bottomMiddle = ComposeFromBasis(corners, centerLong, bottomShort + sideOffsetM);
+
+        return true;
+    }
+
+
+    private bool TryResolveCornerSetFromSingleMarker(
+    IReadOnlyDictionary<string, Pose> detections,
+    out ResolvedCornerSet corners)
+    {
+        corners = default;
+
+        KeyValuePair<string, Pose>? first = detections.FirstOrDefault(kvp => IsAllowedPayload(kvp.Key));
+        if (!first.HasValue || string.IsNullOrWhiteSpace(first.Value.Key))
+            return false;
+
+        string payload = first.Value.Key;
+        Pose pose = first.Value.Value;
+
+        float width = GetExpectedCornerCenterLeftRightM();
+        float height = GetExpectedCornerCenterTopBottomM();
+
+        Vector3 point = Flatten(pose.position);
+
+        Vector3 axisA = Flatten(pose.rotation * Vector3.right);
+        Vector3 axisB = Flatten(pose.rotation * Vector3.forward);
+
+        if (axisA.sqrMagnitude <= 0.000001f || axisB.sqrMagnitude <= 0.000001f)
+            return false;
+
+        axisA.Normalize();
+        axisB.Normalize();
+
+        Vector3 longAxis = Mathf.Abs(Vector3.Dot(axisA, Vector3.right)) >= Mathf.Abs(Vector3.Dot(axisB, Vector3.right))
+            ? axisA
+            : axisB;
+
+        Vector3 shortAxis = new(-longAxis.z, 0f, longAxis.x);
+
+        Vector2 local = GetMarkerLocalCoordinate(payload, width, height);
+        Vector3 center = point - (longAxis * local.x) - (shortAxis * local.y);
+
+        OrientAxes(ref longAxis, ref shortAxis, center);
+
+        corners = BuildResolvedCornerSet(center, longAxis.normalized, shortAxis.normalized, width, height);
+        return true;
+    }
+
+
+    private bool TryBuildQrAdjacentPairPocketSolve(
+    float cornerOffsetM,
+    float sideOffsetM,
+    out Vector3 topLeft,
+    out Vector3 topRight,
+    out Vector3 bottomMiddle,
+    out Vector3 topMiddle,
+    out Vector3 bottomLeft,
+    out Vector3 bottomRight)
+    {
+        topLeft = default;
+        topRight = default;
+        bottomMiddle = default;
+        topMiddle = default;
+        bottomLeft = default;
+        bottomRight = default;
+
+        if (!TryResolveCornerSetFromAdjacentPair(_lockedDetections, out ResolvedCornerSet corners))
+            return false;
+
+        float leftLong = Average(new List<float>
+    {
+        ProjectLong(corners.TopLeft, corners),
+        ProjectLong(corners.BottomLeft, corners)
+    });
+
+        float rightLong = Average(new List<float>
+    {
+        ProjectLong(corners.TopRight, corners),
+        ProjectLong(corners.BottomRight, corners)
+    });
+
+        float topShort = Average(new List<float>
+    {
+        ProjectShort(corners.TopLeft, corners),
+        ProjectShort(corners.TopRight, corners)
+    });
+
+        float bottomShort = Average(new List<float>
+    {
+        ProjectShort(corners.BottomLeft, corners),
+        ProjectShort(corners.BottomRight, corners)
+    });
+
+        float centerLong = 0.5f * (leftLong + rightLong);
+
+        float topCornerPocketShort = topShort - cornerOffsetM;
+        float bottomCornerPocketShort = bottomShort + cornerOffsetM;
+        float topMiddlePocketShort = topShort - sideOffsetM;
+        float bottomMiddlePocketShort = bottomShort + sideOffsetM;
+
+        topLeft = ComposeFromBasis(corners, leftLong, topCornerPocketShort);
+        topRight = ComposeFromBasis(corners, rightLong, topCornerPocketShort);
+        bottomLeft = ComposeFromBasis(corners, leftLong, bottomCornerPocketShort);
+        bottomRight = ComposeFromBasis(corners, rightLong, bottomCornerPocketShort);
+        topMiddle = ComposeFromBasis(corners, centerLong, topMiddlePocketShort);
+        bottomMiddle = ComposeFromBasis(corners, centerLong, bottomMiddlePocketShort);
+
+        return true;
+    }
+
+    private bool TryResolveCornerSetFromAdjacentPair(
+     IReadOnlyDictionary<string, Pose> detections,
+     out ResolvedCornerSet corners)
+    {
+        corners = default;
+
+        float width = GetExpectedCornerCenterLeftRightM();
+        float height = GetExpectedCornerCenterTopBottomM();
+
+        (string a, string b)[] adjacentPairs =
+        {
+        (DefaultMandatoryPayload01, DefaultMandatoryPayload02), // top
+        (DefaultMandatoryPayload03, DefaultMandatoryPayload04), // bottom
+        (DefaultMandatoryPayload01, DefaultMandatoryPayload03), // left
+        (DefaultMandatoryPayload02, DefaultMandatoryPayload04)  // right
+    };
+
+        for (int i = 0; i < adjacentPairs.Length; i++)
+        {
+            (string payloadA, string payloadB) = adjacentPairs[i];
+
+            if (!detections.TryGetValue(payloadA, out Pose poseA) ||
+                !detections.TryGetValue(payloadB, out Pose poseB))
+            {
+                continue;
+            }
+
+            Vector3 pointA = Flatten(poseA.position);
+            Vector3 pointB = Flatten(poseB.position);
+
+            Vector2 localA = GetMarkerLocalCoordinate(payloadA, width, height);
+            Vector2 localB = GetMarkerLocalCoordinate(payloadB, width, height);
+            Vector2 localDelta = localB - localA;
+
+            Vector3 observedDirection = Flatten(pointB - pointA);
+            if (observedDirection.sqrMagnitude <= 0.000001f)
+                continue;
+
+            observedDirection.Normalize();
+
+            Vector3 longAxis;
+            Vector3 shortAxis;
+
+            if (Mathf.Abs(localDelta.x) > Mathf.Abs(localDelta.y))
+            {
+                if (localDelta.x < 0f)
+                    observedDirection = -observedDirection;
+
+                longAxis = observedDirection;
+                shortAxis = new(-longAxis.z, 0f, longAxis.x);
+            }
+            else
+            {
+                if (localDelta.y < 0f)
+                    observedDirection = -observedDirection;
+
+                shortAxis = observedDirection;
+                longAxis = new(shortAxis.z, 0f, -shortAxis.x);
+            }
+
+            Vector3 centerFromA =
+                pointA
+                - (longAxis * localA.x)
+                - (shortAxis * localA.y);
+
+            Vector3 centerFromB =
+                pointB
+                - (longAxis * localB.x)
+                - (shortAxis * localB.y);
+
+            Vector3 center = 0.5f * (centerFromA + centerFromB);
+
+            OrientAxes(ref longAxis, ref shortAxis, center);
+
+            corners = BuildResolvedCornerSet(center, longAxis.normalized, shortAxis.normalized, width, height);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static Vector2 GetMarkerLocalCoordinate(string payload, float width, float height)
+    {
+        float halfWidth = width * 0.5f;
+        float halfHeight = height * 0.5f;
+
+        return payload switch
+        {
+            DefaultMandatoryPayload01 => new Vector2(-halfWidth, halfHeight),
+            DefaultMandatoryPayload02 => new Vector2(halfWidth, halfHeight),
+            DefaultMandatoryPayload03 => new Vector2(-halfWidth, -halfHeight),
+            DefaultMandatoryPayload04 => new Vector2(halfWidth, -halfHeight),
+            DefaultOptionalPayload05 => new Vector2(0f, halfHeight),
+            DefaultOptionalPayload06 => new Vector2(0f, -halfHeight),
+            _ => Vector2.zero
+        };
+    }
+
+    private bool TryBuildQrDiagonalFallbackPocketSolve(
+    ResolvedCornerSet corners,
+    float cornerOffsetM,
+    float sideOffsetM,
+    out Vector3 topLeft,
+    out Vector3 topRight,
+    out Vector3 bottomMiddle,
+    out Vector3 topMiddle,
+    out Vector3 bottomLeft,
+    out Vector3 bottomRight)
+    {
+        topLeft = default;
+        topRight = default;
+        bottomMiddle = default;
+        topMiddle = default;
+        bottomLeft = default;
+        bottomRight = default;
+
+        float leftLong = Average(new List<float>
+    {
+        ProjectLong(corners.TopLeft, corners),
+        ProjectLong(corners.BottomLeft, corners)
+    });
+
+        float rightLong = Average(new List<float>
+    {
+        ProjectLong(corners.TopRight, corners),
+        ProjectLong(corners.BottomRight, corners)
+    });
+
+        float topShort = Average(new List<float>
+    {
+        ProjectShort(corners.TopLeft, corners),
+        ProjectShort(corners.TopRight, corners)
+    });
+
+        float bottomShort = Average(new List<float>
+    {
+        ProjectShort(corners.BottomLeft, corners),
+        ProjectShort(corners.BottomRight, corners)
+    });
+
+        float centerLong = 0.5f * (leftLong + rightLong);
+
+        float topCornerPocketShort = topShort - cornerOffsetM;
+        float bottomCornerPocketShort = bottomShort + cornerOffsetM;
+
+        float topMiddlePocketShort = topShort - sideOffsetM;
+        float bottomMiddlePocketShort = bottomShort + sideOffsetM;
+
+        topLeft = ComposeFromBasis(corners, leftLong, topCornerPocketShort);
+        topRight = ComposeFromBasis(corners, rightLong, topCornerPocketShort);
+
+        bottomLeft = ComposeFromBasis(corners, leftLong, bottomCornerPocketShort);
+        bottomRight = ComposeFromBasis(corners, rightLong, bottomCornerPocketShort);
+
+        topMiddle = ComposeFromBasis(corners, centerLong, topMiddlePocketShort);
+        bottomMiddle = ComposeFromBasis(corners, centerLong, bottomMiddlePocketShort);
+
+        return true;
+    }
+
 
     private bool TryResolveCornerSetFromDetections(IReadOnlyDictionary<string, Pose> detections, out ResolvedCornerSet corners)
     {
@@ -761,6 +1181,173 @@ public class TableQrAlignmentController : MonoBehaviour
             return true;
 
         return TryResolveCornerSetFromPartialMandatoryDetections(mandatory, out corners);
+    }
+
+    private bool TryBuildQrAveragedPocketSolve(
+    ResolvedCornerSet corners,
+    float cornerOffsetM,
+    float sideOffsetM,
+    out Vector3 topLeft,
+    out Vector3 topRight,
+    out Vector3 bottomMiddle,
+    out Vector3 topMiddle,
+    out Vector3 bottomLeft,
+    out Vector3 bottomRight)
+    {
+        topLeft = default;
+        topRight = default;
+        bottomMiddle = default;
+        topMiddle = default;
+        bottomLeft = default;
+        bottomRight = default;
+
+        if (!TryGetLockedMandatoryPose(DefaultMandatoryPayload01, out Pose marker01) ||
+            !TryGetLockedMandatoryPose(DefaultMandatoryPayload02, out Pose marker02) ||
+            !TryGetLockedMandatoryPose(DefaultMandatoryPayload03, out Pose marker03) ||
+            !TryGetLockedMandatoryPose(DefaultMandatoryPayload04, out Pose marker04))
+        {
+            return false;
+        }
+
+        Vector3 qr01 = Flatten(marker01.position);
+        Vector3 qr02 = Flatten(marker02.position);
+        Vector3 qr03 = Flatten(marker03.position);
+        Vector3 qr04 = Flatten(marker04.position);
+
+        float leftLong = Average(new List<float>
+    {
+        ProjectLong(qr01, corners),
+        ProjectLong(qr03, corners)
+    });
+
+        float rightLong = Average(new List<float>
+    {
+        ProjectLong(qr02, corners),
+        ProjectLong(qr04, corners)
+    });
+
+        List<float> topShortSamples = new()
+    {
+        ProjectShort(qr01, corners),
+        ProjectShort(qr02, corners)
+    };
+
+        List<float> bottomShortSamples = new()
+    {
+        ProjectShort(qr03, corners),
+        ProjectShort(qr04, corners)
+    };
+
+        float topMiddleLong = 0.5f * (leftLong + rightLong);
+        float bottomMiddleLong = 0.5f * (leftLong + rightLong);
+
+        TryAddOptionalMiddleMarkerSamples(
+            corners,
+            ref topMiddleLong,
+            ref bottomMiddleLong,
+            topShortSamples,
+            bottomShortSamples);
+
+        float topQrShort = Average(topShortSamples);
+        float bottomQrShort = Average(bottomShortSamples);
+
+        float topPocketShort = topQrShort - cornerOffsetM;
+        float bottomPocketShort = bottomQrShort + cornerOffsetM;
+
+        float topMiddlePocketShort = topQrShort - sideOffsetM;
+        float bottomMiddlePocketShort = bottomQrShort + sideOffsetM;
+
+        topLeft = ComposeFromBasis(corners, leftLong, topPocketShort);
+        topRight = ComposeFromBasis(corners, rightLong, topPocketShort);
+
+        bottomLeft = ComposeFromBasis(corners, leftLong, bottomPocketShort);
+        bottomRight = ComposeFromBasis(corners, rightLong, bottomPocketShort);
+
+        topMiddle = ComposeFromBasis(corners, topMiddleLong, topMiddlePocketShort);
+        bottomMiddle = ComposeFromBasis(corners, bottomMiddleLong, bottomMiddlePocketShort);
+
+        return true;
+    }
+
+    private void TryAddOptionalMiddleMarkerSamples(
+        ResolvedCornerSet corners,
+        ref float topMiddleLong,
+        ref float bottomMiddleLong,
+        List<float> topShortSamples,
+        List<float> bottomShortSamples)
+    {
+        if (!UseMiddleQrMarkersWhenPresent || !_tableService.QR_USE_MIDDLE_MARKERS_WHEN_PRESENT)
+            return;
+
+        TryAddSingleOptionalMiddleMarkerSample(
+            optionalReferencePayload05,
+            corners,
+            ref topMiddleLong,
+            ref bottomMiddleLong,
+            topShortSamples,
+            bottomShortSamples);
+
+        TryAddSingleOptionalMiddleMarkerSample(
+            optionalReferencePayload06,
+            corners,
+            ref topMiddleLong,
+            ref bottomMiddleLong,
+            topShortSamples,
+            bottomShortSamples);
+    }
+
+    private void TryAddSingleOptionalMiddleMarkerSample(
+        string payload,
+        ResolvedCornerSet corners,
+        ref float topMiddleLong,
+        ref float bottomMiddleLong,
+        List<float> topShortSamples,
+        List<float> bottomShortSamples)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return;
+
+        if (!_lockedDetections.TryGetValue(payload, out Pose pose))
+            return;
+
+        Vector3 flat = Flatten(pose.position);
+        float longCoord = ProjectLong(flat, corners);
+        float shortCoord = ProjectShort(flat, corners);
+
+        if (shortCoord >= 0f)
+        {
+            topShortSamples.Add(shortCoord);
+            topMiddleLong = longCoord;
+        }
+        else
+        {
+            bottomShortSamples.Add(shortCoord);
+            bottomMiddleLong = longCoord;
+        }
+    }
+
+    private bool TryGetLockedMandatoryPose(string payload, out Pose pose)
+    {
+        pose = default;
+        return !string.IsNullOrWhiteSpace(payload) &&
+               _lockedDetections.TryGetValue(payload, out pose);
+    }
+
+    private static float ProjectLong(Vector3 world, ResolvedCornerSet corners) =>
+        Vector3.Dot(Flatten(world) - corners.Center, corners.LongAxisLeftToRight);
+
+    private static float ProjectShort(Vector3 world, ResolvedCornerSet corners) =>
+        Vector3.Dot(Flatten(world) - corners.Center, corners.ShortAxisBottomToTop);
+
+    private static Vector3 ComposeFromBasis(ResolvedCornerSet corners, float longCoord, float shortCoord)
+    {
+        Vector3 world =
+            corners.Center +
+            (corners.LongAxisLeftToRight * longCoord) +
+            (corners.ShortAxisBottomToTop * shortCoord);
+
+        world.y = corners.Center.y;
+        return world;
     }
 
     private static bool TryGetNamedPoseByPayload(List<NamedPose> mandatory, string payload, out NamedPose result)
@@ -961,44 +1548,6 @@ public class TableQrAlignmentController : MonoBehaviour
             Debug.LogWarning(
                 $"[TableQrAlignmentController] Locked QR spacing differs from the configured setup. " +
                 $"Width delta={widthDelta:F3}m, Height delta={heightDelta:F3}m.");
-        }
-    }
-
-    private void AddOptionalRailSamples(
-        ResolvedCornerSet corners,
-        float middleOffsetM,
-        List<float> topShortSamples,
-        List<float> bottomShortSamples)
-    {
-        TryAddSingleOptionalRailSample(optionalReferencePayload05, corners, middleOffsetM, topShortSamples, bottomShortSamples);
-        TryAddSingleOptionalRailSample(optionalReferencePayload06, corners, middleOffsetM, topShortSamples, bottomShortSamples);
-    }
-
-    private void TryAddSingleOptionalRailSample(
-        string payload,
-        ResolvedCornerSet corners,
-        float middleOffsetM,
-        List<float> topShortSamples,
-        List<float> bottomShortSamples)
-    {
-        if (string.IsNullOrWhiteSpace(payload))
-            return;
-
-        if (!_lockedDetections.TryGetValue(payload, out Pose pose))
-            return;
-
-        Vector3 flat = Flatten(pose.position);
-        float shortCoord = Vector3.Dot(flat - corners.Center, corners.ShortAxisBottomToTop);
-
-        if (shortCoord >= 0f)
-        {
-            Vector3 seeded = flat - (corners.ShortAxisBottomToTop * middleOffsetM);
-            topShortSamples.Add(Vector3.Dot(seeded - corners.Center, corners.ShortAxisBottomToTop));
-        }
-        else
-        {
-            Vector3 seeded = flat + (corners.ShortAxisBottomToTop * middleOffsetM);
-            bottomShortSamples.Add(Vector3.Dot(seeded - corners.Center, corners.ShortAxisBottomToTop));
         }
     }
 
@@ -1287,20 +1836,6 @@ public class TableQrAlignmentController : MonoBehaviour
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-    private int GetRequiredMandatoryMarkerCount() =>
-        Mathf.Clamp(MinimumRequiredMandatoryMarkers, 2, Mathf.Max(2, GetMandatoryPayloads().Length));
-
-    private string GetRequiredMarkerText(bool lowercaseFirst = false)
-    {
-        string text = GetRequiredMandatoryMarkerCount() == 2 && RequireDiagonalPairWhenUsingTwoMarkers
-            ? "2 diagonal mandatory QR code markers"
-            : $"{GetRequiredMandatoryMarkerCount()} mandatory QR code markers";
-
-        return lowercaseFirst && !string.IsNullOrEmpty(text)
-            ? char.ToLowerInvariant(text[0]) + text[1..]
-            : text;
-    }
-
     private float GetConfiguredQrPaperSizeM() =>
         _tableService != null && _tableService.QR_CODE_WHOLE_PAPER_SIZE_M > 0f
             ? _tableService.QR_CODE_WHOLE_PAPER_SIZE_M
@@ -1346,16 +1881,6 @@ public class TableQrAlignmentController : MonoBehaviour
 
     private float GetConfiguredDiagonalToleranceM() =>
         Mathf.Max(GetConfiguredCornerSpanToleranceM() * 1.5f, 0.12f);
-
-    private float GetConfiguredCornerMarkerToCornerPocketOffsetM() =>
-        _tableService != null
-            ? Mathf.Max(0f, _tableService.QR_CORNER_MARKER_TO_CORNER_POCKET_OFFSET_M)
-            : 0.14f;
-
-    private float GetConfiguredMiddleMarkerToRailOffsetM() =>
-        _tableService != null
-            ? Mathf.Max(0f, _tableService.QR_MIDDLE_MARKER_TO_RAIL_OFFSET_M)
-            : 0.14f;
 
     private static string BuildPayloadSummary(IEnumerable<string> payloads)
     {

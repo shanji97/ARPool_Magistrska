@@ -3,10 +3,7 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
-// Attach to: EnvironmentStatusMenu GameObject in PoolSetup scene
-// Branch: ISSUE-84
-// Issue: #84 global toggle for ball edit entry buttons
-public class EnvironmentStatusMenuController : MonoBehaviour
+public class EnviromentStatusMenuController : MonoBehaviour
 {
     [Header("UI References")]
     [SerializeField] private TextMeshProUGUI environmentParseStatusText;
@@ -65,8 +62,9 @@ public class EnvironmentStatusMenuController : MonoBehaviour
     [SerializeField] private bool invokeParsedEventOnlyOnce = true;
     [SerializeField] private bool requireQrReadyBeforePocketConfirmation = true;
     [SerializeField] private bool hideQrLockButtonAfterPocketConfirmation = true;
-    [SerializeField] private bool showBallEntryToggleAfterPocketConfirmation = true; // UPDATED
-    [SerializeField] private bool forceHideBallEntryButtonsWhenSetupIsInvalid = true; // UPDATED
+    [SerializeField] private bool showBallEntryToggleAfterPocketConfirmation = true;
+    [SerializeField] private bool forceHideBallEntryButtonsWhenSetupIsInvalid = true;
+    [SerializeField] private bool _isQrTemporarilyDisabled = true;
 
     [Header("Events")]
     public UnityEvent OnEnvironmentParsed;
@@ -189,7 +187,7 @@ public class EnvironmentStatusMenuController : MonoBehaviour
         bool staticMarkingsReady = markingsView != null && markingsView.TryGetCurrentTableReferenceGeometry(out _);
         bool staticMarkingsConfirmed = markingsView != null && markingsView.MarkingsFinalized;
 
-        bool qrWorkflowAvailable = qrController != null && qrController.EnableQrTrackingWorkflow;
+        bool qrWorkflowAvailable = _isQrTemporarilyDisabled && qrController != null && qrController.EnableQrTrackingWorkflow;
 
         if (!environmentParsed)
         {
@@ -346,6 +344,12 @@ public class EnvironmentStatusMenuController : MonoBehaviour
 
     private void HandleLockQrPositionClicked()
     {
+        if (_isQrTemporarilyDisabled)
+        {
+            Debug.Log("[EnvironmentStatusMenuController] QR workflow is temporarily disabled for this build.");
+            return;
+        }
+
         TableQrAlignmentController qrController = ResolveQrAlignmentController();
 
         if (qrController == null)
