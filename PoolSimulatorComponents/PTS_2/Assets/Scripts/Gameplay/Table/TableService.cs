@@ -1042,11 +1042,62 @@ public class TableService : MonoBehaviour
 
         if (pocketSpec.SidePocketDiameterMM > 0)
             SidePocketDiameterM = pocketSpec.SidePocketDiameterMM / 1000f;
+
+        RefreshPocketMarkerVisualScales();
     }
+
+    private static bool IsCornerPocketIndex(byte pocketIndex) => new byte[]
+    {
+        (byte) PocketIndex.TopLeft,
+        (byte) PocketIndex.TopRight,
+        (byte) PocketIndex.BottomLeft,
+        (byte) PocketIndex.BottomRight,
+
+    }.Contains(pocketIndex);
+
+    private float GetPocketMarkerVisualDiameter(byte pocketIndex)
+    {
+        float configuredDiameter = IsCornerPocketIndex(pocketIndex)
+            ? CornerPocketDiameterM
+            : SidePocketDiameterM;
+
+        if (configuredDiameter > 0f)
+            return configuredDiameter;
+
+        return DefaultSphereScale;
+    }
+
+    private void ApplyPocketMarkerVisualScale(byte pocketIndex)
+    {
+        if (_markers == null || pocketIndex >= _markers.Length)
+            return;
+
+        GameObject marker = _markers[pocketIndex];
+        if (marker == null)
+            return;
+
+        float diameterM = GetPocketMarkerVisualDiameter(pocketIndex);
+        marker.transform.localScale = Vector3.one * diameterM; // UPDATED: current pocket visuals are sphere-like markers, so diameter == uniform scale
+    }
+
+    private void RefreshPocketMarkerVisualScales()
+    {
+        if (_markers == null || _markers.Length != MAX_POCKET_COUNT)
+            return;
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+            ApplyPocketMarkerVisualScale(i);
+    }
+
 
     public void EnsureMarkers()
     {
-        if (_markers?.Length == MAX_POCKET_COUNT) return;
+        if (_markers?.Length == MAX_POCKET_COUNT)
+        {
+            RefreshPocketMarkerVisualScales();
+            return;
+        }
+
         _markers = new GameObject[MAX_POCKET_COUNT];
 
         for (byte i = 0; i < MAX_POCKET_COUNT; i++)
@@ -1060,19 +1111,22 @@ public class TableService : MonoBehaviour
             {
                 go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
                 go.transform.SetParent(MarkersParent, worldPositionStays: true);
-                if (go.TryGetComponent<Collider>(out var col)) Destroy(col);
+
+                if (go.TryGetComponent<Collider>(out var col))
+                    Destroy(col);
+
                 go.transform.localScale = Vector3.one * DefaultSphereScale;
             }
 
             if (!go.TryGetComponent<XZOnlyConstraint>(out var constraint))
                 constraint = go.AddComponent<XZOnlyConstraint>();
 
-            // MODIFIED: initialize from the current world pose, but this baseline
-            // will be refreshed again whenever TableService sets the real pocket pose.
             constraint.Initialize(go.transform.position, go.transform.rotation);
 
             go.name = $"PocketMarker_{i}";
             _markers[i] = go;
+
+            ApplyPocketMarkerVisualScale(i); // UPDATED: apply corner/side diameter as soon as the marker is instantiated
         }
 
         ApplyLockStateToMarkers();
@@ -1084,7 +1138,7 @@ public class TableService : MonoBehaviour
         {
             _lastMarkerPosition[i] = _markers[i] != null
                 ? _markers[i].transform.position
-              : Vector3.zero;
+                : Vector3.zero;
         }
     }
 
@@ -2735,5 +2789,87 @@ public class TableService : MonoBehaviour
         center.y = ballRestingY;
 
         return true;
+    }
+
+    public void SetQuestPocketWorldPositions(Vector3[] pocketWorldPositions) => PrivateSetQuestPocketWorldPositions(pocketWorldPositions);
+
+    private void PrivateSetQuestPocketWorldPositions(Vector3[] pocketWorldPositions)
+    {
+        if (IsLockedToJitter) return;
+        if (pocketWorldPositions?.Length != MAX_POCKET_COUNT) return;
+
+        float resolvedTableY = TableY;
+
+        if (resolvedTableY <= 0f)
+        {
+            float lowestY = float.MaxValue;
+
+            for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+            {
+                if (pocketWorldPositions[i].y < lowestY)
+                    lowestY = pocketWorldPositions[i].y;
+            }
+
+            if (lowestY < float.MaxValue)
+                resolvedTableY = lowestY;
+        }
+
+        if (resolvedTableY <= 0f)
+        {
+            Debug.LogWarning("[TableService] Quest pocket placement ignored because TableY is not valid yet.");
+            return;
+        }
+
+        TableY = resolvedTableY;
+
+        EnsureMarkers();
+
+        float markerY = GetPocketMarkerY(TableY);
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            Vector3 worldPocketPosition = new(
+                pocketWorldPositions[i].x,
+                markerY,
+                pocketWorldPositions[i].z
+            );
+
+            UpdatePocketPositionCache(i, worldPocketPosition);
+            SetMarkerWorldPose(i, worldPocketPosition);
+        }
+
+        PocketCount = MAX_POCKET_COUNT;
+
+        if (_lastMarkerPosition == null || _lastMarkerPosition.Length != MAX_POCKET_COUNT)
+            _lastMarkerPosition = new Vector3[MAX_POCKET_COUNT];
+
+        for (byte i = 0; i < MAX_POCKET_COUNT; i++)
+        {
+            _lastMarkerPosition[i] = _markers[i] != null
+                ? _markers[i].transform.position
+                : PocketPositions[i];
+        }
+
+        CaptureCurrentPocketEditingBasisFromCurrentPockets();
+
+        Debug.Log($"[TableService] Quest-side pockets placed at markerY={markerY:F4}, TableY={TableY:F4}, PocketCount={PocketCount}");
+    }
+
+    public bool ForceReprojectLatestPythonSnapshot()
+    {
+        if (_latestPythonRawSnapshot == null || !_latestPythonRawSnapshot.CanReproject())
+        {
+            Debug.LogWarning("[TableService] Cannot reproject because there is no valid raw Python snapshot.");
+            return false;
+        }
+
+        if (!TryBuildQuestTableFrame(out _))
+        {
+            Debug.LogWarning("[TableService] Cannot reproject because the Quest table frame is not ready yet.");
+            return false;
+        }
+
+        TryReprojectLatestPythonSnapshot();
+        return _latestProjectedSnapshot != null;
     }
 }

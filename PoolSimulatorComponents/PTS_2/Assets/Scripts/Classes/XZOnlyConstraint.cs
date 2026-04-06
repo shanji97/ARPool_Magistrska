@@ -60,15 +60,12 @@ public class XZOnlyConstraint : MonoBehaviour
             Vector3 pos = transform.position;
             pos.y = _lockedWorldY;
 
-            // Editable mode: only X/Z can change, Y and rotation stay fixed.
             transform.SetPositionAndRotation(pos, _lockedWorldRotation);
 
-            // UPDATED: keep tracking the most recent valid editable pose
             _lockedWorldPosition = pos;
         }
         else
         {
-            // Locked mode: freeze the entire world pose in place every frame.
             transform.SetPositionAndRotation(_lockedWorldPosition, _lockedWorldRotation);
         }
 

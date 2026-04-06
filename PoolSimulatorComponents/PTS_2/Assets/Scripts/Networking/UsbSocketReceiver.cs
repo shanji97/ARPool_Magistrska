@@ -83,9 +83,6 @@ public class UsbSocketReceiver : MonoBehaviour
             processedThisFrame++;
         }
 
-#if UNITY_EDITOR
-        HandleIssue84OverrideRegressionRepeat();
-#endif
     }
 
     public void StartServer()
@@ -494,7 +491,7 @@ public class UsbSocketReceiver : MonoBehaviour
             parsedBallSnapshot2D,
             hasParsedCueStickSnapshot,
             parsedCueStickSnapshot,
-            allowBootstrapQuestPocketsFromPython: true);
+            false);
     }
 
     private static bool TryParsePockets(ReadOnlySpan<char> body, out (float x, float z)[] parsedPockets)
@@ -977,7 +974,7 @@ public class UsbSocketReceiver : MonoBehaviour
     }
     private void SendLocalTcpPayload(string block)
     {
-        using TcpClient client = new TcpClient();
+        using TcpClient client = new();
         client.NoDelay = true;
         client.Connect(IPAddress.Loopback, Port);
 

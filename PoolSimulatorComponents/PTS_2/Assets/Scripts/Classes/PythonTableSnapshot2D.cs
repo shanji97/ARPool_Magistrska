@@ -1,5 +1,3 @@
-// Attach to: None. Runtime cache object used by UsbSocketReceiver and table reprojection services.
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
