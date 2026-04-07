@@ -18,6 +18,7 @@ EditorBuildSettings:
     path: Assets/_Recovery/0.unity
     guid: 304f8795593faed4ca2ef3080c3b4c49
   m_configObjects:
+    com.unity.xr.arfoundation.simulation_settings: {fileID: 11400000, guid: 1d94dece972df3d4092027091df37c72, type: 2}
     com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 0baa5b9917f5b4c45b25636657946f1c, type: 2}
     com.unity.xr.openxr.settings4: {fileID: 11400000, guid: 26eddeb923a2d8f4185dce6e5bc0e03a, type: 2}
   m_UseUCBPForAssetBundles: 0
