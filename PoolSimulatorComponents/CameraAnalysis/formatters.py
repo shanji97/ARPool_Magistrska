@@ -40,7 +40,6 @@ def line_configuration_name(configuration_name: str):
     return "E " + configuration_name
 
 def line_quest_peers(quest_entries: List[Dict[str, str]]) -> str:
-    # UPDATED: bootstrap payload for Quest-to-Quest session awareness.
     parts = [
         f"{str(entry.get('ip', '')).strip()},{str(entry.get('role', '')).strip()}"
         for entry in (quest_entries or [])

@@ -266,6 +266,7 @@ def open_stream(work_resolution:str = "1920x1080",
     resolution = work_resolution if performance_mode is False else perf_resoulution
         
     capture = cv2.VideoCapture(_controller.send_camera_command("get_stream_url", resolution))
+    _controller.apply_default_settings()
     
     if not capture.isOpened():
         print(f"Failed to open stream with {resolution} resolution, trying with {fallback_resoulution}...")
@@ -612,10 +613,18 @@ def main(
                 elapsed = time.time() - start_time
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
+                
+        if debug:
+            preview = frame.copy()            
+            cv2.putText( preview,f"frame={_frame_index} pockets_ready={_pockets_ready}",(20, 30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 0), 2)
+            cv2.imshow("debug-live", preview)
+            if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                break
 
         frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame
 
         table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
+        
         if table_bounding_box is None or corners is None:
             retry_count += 1
             _table_fail_streak += 1

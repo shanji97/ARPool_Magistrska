@@ -148,7 +148,7 @@ def generate_pdf():
 
     print("PDF generated:", OUTPUT_FILE)
     print("IMPORTANT: Print at 100% scale (disable 'Fit to page').")
-    print("The QR square must measure exactly 200 mm.")
+    print(f"The QR square must measure exactly {QR_SIZE_MM} mm.")
 
 
 if __name__ == "__main__":

@@ -58,7 +58,6 @@ class DroidCamController:
         self.manual_focus_value = 0.5 
         self.torch_state = False
         self._load_torch_state()
-        self.apply_default_settings()
         
     def get_stream_url(self, resolution: str):
         return f'{self.base_url}/video?{resolution}'   
