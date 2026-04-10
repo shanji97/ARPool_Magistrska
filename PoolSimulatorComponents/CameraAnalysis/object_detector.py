@@ -235,6 +235,49 @@ class ObjectDetector:
         is_stable = self._pocket_stable_frames >= int(required_stable_frames)
         return smoothed.copy(), is_stable, max_delta
 
+    @staticmethod
+    def merge_with_expected_pockets(detected_px, expected_px, max_offset_px=120.0, min_keep:int = 3):
+        """
+        Replace outlier pocket detections with geometry-projected defaults.
+
+        Args:
+            detected_px: list[tuple|None] pockets from vision, ordered [TL,TR,BM,TM,BL,BR]
+            expected_px: list[tuple|None] pockets projected from table geometry (same order)
+            max_offset_px: maximum allowed distance between detected and expected before fallback
+            min_keep: minimum number of inliers required to trust detections at all
+
+        Returns:
+            (merged_list, kept_count)
+        """
+        if expected_px is None:
+            return detected_px, 0
+        if detected_px is None:
+            return expected_px, 0
+
+        merged = []
+        kept = 0
+
+        for det, exp in zip(detected_px, expected_px):
+            if exp is None:
+                merged.append(det)
+                continue
+            if det is None:
+                merged.append(exp)
+                continue
+            dx = float(det[0]) - float(exp[0])
+            dy = float(det[1]) - float(exp[1])
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist > float(max_offset_px):
+                merged.append(exp)
+            else:
+                merged.append(det)
+                kept += 1
+
+        if kept < int(min_keep):
+            return expected_px, kept
+
+        return merged, kept
+
     # -----------------------------
     # Table detection (cloth mask)
     # -----------------------------

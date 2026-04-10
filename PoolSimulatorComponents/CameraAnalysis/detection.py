@@ -469,6 +469,8 @@ def main(
         
         if not _pockets_ready:
             if should_scan_this_frame:
+                expected_pockets_px = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+
                 # Detect pockets from image evidence in rectified plane
                 pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
                     frame_bgr=frame,
@@ -484,13 +486,29 @@ def main(
                     debug=debug_pocket_display
                 )
 
-                # Fallback: if any pockets are missing, fall back to projected pockets_mm for those
+                # Blend/validate with geometry projection to avoid misdetections when the camera is misaligned
+                max_offset_px = 120.0
+                if expected_pockets_px is not None:
+                    xs = [p[0] for p in expected_pockets_px if p is not None]
+                    ys = [p[1] for p in expected_pockets_px if p is not None]
+                    if xs and ys:
+                        diag = ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2) ** 0.5
+                        max_offset_px = max(28.0, 0.06 * diag)
+
+                pockets_px_raw, _ = _detector.merge_with_expected_pockets(
+                    pockets_px_raw,
+                    expected_pockets_px,
+                    max_offset_px=max_offset_px,
+                    min_keep=4
+                )
+
+                # Ensure no gaps remain
+                fallback_px = expected_pockets_px if expected_pockets_px is not None else [(None, None)] * 6
                 if pockets_px_raw is None:
-                    pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
+                    pockets_px_raw = fallback_px
                 else:
-                    fallback_px = _detector.warp_mm_points_to_px(H_new, pockets_mm)
                     pockets_px_raw = [
-                        p if (p is not None) else fallback_px[i]
+                        p if (p is not None) else (fallback_px[i] if i < len(fallback_px) else None)
                         for i, p in enumerate(pockets_px_raw)
                     ]
 
