@@ -14,14 +14,14 @@
     "notes": "User-defined",
     "cloth_profile": "Green cloth",
     "cloth_lower_hsv": [
-      35,
-      40,
-      40
+      72,
+      120,
+      80
     ],
     "cloth_upper_hsv": [
-      85,
+      90,
       255,
-      255
+      230
     ]
   },
   "pockets": {

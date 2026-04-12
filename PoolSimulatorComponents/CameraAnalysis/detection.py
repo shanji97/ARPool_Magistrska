@@ -950,26 +950,27 @@ if __name__ == "__main__":
     parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
     
-    parser.add_argument("--qr-enabled", action="store_true", help="Enables QR code reader mode.")
-    parser.add_argument("--qr-required-count", type=int, default=6, help="Number of QR codes used. Must be a symetric number not lower than 4.")
+    # parser.add_argument("--qr-enabled", action="store_true", help="Enables QR code reader mode.")
+    # parser.add_argument("--qr-required-count", type=int, default=6, help="Number of QR codes used. Must be a symetric number not lower than 4.")
     
     
     
     parser.add_argument("--paper-size-m", type=float, default=0.16, help="Size of the square paper with the QR code on it.")
     
     
-    parser.add_argument("--qr-scan-interval-frames", type=int, default=3, help="Scan QR code every N frames.")
-    parser.add_argument("--qr-stable-frames-required", type=int, default=3, help="Scan QR code every N frames.")
-    parser.add_argument("--qr-resend-interval", type=int, default=3, help="Resend the QR code every N frames.")
+    # parser.add_argument("--qr-scan-interval-frames", type=int, default=3, help="Scan QR code every N frames.")
+    # parser.add_argument("--qr-scan-interval-frames", type=int, default=3, help="Scan QR code every N frames.")
+    # parser.add_argument("--qr-stable-frames-required", type=int, default=3, help="Scan QR code every N frames.")
+    # parser.add_argument("--qr-resend-interval", type=int, default=3, help="Resend the QR code every N frames.")
         
     args = parser.parse_args()
     
        
-    count = args.qr_required_count
-    if args.qr_enabled:
-        if count is None or count < 4 or count > 12 or count % 2 != 0:
-            print("The required number of QR code is between 4 and 12 and must be an even number.") 
-            exit()
+    # count = args.qr_required_count
+    # if args.qr_enabled:
+    #     if count is None or count < 4 or count > 12 or count % 2 != 0:
+    #         print("The required number of QR code is between 4 and 12 and must be an even number.") 
+    #         exit()
     
     if args.debug_static and args.debug_phone:
         print("Static image analysis and live capture cannot run at the same time.")
