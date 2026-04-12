@@ -2,7 +2,7 @@
 Generate large QR markers for computer vision calibration.
 
 Each page contains ONE QR code:
-QR size = EXACTLY 200 mm × 200 mm
+QR size = EXACTLY the specified QR_SIZE_MM (height) * QR_SIZE_MM (width) dimensions
 
 Edges are marked with a cut outline and crop marks.
 

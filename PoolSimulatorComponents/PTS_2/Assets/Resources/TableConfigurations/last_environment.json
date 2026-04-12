@@ -1,40 +1,40 @@
 {
   "_schema_version": 2,
   "table": {
-    "name": "Test environment",
+    "name": "Custom",
     "playfield_mm": [
-      1170,
-      600,
-      730
+      2445,
+      1225,
+      810.0
     ],
     "overall_mm": [
-      1500,
-      600
+      2730,
+      1510
     ],
     "notes": "User-defined",
-    "cloth_profile": "Custom",
+    "cloth_profile": "Green cloth",
     "cloth_lower_hsv": [
-      88,
       35,
-      35
+      40,
+      40
     ],
     "cloth_upper_hsv": [
-      122,
+      85,
       255,
-      225
+      255
     ]
   },
   "pockets": {
-    "corner_pocket_diameter_mm": 114,
-    "side_pocket_diameter_mm": 127,
-    "corner_jaw_diameter_mm": 35,
-    "side_jaw_diameters_mm": 38
+    "corner_pocket_diameter_mm": 125,
+    "side_pocket_diameter_mm": 105,
+    "corner_jaw_diameter_mm": 114,
+    "side_jaw_diameters_mm": 100
   },
   "ball_spec": {
     "diameter_m": 0.05715,
     "ball_circumference_m": 0.1795
   },
   "camera": {
-    "height_from_floor_m": 2.35
+    "height_from_floor_m": 2.735
   }
 }

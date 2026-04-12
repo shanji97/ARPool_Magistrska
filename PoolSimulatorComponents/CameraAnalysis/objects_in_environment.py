@@ -287,6 +287,111 @@ class EnvironmentConfig:
                 pass
             print("Invalid value.")
 
+    def _is_environment_payload(self, data: dict) -> bool:
+        if not isinstance(data, dict):
+            return False
+
+        required_root_keys = {"table", "pockets", "ball_spec", "camera"}
+        if not required_root_keys.issubset(data.keys()):
+            return False
+
+        table = data.get("table")
+        pockets = data.get("pockets")
+        ball_spec = data.get("ball_spec")
+        camera = data.get("camera")
+
+        if not all(isinstance(item, dict) for item in [table, pockets, ball_spec, camera]):
+            return False
+
+        return (
+            "playfield_mm" in table
+            and "diameter_m" in ball_spec
+            and "height_from_floor_m" in camera
+        )
+    
+    def list_environment_configs(self, directory: Optional[str] = None) -> List[dict]:
+        target_directory = directory or self.ENVIRONMENT_JSON_PATH
+
+        if not os.path.isdir(target_directory):
+            return []
+
+        environments = []
+
+        for file_name in sorted(os.listdir(target_directory)):
+            full_path = os.path.join(target_directory, file_name)
+
+            if not os.path.isfile(full_path) or not file_name.lower().endswith(".json"):
+                continue
+
+            try:
+                with open(full_path, "r", encoding="utf-8") as file:
+                    data = json.load(file)
+
+                if not self._is_environment_payload(data):
+                    continue
+
+                table = data.get("table", {})
+                playfield_mm = table.get("playfield_mm") or []
+
+                environments.append({
+                    "file_name": file_name,
+                    "table_name": table.get("name", "Unknown"),
+                    "playfield_mm": tuple(playfield_mm) if isinstance(playfield_mm, (list, tuple)) else (),
+                    "cloth_profile": table.get("cloth_profile", ""),
+                })
+            except Exception:
+                continue
+
+        return environments
+
+    def choose_environment_config_interactive(self, default_config_name: Optional[str] = None) -> Optional[str]:
+        environments = self.list_environment_configs()
+
+        if not environments:
+            print("\nNo valid environment configuration files were found. Falling back to interactive setup.")
+            return None
+
+        print("\nSelect ENVIRONMENT configuration to load:")
+
+        for index, environment in enumerate(environments, start=1):
+            playfield_mm = environment["playfield_mm"]
+            playfield_text = (
+                f"{int(playfield_mm[0])}x{int(playfield_mm[1])}x{int(playfield_mm[2])} mm"
+                if len(playfield_mm) == 3 else
+                "unknown playfield"
+            )
+            cloth_text = f" | cloth {environment['cloth_profile']}" if environment["cloth_profile"] else ""
+            default_text = " [default]" if environment["file_name"] == default_config_name else ""
+
+            print(
+                f"  {index}. {environment['file_name']} | "
+                f"{environment['table_name']} | "
+                f"{playfield_text}{cloth_text}{default_text}"
+            )
+
+        print("  n. Create or overwrite the current config interactively")
+        if default_config_name:
+            print("  Enter. Load default")
+
+        valid_indices = [str(i) for i in range(1, len(environments) + 1)]
+
+        while True:
+            choice = input("> ").strip().lower()
+
+            if choice == "" and default_config_name and any(
+                environment["file_name"] == default_config_name for environment in environments
+            ):
+                return default_config_name
+
+            if choice == "n":
+                return None
+
+            if choice in valid_indices:
+                return environments[int(choice) - 1]["file_name"]
+
+            print("Invalid choice.")
+    
+
     def set_up_table(
         self,
         preset_index: int | None = None,
@@ -359,8 +464,8 @@ class EnvironmentConfig:
         if choice == "c":
             corner = self._read_int("Corner pocket mouth (mm)", 95, 160, 120)
             side   = self._read_int("Side pocket mouth (mm)",   105, 180, 135)
-            corner_jaw = self._read_optional_int(corner_jaw_text, 10, 80, 36)
-            side_jaw   = self._read_optional_int(side_jaw_text,   10, 80, 40)
+            corner_jaw = self._read_optional_int(corner_jaw_text, 10, 200, 70)
+            side_jaw   = self._read_optional_int(side_jaw_text,   10, 200, 70)
             return PocketSpec(
                 corner_pocket_diameter_mm=corner,
                 side_pocket_diameter_mm=side,
@@ -390,8 +495,10 @@ class EnvironmentConfig:
         
         return preset
     
+    
+    
     def set_up_camera_height_mm(self):
-        print("\nEnter camera height from FLOOR (m), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
+        print("\nEnter camera height from FLOOR (mm), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
         return self._read_float("Camera height (mm)", 1000, 4000, 2500)
 
     def get_debug_env_config(self, config_name: str) -> EnvironmentConfig:
@@ -403,23 +510,44 @@ class EnvironmentConfig:
         return self.__loaded_json_configuration_name
 
     def get_environment_config(
-                            self,
-                            interactive: bool = True,
-                            use_last_known: bool = True,
-                            config_name: str = "last_environment.json",
-                            debug: bool = False) -> EnvironmentConfig:
-        
-        if  (config_name is None or len(config_name) == 0 ) and debug:
-            print('No debug config specified. Using last known enviroment.')
-            return self.get_environment_config()
-        
-        cache_path = f"{self.ENVIRONMENT_JSON_PATH}{config_name}"
+        self,
+        interactive: bool = True,
+        use_last_known: bool = True,
+        config_name: str = "last_environment.json",
+        debug: bool = False
+    ) -> EnvironmentConfig:
+
+        env = None
+
+        if (config_name is None or len(config_name) == 0) and debug:
+            print("No debug config specified. Using last known environment.")
+            return self.get_environment_config(
+                interactive=interactive,
+                use_last_known=use_last_known,
+                config_name="last_environment.json",
+                debug=False
+            )
+
+        if interactive:
+            chosen_config_name = self.choose_environment_config_interactive(
+                default_config_name=config_name if use_last_known else None
+            )
+            if chosen_config_name is not None:
+                config_name = chosen_config_name
+                use_last_known = True
+
+        cache_path = os.path.join(self.ENVIRONMENT_JSON_PATH, config_name)
         self.__loaded_json_configuration_name = config_name
-        
+
         if use_last_known:
             env = self.load_last_environment(cache_path)
+
+            if env is not None:
+                env._EnvironmentConfig__loaded_json_configuration_name = config_name
+
             if debug:
                 return env
+
             if env is not None:
                 needs_cloth = (
                     env.table.cloth_profile in (None, "") or
@@ -428,31 +556,39 @@ class EnvironmentConfig:
                 )
                 if interactive and needs_cloth:
                     env.table = self.set_up_hsv(env.table)
-                    return self.save_environment(env, cache_path)
+                    self.save_environment(env, cache_path)
+                    env._EnvironmentConfig__loaded_json_configuration_name = config_name
+                    return env
+
         if env is not None:
             return env
-        table = None
-        pockets = None
-        camera_height_mm = None
-        
+
         if interactive:
             table = self.set_up_table()
             table = self.set_up_hsv(table)
             pockets = self.set_up_pockets()
             camera_height_mm = self.set_up_camera_height_mm()
         else:
-            # non-interactive sane defaults (COPY preset, don't mutate global list)
             from dataclasses import replace
-            base = replace(self.PRESET_TABLES[3])  # 9ft tournament as default size copy
-            low, up = self.PRESET_CLOTHS["Grey cloth"]  # explicit profile by name
-            base.cloth_profile, base.cloth_lower_hsv, base.cloth_upper_hsv = "Grey cloth", low, up
-            table = base
+
+            table = replace(self.PRESET_TABLES[3])
+            low, up = self.PRESET_CLOTHS["Grey cloth"]
+            table.cloth_profile = "Grey cloth"
+            table.cloth_lower_hsv = low
+            table.cloth_upper_hsv = up
+
             pockets = self.PRESET_POCKETS[0][1]
             camera_height_mm = 2500
-            
+
         camera_height_m = camera_height_mm / 1000
-        env = EnvironmentConfig(table,
-                                pockets,
-                                self.DEFAULT_BALLS,
-                                CameraSpec(camera_height_m))
-        return self.save_environment(env, cache_path)
+
+        env = EnvironmentConfig(
+            table,
+            pockets,
+            self.DEFAULT_BALLS,
+            CameraSpec(camera_height_m)
+        )
+
+        self.save_environment(env, cache_path)
+        env._EnvironmentConfig__loaded_json_configuration_name = config_name
+        return env

@@ -541,7 +541,7 @@ def main(
     pockets_xy_m = None
 
     global _pockets_xy_m_adjusted_cached
-    global _pockets_px_before_adjust_cache
+    global _pockets_px_before_adjust_cached
     _pockets_px_before_adjust_cached = None
 
     stable = False
@@ -614,12 +614,13 @@ def main(
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
                 
-        if debug:
-            preview = frame.copy()            
-            cv2.putText( preview,f"frame={_frame_index} pockets_ready={_pockets_ready}",(20, 30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 0), 2)
-            cv2.imshow("debug-live", preview)
-            if (cv2.waitKey(1) & 0xFF) == ord("q"):
-                break
+        # We don't need this bottle neck to run every frame
+        # if debug:
+        #     preview = frame.copy()            
+        #     cv2.putText( preview,f"frame={_frame_index} pockets_ready={_pockets_ready}",(20, 30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 0), 2)
+        #     cv2.imshow("debug-live", preview)
+        #     if (cv2.waitKey(1) & 0xFF) == ord("q"):
+        #         break
 
         frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame
 

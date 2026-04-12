@@ -12,8 +12,8 @@
   "pockets": {
     "corner_pocket_diameter_mm": 76,
     "side_pocket_diameter_mm": 86,
-    "corner_jaw_diameter_mm": 36,
-    "side_jaw_diameters_mm": 40
+    "corner_jaw_diameter_mm": 72,
+    "side_jaw_diameters_mm": 160
   },
   "ball_spec": {
     "ball_circumference_m":0.1795,
