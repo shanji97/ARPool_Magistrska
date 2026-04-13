@@ -1,9 +1,18 @@
+// Attach to: BallView_new root prefab in the Unity project.
+// Visual child: must contain MeshFilter, MeshRenderer, and MeshCollider.
+
 using UnityEngine;
 
 public class BallVisualView : MonoBehaviour
 {
     [Header("Renderer")]
     [SerializeField] private Renderer targetRenderer;
+    [SerializeField] private MeshFilter targetMeshFilter;
+    [SerializeField] private MeshCollider targetMeshCollider;
+
+    [Header("Shared Meshes")]
+    [SerializeField] private Mesh _cueMesh;
+    [SerializeField] private Mesh _numberedMesh;
 
     [Header("Shared Materials")]
     [SerializeField] private Material _cueMaterial;
@@ -14,9 +23,19 @@ public class BallVisualView : MonoBehaviour
 
     private Ball _runtimeBall;
 
-    private void Awake() => AutoResolveReferences();
+    private void Awake()
+    {
+        AutoResolveReferences();
+        RefreshVisualState();
+    }
 
-    private void OnValidate() => AutoResolveReferences();
+    private void OnValidate()
+    {
+        AutoResolveReferences();
+
+        if (!Application.isPlaying)
+            RefreshVisualState();
+    }
 
     public void Bind(Ball runtimeBall)
     {
@@ -26,40 +45,70 @@ public class BallVisualView : MonoBehaviour
 
     public void RefreshVisualState()
     {
-        if (_runtimeBall == null || targetRenderer == null)
+        if (targetRenderer == null || targetMeshFilter == null)
             return;
 
-        Material targetMaterial = ResolveMaterial(_runtimeBall); // UPDATED: resolve by full runtime state, not only BallType
+        Mesh targetMesh = ResolveMesh(_runtimeBall);
+        Material targetMaterial = ResolveMaterial(_runtimeBall);
+
+        if (targetMesh != null && targetMeshFilter.sharedMesh != targetMesh)
+            targetMeshFilter.sharedMesh = targetMesh;
+
+        if (targetMeshCollider != null && targetMesh != null && targetMeshCollider.sharedMesh != targetMesh)
+            targetMeshCollider.sharedMesh = targetMesh;
 
         if (targetMaterial != null && targetRenderer.sharedMaterial != targetMaterial)
             targetRenderer.sharedMaterial = targetMaterial;
     }
 
-    private Material ResolveMaterial(Ball runtimeBall) => // UPDATED: ignored state now has its own material
-        runtimeBall == null
-            ? _solidMaterial
-            : runtimeBall.IsIgnoredByUser() && _ignoredMaterial != null
-                ? _ignoredMaterial
-                : runtimeBall.BallType switch
-                {
-                    BallType.Cue => _cueMaterial,
-                    BallType.Eight => _eightballMaterial,
-                    BallType.Solid => _solidMaterial,
-                    BallType.Stripe => _stripedMaterial,
-                    _ => _solidMaterial
-                };
+    private Mesh ResolveMesh(Ball runtimeBall) =>
+        runtimeBall?.BallType switch
+        {
+            BallType.Cue => _cueMesh != null ? _cueMesh : _numberedMesh,
+            BallType.Eight => _numberedMesh != null ? _numberedMesh : _cueMesh,
+            BallType.Solid => _numberedMesh != null ? _numberedMesh : _cueMesh,
+            BallType.Stripe => _numberedMesh != null ? _numberedMesh : _cueMesh,
+            _ => _cueMesh != null ? _cueMesh : _numberedMesh
+        };
+
+    private Material ResolveMaterial(Ball runtimeBall)
+    {
+        if (runtimeBall == null)
+            return _cueMaterial != null ? _cueMaterial : _solidMaterial;
+
+        if (runtimeBall.IsIgnoredByUser() && _ignoredMaterial != null)
+            return _ignoredMaterial;
+
+        return runtimeBall.BallType switch
+        {
+            BallType.Cue => _cueMaterial,
+            BallType.Eight => _eightballMaterial,
+            BallType.Solid => _solidMaterial,
+            BallType.Stripe => _stripedMaterial,
+            _ => _solidMaterial
+        };
+    }
 
     private void AutoResolveReferences()
     {
-        if (targetRenderer != null)
-            return;
-
         Transform visualChild = transform.Find("Visual");
 
-        if (visualChild != null)
+        if (targetRenderer == null && visualChild != null)
             targetRenderer = visualChild.GetComponentInChildren<Renderer>(includeInactive: true);
 
         if (targetRenderer == null)
             targetRenderer = GetComponentInChildren<Renderer>(includeInactive: true);
+
+        if (targetMeshFilter == null && visualChild != null)
+            targetMeshFilter = visualChild.GetComponentInChildren<MeshFilter>(includeInactive: true);
+
+        if (targetMeshFilter == null)
+            targetMeshFilter = GetComponentInChildren<MeshFilter>(includeInactive: true);
+
+        if (targetMeshCollider == null && visualChild != null)
+            targetMeshCollider = visualChild.GetComponentInChildren<MeshCollider>(includeInactive: true);
+
+        if (targetMeshCollider == null)
+            targetMeshCollider = GetComponentInChildren<MeshCollider>(includeInactive: true);
     }
 }
