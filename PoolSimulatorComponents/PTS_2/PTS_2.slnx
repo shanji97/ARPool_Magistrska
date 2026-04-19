@@ -1,5 +1,6 @@
 ﻿<Solution>
   <Project Path="Enums.csproj" />
+  <Project Path="Oculus.Interaction.Editor.csproj" />
   <Project Path="Assembly-CSharp-Editor.csproj" />
   <Project Path="Table.csproj" />
   <Project Path="Classes.csproj" />
