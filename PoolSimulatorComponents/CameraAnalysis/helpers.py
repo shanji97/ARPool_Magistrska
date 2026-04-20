@@ -1,6 +1,17 @@
 import json
 from pathlib import Path
 import time
+from typing import Optional
+
+SUPPORTED_DEBUG_IMAGE_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
 
 from connection import UsbTcpSender
 from formatters import(
@@ -124,3 +135,69 @@ def open_ports(usb_quest_port: int = 5005, is_editor_build: bool = False):
         time.sleep(2)
         return False
     return True
+
+def _is_supported_debug_image(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in SUPPORTED_DEBUG_IMAGE_SUFFIXES
+
+
+def _list_supported_debug_images(directory: Path) -> list[Path]:
+    return sorted(
+        [path for path in directory.iterdir() if _is_supported_debug_image(path)],
+        key=lambda path: path.name.lower()
+    )
+
+def resolve_debug_image_path(path_or_directory: str | Path | None) -> Optional[str]:
+    if path_or_directory is None:
+        print("[debug-image] No debug image path was provided.")
+        return None
+
+    target = Path(path_or_directory).expanduser()
+
+    if not target.exists():
+        print(f"[debug-image] Path does not exist: {target}")
+        return None
+
+    if _is_supported_debug_image(target):
+        print(f"[debug-image] Using image: {target}")
+        return str(target)
+
+    if target.is_file():
+        print(f"[debug-image] Unsupported image file type: {target.suffix}")
+        print(f"[debug-image] Supported types: {', '.join(sorted(SUPPORTED_DEBUG_IMAGE_SUFFIXES))}")
+        return None
+
+    if not target.is_dir():
+        print(f"[debug-image] Path is neither a valid file nor a directory: {target}")
+        return None
+
+    images = _list_supported_debug_images(target)
+
+    if not images:
+        print(f"[debug-image] No supported images were found in folder: {target}")
+        print(f"[debug-image] Supported types: {', '.join(sorted(SUPPORTED_DEBUG_IMAGE_SUFFIXES))}")
+        return None
+
+    if len(images) == 1:
+        print(f"[debug-image] Only one image found. Using: {images[0]}")
+        return str(images[0])
+
+    print("\nSelect DEBUG IMAGE to load:")
+    for index, image in enumerate(images, start=1):
+        print(f"  {index}. {image.name}")
+    print("  q. Quit")
+
+    valid_choices = {str(index): image for index, image in enumerate(images, start=1)}
+
+    while True:
+        choice = input("> ").strip().lower()
+
+        if choice == "q":
+            print("[debug-image] No image selected. Exiting.")
+            return None
+
+        if choice in valid_choices:
+            selected = valid_choices[choice]
+            print(f"[debug-image] Using image: {selected}")
+            return str(selected)
+
+        print("Invalid choice.")

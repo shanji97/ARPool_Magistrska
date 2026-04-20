@@ -13,16 +13,8 @@
     ],
     "notes": "User-defined",
     "cloth_profile": "Green cloth",
-    "cloth_lower_hsv": [
-      72,
-      120,
-      80
-    ],
-    "cloth_upper_hsv": [
-      90,
-      255,
-      230
-    ]
+    "cloth_lower_hsv": [65, 125, 100],
+    "cloth_upper_hsv": [72, 165, 170]
   },
   "pockets": {
     "corner_pocket_diameter_mm": 125,
