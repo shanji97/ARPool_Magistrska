@@ -94,6 +94,7 @@ public class DropdownSettings : MonoBehaviour, ISettingsBindable, ISettingsReact
             nameof(settings.ApiMode) => settings.ApiMode.ToString(),
             nameof(settings.ScanControl) => settings.ScanControl.ToString(),
             nameof(settings.DeviceInformation) => settings.DeviceInformation.ToString(),
+            nameof(settings.DominantHand) => settings.DominantHand.ToString(),
             nameof(GameplayControlSettings.XAxisCorrectionStepMM) => GameplayControlSettings.ToDisplayValue(settings.GameplayControlSettings.XAxisCorrectionStepMM),
             nameof(GameplayControlSettings.ZAxisCorrectionStepMM) => GameplayControlSettings.ToDisplayValue(settings.GameplayControlSettings.ZAxisCorrectionStepMM),
             _ => defaultValue
@@ -125,6 +126,11 @@ public class DropdownSettings : MonoBehaviour, ISettingsBindable, ISettingsReact
                     settings.DeviceInformation = deviceInformation;
                 break;
 
+            case nameof(settings.DominantHand):
+                if (Enum.TryParse(value, out DominantHand dominantHand))
+                    settings.DominantHand = dominantHand;
+                break;
+
             case nameof(GameplayControlSettings.XAxisCorrectionStepMM):
                 if (GameplayControlSettings.TryParseDisplayValue(value, out byte xStep))
                     settings.GameplayControlSettings.SetXAxisCorrectionStep(xStep);
@@ -149,6 +155,7 @@ public class DropdownSettings : MonoBehaviour, ISettingsBindable, ISettingsReact
             nameof(settings.ApiMode) => Enum.GetNames(typeof(ApiMode)).ToList(),
             nameof(settings.ScanControl) => Enum.GetNames(typeof(ScanControl)).ToList(),
             nameof(settings.DeviceInformation) => Enum.GetNames(typeof(DeviceInformation)).ToList(),
+            nameof(settings.DominantHand) => Enum.GetNames(typeof(DominantHand)).ToList(),
             nameof(GameplayControlSettings.XAxisCorrectionStepMM) => GameplayControlSettings.GetDisplayOptions(),
             nameof(GameplayControlSettings.ZAxisCorrectionStepMM) => GameplayControlSettings.GetDisplayOptions(),
             _ => new List<string>()

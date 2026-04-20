@@ -12,6 +12,8 @@ public class UserSettings
 
     public DeviceInformation DeviceInformation { get; set; } = DeviceInformation.PrimaryQuest;
 
+    public DominantHand DominantHand { get; set; } = DominantHand.Right;
+
     public GameplayControlSettings GameplayControlSettings { get; set; } = new();
 
     public void EnsureDefaults()
