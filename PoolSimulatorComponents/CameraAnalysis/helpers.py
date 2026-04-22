@@ -13,6 +13,16 @@ SUPPORTED_DEBUG_IMAGE_SUFFIXES = {
     ".webp",
 }
 
+SUPPORTED_DEBUG_VIDEO_SUFFIXES = {
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".m4v",
+    ".webm",
+}
+
+
 from connection import UsbTcpSender
 from formatters import(
     line_configuration_name
@@ -200,6 +210,74 @@ def resolve_debug_image_path(path_or_directory: str | Path | None) -> Optional[s
         if choice in valid_choices:
             selected = valid_choices[choice]
             print(f"[debug-image] Using image: {selected}")
+            return str(selected)
+
+        print("Invalid choice.")
+        
+        
+def _is_supported_debug_video(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in SUPPORTED_DEBUG_VIDEO_SUFFIXES
+
+
+def _list_supported_debug_videos(directory: Path) -> list[Path]:
+    return sorted(
+        [path for path in directory.iterdir() if _is_supported_debug_video(path)],
+        key=lambda path: path.name.lower()
+    )
+
+
+def resolve_debug_video_path(path_or_directory: str | Path | None) -> Optional[str]:
+    if path_or_directory is None:
+        print("[debug-video] No debug video path was provided.")
+        return None
+
+    target = Path(path_or_directory).expanduser()
+
+    if not target.exists():
+        print(f"[debug-video] Path does not exist: {target}")
+        return None
+
+    if _is_supported_debug_video(target):
+        print(f"[debug-video] Using video: {target}")
+        return str(target)
+
+    if target.is_file():
+        print(f"[debug-video] Unsupported video file type: {target.suffix}")
+        print(f"[debug-video] Supported types: {', '.join(sorted(SUPPORTED_DEBUG_VIDEO_SUFFIXES))}")
+        return None
+
+    if not target.is_dir():
+        print(f"[debug-video] Path is neither a valid file nor a directory: {target}")
+        return None
+
+    videos = _list_supported_debug_videos(target)
+
+    if not videos:
+        print(f"[debug-video] No supported videos were found in folder: {target}")
+        print(f"[debug-video] Supported types: {', '.join(sorted(SUPPORTED_DEBUG_VIDEO_SUFFIXES))}")
+        return None
+
+    if len(videos) == 1:
+        print(f"[debug-video] Only one video found. Using: {videos[0]}")
+        return str(videos[0])
+
+    print("\nSelect DEBUG VIDEO to load:")
+    for index, video in enumerate(videos, start=1):
+        print(f"  {index}. {video.name}")
+    print("  q. Quit")
+
+    valid_choices = {str(index): video for index, video in enumerate(videos, start=1)}
+
+    while True:
+        choice = input("> ").strip().lower()
+
+        if choice == "q":
+            print("[debug-video] No video selected. Exiting.")
+            return None
+
+        if choice in valid_choices:
+            selected = valid_choices[choice]
+            print(f"[debug-video] Using video: {selected}")
             return str(selected)
 
         print("Invalid choice.")

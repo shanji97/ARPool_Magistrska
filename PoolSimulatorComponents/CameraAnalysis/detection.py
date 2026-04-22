@@ -17,6 +17,7 @@ from helpers import (
     install_dependecies_for_other_projects,
     open_ports,
     resolve_debug_image_path,
+    resolve_debug_video_path
 )
 from connection import UsbTcpSender
 from formatters import (
@@ -246,14 +247,14 @@ def open_stream(work_resolution:str = "1920x1080",
          fallback_resoulution: str ="1280x720",
          debug: bool = False,
          debug_static_image_present: bool = False,
-         debug_offline: bool = True):
+         debug_offline: bool = False):
      
     if debug and debug_static_image_present:
         return (None, None)
     
     global _controller
     if _controller is None:
-        ip, port = setup_connection(False, False, debug_offline  )
+        ip, port = setup_connection(False, False, debug_offline)
         _controller = DroidCamController(ip, port)
         if _controller is None:
             print("Controller is not initialized; cannot open stream.")
@@ -284,12 +285,12 @@ def open_stream(work_resolution:str = "1920x1080",
     
     return (capture, resolution)
 
-def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
+def _load_intrinsics_for_camera(dimensions: str, debug: bool = False, debug_offline:bool = False):
     
     global _Km, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
     
     if _controller is None:
-        ip, port = setup_connection()
+        ip, port = setup_connection(False, False, debug_offline)
         _controller = DroidCamController(ip, port)
         if _controller is None:
             print("Controller is not initialized, so no intrinsics can be loaded. Aborting...")
@@ -367,7 +368,7 @@ def reset_globals():
 def check_keys(dimensions: str = "1920x1080"):
     global _controller, _is_changing_camera
     if _controller is None:
-        ip, port = setup_connection()
+        ip, port = setup_connection(False, False, False)
         _controller = DroidCamController(ip, port)
     
     camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
@@ -409,20 +410,22 @@ def check_keys(dimensions: str = "1920x1080"):
 def main(
          debug_config_name: Optional[str],
          debug_image_path: Optional[str],
+         debug_video_path: Optional[str],
+         debug_recorded: bool = False,
          debug_pocket_display: bool = False,
          debug_offline: bool = False,
          debug_static: bool = False,
          debug: bool = False,
          work_resolution: str = "1920x1080",
          performance_mode: bool = False,
-         perf_resoulution: str ="1280x720",
-         fallback_resoulution: str ="1280x720",
+         perf_resoulution: str = "1280x720",
+         fallback_resoulution: str = "1280x720",
          is_editor_build: bool = False,
          debug_cue_stick: bool = False,
          debug_detection: bool = False,
          process_unknowns: Optional[bool] = False
          ):
-
+    
     usb_sender = None
 
     # Compute environment and static things, such as pockets.
@@ -486,22 +489,48 @@ def main(
     capture = None
 
     # Set up connection and open stream
-    if debug_static and debug_image_path:
-        debug_frame = cv2.imread(debug_image_path, cv2.IMREAD_COLOR) if debug_image_path else None
+    if debug_static:
+        resolved_debug_image_path = resolve_debug_image_path(debug_image_path)
+        if not resolved_debug_image_path:
+            print("[debug-image] Exiting because no valid debug image was selected.")
+            return
+
+        debug_frame = cv2.imread(resolved_debug_image_path, cv2.IMREAD_COLOR)
         if debug_frame is None:
-            raise FileNotFoundError(f"[debug] Could not read debug image: {debug_image_path}")
+            raise FileNotFoundError(f"[debug] Could not read debug image: {resolved_debug_image_path}")
+
         work_w, work_h = map(int, work_resolution.split("x"))
         debug_frame = cv2.resize(debug_frame, (work_w, work_h), interpolation=cv2.INTER_AREA)
         dimensions = work_resolution
-        print(f"[debug] Using static image as fake feed: {debug_image_path}.")
+        print(f"[debug] Using static image as fake feed: {resolved_debug_image_path}.")
         print(f"[debug] Resized debug image to work-res: {dimensions}")
         del work_w
         del work_h
+        
+    elif debug_recorded:
+        resolved_debug_video_path = resolve_debug_video_path(debug_video_path)
+        if not resolved_debug_video_path:
+            print("[debug-recorded] Exiting because no valid recorded video was selected.")
+            return
+
+        capture = cv2.VideoCapture(resolved_debug_video_path)
+        if capture is None or not capture.isOpened():
+            raise RuntimeError(f"[debug-recorded] Could not open recorded video: {resolved_debug_video_path}")
+
+        dimensions = work_resolution
+        source_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        source_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+        print(f"[debug-recorded] Using recorded video feed: {resolved_debug_video_path}.")
+        if source_w > 0 and source_h > 0:
+            print(f"[debug-recorded] Source resolution: {source_w}x{source_h} -> work-res: {dimensions}")
+        else:
+            print(f"[debug-recorded] Using work-res: {dimensions}")
     else:
         ip, port = setup_connection(False, False, debug_offline)
         global _controller
         _controller = DroidCamController(ip, port)
-        capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution, debug_offline)
+        capture, dimensions = open_stream(            work_resolution,            performance_mode,            perf_resoulution,            fallback_resoulution,            debug,            debug_static,            debug_offline        )
 
         if capture is None:
             print("Could not open stream.")
@@ -510,7 +539,7 @@ def main(
     if (dimensions is not None) and (not debug):
         try:
             pre = _calib.precompute_all(dimensions, force=False)
-            _load_intrinsics_for_camera(dimensions)
+            _load_intrinsics_for_camera(dimensions, debug, debug_offline)
             if debug:
                 print_precompute_results(pre)
         except Exception as e:
@@ -583,24 +612,34 @@ def main(
             retry_count = 0
             continue
 
-        if not debug_static:
+        if debug_static and debug_frame is not None:
+         ret, frame = True, debug_frame.copy()
+        elif debug_recorded:
             ret, frame = capture.read()
-        elif debug_static and debug_image_path:
-            ret, frame = True, debug_frame.copy()
+            if ret and frame is not None:
+                work_w, work_h = map(int, work_resolution.split("x"))
+                if frame.shape[1] != work_w or frame.shape[0] != work_h:
+                    frame = cv2.resize(frame, (work_w, work_h), interpolation=cv2.INTER_AREA)
+        else:
+            ret, frame = capture.read()
 
         # Frame error lock
         if not ret or frame is None:
-            if debug:
+            if debug_static:
                 print("[debug] Static debug frame invalid. Exiting loop.")
                 break
 
+            if debug_recorded:
+                print("[debug-recorded] End of file reached. Exiting loop.")
+                break
+            
             retry_count += 1
             if retry_count >= MAX_RETRY_COUNT_FRAMES:
                 print(f"Frame capture failed too many times ({MAX_RETRY_COUNT_FRAMES} frames), exiting.")
                 break
 
             capture.release()
-            capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
+            capture, dimensions = capture, dimensions = open_stream(    work_resolution,    performance_mode,    perf_resoulution,    fallback_resoulution,    debug,    debug_static,    debug_offline)
 
             ret, frame = capture.read()
             if not ret or frame is None:
@@ -927,14 +966,25 @@ if __name__ == "__main__":
     
     # Debug switches
     parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
-    # parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
     parser.add_argument("--debug-conf", type=str, default=None, help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
     parser.add_argument("--debug-cue",action="store_true", help="If set to true, a cue stick debug overlay is displayed.")
     parser.add_argument("--debug-use-config",action="store_true", help="If set to true, a Predator 9ft virtual debug table is used for testing otherwise we load in the last_environment.json.")
     
     parser.add_argument("--debug-detection", action="store_true", help="If true, the script assumes you are displaying detections results on a 2D static image.")
     parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
-    parser.add_argument("--debug-image", type=str, default="../../../candidate_testing_images/test.jpg", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
+    
+    parser.add_argument("--debug-image", 
+                        type=str, 
+                        default="../../../candidate_testing_images", 
+                        help="Path (relative or absolute) to a debug image or to a folder containing debug images. If a folder is provided, the script lists supported images and lets you choose one.")
+    
+    parser.add_argument("--debug-video", 
+                        type=str, 
+                        default="../../../video_test", 
+                        help="Path (relative or absolute) to a debug video or to a folder containing debug videos.")
+    
+    parser.add_argument("--debug-recorded", action="store_true", help="Use a recorded debug video as the input source.")
+    
     parser.add_argument("--debug-offline", action="store_true", help="If this flag is set to true, there is no need to connect to the debug editor or the application. Works with static images and feed from phone.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
@@ -956,7 +1006,7 @@ if __name__ == "__main__":
     # parser.add_argument("--qr-enabled", action="store_true", help="Enables QR code reader mode.")
     # parser.add_argument("--qr-required-count", type=int, default=6, help="Number of QR codes used. Must be a symetric number not lower than 4.")
     
-    
+   
     
     parser.add_argument("--paper-size-m", type=float, default=0.16, help="Size of the square paper with the QR code on it.")
     
@@ -969,19 +1019,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
        
-    # count = args.qr_required_count
-    # if args.qr_enabled:
-    #     if count is None or count < 4 or count > 12 or count % 2 != 0:
-    #         print("The required number of QR code is between 4 and 12 and must be an even number.") 
-    #         exit()
+    debug_source_count = sum([
+    1 if args.debug_static else 0,
+    1 if args.debug_recorded else 0,
+    1 if args.debug_phone else 0,
+    ])
     
-    if args.debug_static and args.debug_phone:
-        print("Static image analysis and live capture cannot run at the same time.")
+    if debug_source_count > 0 and not args.debug:
+        print("Debug source flags require --debug.")
         exit()
-    if (not args.debug_static and not args.debug_phone) and args.debug:
-        print("Either static image analysis or live capture must be enabled while running in debug mode.")
+
+    if debug_source_count > 1:
+        print("Static image analysis, recorded video playback, and live phone capture cannot run at the same time.")
         exit()
-        
+
+    if args.debug and debug_source_count == 0:
+        print("Either static image analysis, recorded video playback, or live capture must be enabled while running in debug mode.")
+        exit()
+
     if args.debug_use_config:
         args.debug_conf = "../Configuration/predator_9ft_virtual_debug.json"
         
@@ -989,16 +1044,9 @@ if __name__ == "__main__":
         print("You need to run this in general debug mode.")
         exit()
         
-    if args.debug_offline and not args.debug_static:
-        print("Offline mode means, you need to provide static images to your feed.")
-        exit()
-        
-    # work-res and performance  cannot be set together choose one.
-    
     if args.work_res is not None and args.performance:
         print("Performance is set to true, so working resolution is going to be overriden to 720p.")
         args.work_res = "1280x720"
-    
     
     if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
@@ -1021,6 +1069,8 @@ if __name__ == "__main__":
             main(
                 args.debug_conf,
                 args.debug_image,
+                args.debug_video,
+                args.debug_recorded,
                 args.debug_pocket_display,
                 args.debug_offline,
                 args.debug_static,
