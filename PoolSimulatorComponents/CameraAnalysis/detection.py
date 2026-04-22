@@ -30,7 +30,6 @@ from formatters import (
     p2p_classification_to_balltype
 )
 
-
 def _estimate_ball_layout_delta_m(previous_entries, current_entries):
     if previous_entries is None or current_entries is None:
         return float("inf")
@@ -152,7 +151,7 @@ def _show_cue_debug_windows(frame_bgr, cue_info, stable_ball_frames, layout_delt
 
     if cue_info is not None and cue_info.get("debug_mask") is not None:
         cv2.imshow("debug-cue-mask", cue_info["debug_mask"])
-
+    
 
 # from testing import synth_test
 
@@ -165,7 +164,7 @@ BALL_BATCH_SIZE_FRAMES = 3
 BALL_RESET_MAX_POSITION_DELTA_M = 0.08
 BALL_FORCE_SEND_INTERVAL_SEC = 0.25
 
-MAX_RETRY_COUNT_FRAMES = 300  # 300 frames worth of hickups consecutively means there is a problem.
+MAX_RETRY_COUNT_FRAMES = 300 # 300 frames worth of hickups consecutively means there is a problem.
 TABLE_FAILS_BEFORE_RESCAN_FRAMES = 120
 SEND_EVERY_N_FRAMES = 1
 POCKET_STABLE_MAX_DELTA_PX = 1.5
@@ -188,7 +187,6 @@ QUEST_RETRY_INITIAL_DELAY_SEC = 0.25       # UPDATED: kept small because detecti
 QUEST_RETRY_MAX_DELAY_SEC = 1.0            # UPDATED: bounded retry window for Quest reconnects.
 QUEST_BOOTSTRAP_RESEND_INTERVAL_SEC = 2.0  # UPDATED: periodic resend so Quest app restarts recover automatically.
 
-
 def _build_bootstrap_payloads(primary_ip: Optional[str], configuration_name: Optional[str]):
     payloads = []
 
@@ -202,7 +200,6 @@ def _build_bootstrap_payloads(primary_ip: Optional[str], configuration_name: Opt
         ]))
 
     return payloads
-
 
 def _send_bootstrap_payloads(usb_sender: UsbTcpSender, payloads, debug: bool = False):
     if usb_sender is None or not payloads:
@@ -242,21 +239,21 @@ _pockets_px_before_adjust_cached = None
 _table_fail_streak = 0
 _H_cached = None
 
-
 # Camera and stream
-def open_stream(work_resolution: str = "1920x1080",
-                performance_mode: bool = False,
-                perf_resoulution: str = "1280x720",
-                fallback_resoulution: str = "1280x720",
-                debug: bool = False,
-                debug_static_image_present: bool = False):
-
+def open_stream(work_resolution:str = "1920x1080",
+         performance_mode: bool = False,
+         perf_resoulution: str ="1280x720",
+         fallback_resoulution: str ="1280x720",
+         debug: bool = False,
+         debug_static_image_present: bool = False,
+         debug_offline: bool = True):
+     
     if debug and debug_static_image_present:
         return (None, None)
-
+    
     global _controller
     if _controller is None:
-        ip, port = setup_connection()
+        ip, port = setup_connection(False, False, debug_offline  )
         _controller = DroidCamController(ip, port)
         if _controller is None:
             print("Controller is not initialized; cannot open stream.")
@@ -267,52 +264,50 @@ def open_stream(work_resolution: str = "1920x1080",
         except Exception:
             print("Device not reachable. Check network settings. Exiting.")
         return (None, None)
-
+    
     resolution = work_resolution if performance_mode is False else perf_resoulution
-
+        
     capture = cv2.VideoCapture(_controller.send_camera_command("get_stream_url", resolution))
     _controller.apply_default_settings()
-
+    
     if not capture.isOpened():
         print(f"Failed to open stream with {resolution} resolution, trying with {fallback_resoulution}...")
         capture = cv2.VideoCapture(_controller.send_camera_command("get_stream_url", fallback_resoulution))
         if not capture.isOpened():
             print(f"Failed to open stream with {fallback_resoulution} resolution.")
             return (None, None)
-
     ret, _ = capture.read()
     if not ret:
         print(f"Could not connect to DroidCam server. Check IP {_controller.ip} and PORT {_controller.port}.")
         capture.release()
         return (None, None)
-
+    
     return (capture, resolution)
 
-
 def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
-
+    
     global _Km, _Knew, _dist, _map1, _map2, _controller, _use_undistorted_view
-
+    
     if _controller is None:
         ip, port = setup_connection()
         _controller = DroidCamController(ip, port)
         if _controller is None:
             print("Controller is not initialized, so no intrinsics can be loaded. Aborting...")
             return
-
+    
     meta = _controller.CAMERA_MAP[_controller.current_camera]
-    _use_undistorted_view = (meta or {}).get("lens_correction_on", False)  # If lens correction on device is off (lens_correction_on is True in the JSON), then correct it (for UW and front camera).
+    _use_undistorted_view = (meta or {}).get("lens_correction_on", False) # If lens correction on device is off (lens_correction_on is True in the JSON), then correct it (for UW and front camera).
     cam_folder_alias = (meta or {}).get("folder_alias", "main")
-
+    
     if not cam_folder_alias:
         _Km = _Knew = _dist = _map1 = _map2 = None
         return
-
+        
     intr = _calib.get_intrinsics_auto(cam_folder_alias, dimensions, candidates=CALIBRATION_PATTERNS)
-    _Km = intr.K()
+    _Km = intr.K(); 
     _dist = np.array(intr.dist, np.float64)
     w, h = map(int, dimensions.split('x'))
-
+    
     if _use_undistorted_view:
         if _Knew is None or _map1 is None or _map2 is None:
             print(f"[calib] Building undistortion maps for {cam_folder_alias} at {dimensions}")
@@ -327,56 +322,54 @@ def _load_intrinsics_for_camera(dimensions: str, debug: bool = False):
             print("[K (distorted)]\n", _Km)
             print("[dist] ", _dist.ravel())
 
-
 def reset_globals():
     global _is_changing_camera
-
+    
     global _H_cached
     _H_cached = None
-
+    
     global _pockets_px_cached
     _pockets_px_cached = None
-
+    
     global _pockets_ready
     _pockets_ready = False
-
+    
     global _force_rescan
     global _detector
     if _detector is not None:
         _detector.reset_pocket_tracking()
-
+    
     global _pockets_have_been_sent
     _pockets_have_been_sent = False
-
+    
     global _last_pocket_send_time
     _last_pocket_send_time = 0.0
 
     global _pockets_px_before_adjust_cached
     _pockets_px_before_adjust_cached = None
-
+    
     global _table_fail_streak
     _table_fail_streak = 0
-
+    
     global _force_rescan
     _force_rescan = False
-
+    
     global _pockets_adjusted
     _pockets_adjusted = False
-
+    
     global _pockets_px_adjusted_cached
     _pockets_px_adjusted_cached = None
-
+    
     global _pockets_xy_m_adjusted_cached
     _pockets_xy_m_adjusted_cached = None
-
-
+    
 # Camera control part
 def check_keys(dimensions: str = "1920x1080"):
     global _controller, _is_changing_camera
     if _controller is None:
         ip, port = setup_connection()
         _controller = DroidCamController(ip, port)
-
+    
     camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
     key = cv2.waitKey(1)
     if key == ord('q'):
@@ -400,32 +393,30 @@ def check_keys(dimensions: str = "1920x1080"):
         _controller.send_camera_command("select_camera", camera_number, dimensions)
         camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
     elif key == ord('i'):
-        camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")  # Camera info.
+       camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")  # Camera info.
     elif key == ord('r'):
         global _force_rescan, _last_rescan_request_time
         now = time.time()
-        if (now - _last_rescan_request_time) >= RESCAN_DEBOUNCE_TIME:
+        if(now - _last_rescan_request_time) >= RESCAN_DEBOUNCE_TIME:
             _force_rescan = True
             _last_rescan_request_time = now
         print("[pockets] Re-scan requested (r)")
-
+        
     if reset_pocket_globals:
         reset_pocket_globals()
     return (True, camera_info)
 
-
 def main(
          debug_config_name: Optional[str],
          debug_image_path: Optional[str],
-         debug_video_path: Optional[str] = None,
          debug_pocket_display: bool = False,
          debug_offline: bool = False,
          debug_static: bool = False,
          debug: bool = False,
          work_resolution: str = "1920x1080",
          performance_mode: bool = False,
-         perf_resoulution: str = "1280x720",
-         fallback_resoulution: str = "1280x720",
+         perf_resoulution: str ="1280x720",
+         fallback_resoulution: str ="1280x720",
          is_editor_build: bool = False,
          debug_cue_stick: bool = False,
          debug_detection: bool = False,
@@ -442,14 +433,14 @@ def main(
     if debug and debug_config_name:
         config = env.get_debug_env_config(debug_config_name)
     else:
-        config = env.get_environment_config(interactive=True, use_last_known=True)
+        config = env.get_environment_config(interactive = True, use_last_known= True)
 
     if config is None:
         return
 
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
-    (Lhsv, Uhsv) = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
+    (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
     Lmm, Wmm, Hmm = config.table.playfield_mm
     ball_diameter_m = config.ball_spec.diameter_m
     expected_aspect_ratio = Lmm / Wmm
@@ -464,16 +455,16 @@ def main(
 
     q_ip, q_port = setup_connection(True, is_editor_build, debug_offline)
     usb_sender = UsbTcpSender(
-        host=q_ip,
-        port=q_port,
+        host=q_ip,                                           
+        port=q_port,                                         
         auto_reconnect=True,
-        connect_timeout_s=QUEST_CONNECT_TIMEOUT_SEC,
-        send_timeout_s=QUEST_SEND_TIMEOUT_SEC,
+        connect_timeout_s=QUEST_CONNECT_TIMEOUT_SEC,         
+        send_timeout_s=QUEST_SEND_TIMEOUT_SEC,               
         retry_initial_delay_s=QUEST_RETRY_INITIAL_DELAY_SEC,
         retry_max_delay_s=QUEST_RETRY_MAX_DELAY_SEC,
-        is_offline_run=debug_offline
+        is_offline_run=debug_offline                        
     )
-    bootstrap_payloads = _build_bootstrap_payloads(q_ip, configuration_name_for_unity)
+    bootstrap_payloads = _build_bootstrap_payloads(q_ip, configuration_name_for_unity) 
     last_bootstrap_attempt_time = 0.0
 
     if not debug_offline:
@@ -493,45 +484,24 @@ def main(
     debug_frame = None
     dimensions = None
     capture = None
-    debug_video_active = bool(debug_video_path)
 
     # Set up connection and open stream
-    if debug_static:
-        resolved_debug_image_path = resolve_debug_image_path(debug_image_path)
-        if not resolved_debug_image_path:
-            print("[debug-image] Exiting because no valid debug image was selected.")
-            return
-
-        debug_frame = cv2.imread(resolved_debug_image_path, cv2.IMREAD_COLOR)
+    if debug_static and debug_image_path:
+        debug_frame = cv2.imread(debug_image_path, cv2.IMREAD_COLOR) if debug_image_path else None
         if debug_frame is None:
-            raise FileNotFoundError(f"[debug] Could not read debug image: {resolved_debug_image_path}")
-
+            raise FileNotFoundError(f"[debug] Could not read debug image: {debug_image_path}")
         work_w, work_h = map(int, work_resolution.split("x"))
         debug_frame = cv2.resize(debug_frame, (work_w, work_h), interpolation=cv2.INTER_AREA)
         dimensions = work_resolution
-        print(f"[debug] Using static image as fake feed: {resolved_debug_image_path}.")
+        print(f"[debug] Using static image as fake feed: {debug_image_path}.")
         print(f"[debug] Resized debug image to work-res: {dimensions}")
         del work_w
         del work_h
-    elif debug_video_active:
-        capture = cv2.VideoCapture(debug_video_path)
-        if capture is None or not capture.isOpened():
-            raise RuntimeError(f"[debug-video] Could not open debug video: {debug_video_path}")
-
-        dimensions = work_resolution
-        source_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-        source_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        print(f"[debug-video] Using local debug video feed: {debug_video_path}.")
-        if source_w > 0 and source_h > 0:
-            print(f"[debug-video] Source resolution: {source_w}x{source_h} -> work-res: {dimensions}")
-        else:
-            print(f"[debug-video] Using work-res: {dimensions}")
     else:
         ip, port = setup_connection(False, False, debug_offline)
         global _controller
         _controller = DroidCamController(ip, port)
-        capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution)
+        capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution, debug_offline)
 
         if capture is None:
             print("Could not open stream.")
@@ -544,7 +514,7 @@ def main(
             if debug:
                 print_precompute_results(pre)
         except Exception as e:
-            print("Precompute failed:", e)
+                print("Precompute failed:", e)
 
     global _detector
     _detector = ObjectDetector(LABEL_MAP)
@@ -613,25 +583,15 @@ def main(
             retry_count = 0
             continue
 
-        if debug_static and debug_frame is not None:
+        if not debug_static:
+            ret, frame = capture.read()
+        elif debug_static and debug_image_path:
             ret, frame = True, debug_frame.copy()
-        elif debug_video_active:
-            ret, frame = capture.read()
-            if ret and frame is not None:
-                work_w, work_h = map(int, work_resolution.split("x"))
-                if frame.shape[1] != work_w or frame.shape[0] != work_h:
-                    frame = cv2.resize(frame, (work_w, work_h), interpolation=cv2.INTER_AREA)
-        else:
-            ret, frame = capture.read()
 
         # Frame error lock
         if not ret or frame is None:
-            if debug_static:
+            if debug:
                 print("[debug] Static debug frame invalid. Exiting loop.")
-                break
-
-            if debug_video_active:
-                print("[debug-video] End of file reached. Exiting loop.")
                 break
 
             retry_count += 1
@@ -655,11 +615,19 @@ def main(
                 elapsed = time.time() - start_time
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
+                
+        # We don't need this bottle neck to run every frame
+        # if debug:
+        #     preview = frame.copy()            
+        #     cv2.putText( preview,f"frame={_frame_index} pockets_ready={_pockets_ready}",(20, 30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 0), 2)
+        #     cv2.imshow("debug-live", preview)
+        #     if (cv2.waitKey(1) & 0xFF) == ord("q"):
+        #         break
 
         frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame
 
-        table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv, Uhsv))
-
+        table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
+        
         if table_bounding_box is None or corners is None:
             retry_count += 1
             _table_fail_streak += 1
@@ -742,17 +710,17 @@ def main(
                         _pockets_px_before_adjust_cached = [tuple(p) if p is not None else None for p in _pockets_px_cached]
                         TL, TR, BM, TM, BL, BR = _pockets_px_before_adjust_cached
                         if (TL is not None) and (TR is not None) and (BL is not None) and (BR is not None) and (TM is not None) and (BM is not None):
-                            x_left = min(TL[0], BL[0])
+                            x_left  = min(TL[0], BL[0])
                             x_right = max(TR[0], BR[0])
                             y_top = min(TL[1], TM[1], TR[1])
                             y_bottom = max(BL[1], BM[1], BR[1])
                             x_mid = 0.5 * (x_left + x_right)
                             pockets_px_new = [
-                                (x_left, y_top),
+                                (x_left,  y_top),
                                 (x_right, y_top),
-                                (x_mid, y_bottom),
-                                (x_mid, y_top),
-                                (x_left, y_bottom),
+                                (x_mid,   y_bottom),
+                                (x_mid,   y_top),
+                                (x_left,  y_bottom),
                                 (x_right, y_bottom),
                             ]
                             _pockets_px_cached = pockets_px_new
@@ -765,7 +733,8 @@ def main(
             now = time.time()
             should_send_pockets = (not _pockets_have_been_sent) or ((now - _last_pocket_send_time) >= POCKET_RESEND_INTERVAL_SEC)
             if should_send_pockets:
-                pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)  # UPDATED: required in all modes, not only debug
+                if debug:
+                    pockets_xy_m = _detector.warp_px_to_m(_H_cached, _pockets_px_cached)
 
                 if usb_sender.send(line_pockets(pockets_xy_m)):
                     _pockets_have_been_sent = True
@@ -791,16 +760,17 @@ def main(
                             cv2.circle(raw_frame, (int(x), int(y)), 9, (0, 255, 0), -1)
                             text = f"SEND:{labels[i]} ({xm:.3f}m,{ym:.3f}m)"
                             cv2.putText(raw_frame, text, (int(x) + 8, int(y) - 8),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
                     cv2.imshow("debug", raw_frame)
                     if (cv2.waitKey(1) & 0xFF) == ord("q"):
                         break
 
-        if not _pockets_ready or (_H_cached is None) or (_pockets_px_cached is None):
-            continue
+        # if not _pockets_ready or (_H_cached is None) or (_pockets_px_cached is None):
+        #     continue
 
         yolo_detections = []
         try:
+            print("probamo detektirati")
             yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame, img_size=960)
         except Exception as e:
             print("[yolov5] ball detection failed:", e)
@@ -946,77 +916,90 @@ def main(
         capture.release()
     usb_sender.close()
     _detector.dispose()
-
-
+    
 if __name__ == "__main__":
     import argparse
-
+    
     # Supress warnings
-    warnings.filterwarnings("ignore", category=FutureWarning, message=".*autocast.*")
-
+    warnings.filterwarnings("ignore", category=FutureWarning, message=".*autocast.*")  
+    
     parser = argparse.ArgumentParser(description="Detection / Calibration runner")
-
+    
     # Debug switches
     parser.add_argument("--debug", action="store_true", help="If true, you are running debug mode. Mix with other debug flags.")
+    # parser.add_argument("--debug-conf", type=str, default="../Configuration/predator_9ft_virtual_debug.json", help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
     parser.add_argument("--debug-conf", type=str, default=None, help="Path (relative or absolute) to a debug configuration used as a virtual debug video feed. Needs --debug mode flag set.")
-    parser.add_argument("--debug-cue", action="store_true", help="If set to true, a cue stick debug overlay is displayed.")
-    parser.add_argument("--debug-use-config", action="store_true", help="If set to true, a Predator 9ft virtual debug table is used for testing otherwise we load in the last_environment.json.")
-
+    parser.add_argument("--debug-cue",action="store_true", help="If set to true, a cue stick debug overlay is displayed.")
+    parser.add_argument("--debug-use-config",action="store_true", help="If set to true, a Predator 9ft virtual debug table is used for testing otherwise we load in the last_environment.json.")
+    
     parser.add_argument("--debug-detection", action="store_true", help="If true, the script assumes you are displaying detections results on a 2D static image.")
     parser.add_argument("--debug-editor", action="store_true", help="If true, the script assumes you are running the application inside of the Unity Editor.")
-    parser.add_argument("--debug-image", type=str, default="../../../candidate_testing_images", help="Path (relative or absolute) to a debug image or a folder containing debug images.")
-    parser.add_argument("--debug-offline", action="store_true", help="If this flag is set to true, the script runs without requiring a Quest 3 connection. Works with static images, local debug videos, and phone feed.")
+    parser.add_argument("--debug-image", type=str, default="../../../candidate_testing_images/test.jpg", help="Path (relative or absolute) to a static image used as a virtual debug video feed. Needs --debug mode flag set.")
+    parser.add_argument("--debug-offline", action="store_true", help="If this flag is set to true, there is no need to connect to the debug editor or the application. Works with static images and feed from phone.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
     parser.add_argument("--debug-static", action="store_true", help="If true, you are running debug mode with a static image. Mix with other debug flags.")
-    parser.add_argument("--debug-video", type=str, default=None, help="Path (relative or absolute) to a local debug video feed, e.g. .mkv or .mp4. Needs --debug mode flag set.")
-
+    
     # Calibration
     parser.add_argument("--calibrate-only", action="store_true", help="Run calibration precompute for a given resolution and exit.")
-    parser.add_argument("--calib-res", type=str, default="1920x1080", help='Calibration resolution string like "1280x720" or "1920x1080". Defaults to PERFORMANCE_RESOLUTION when omitted.')
-
+    parser.add_argument("--calib-res", type=str, default="1920x1080",help='Calibration resolution string like "1280x720" or "1920x1080". Defaults to PERFORMANCE_RESOLUTION when omitted.')
+    
     # Main settings
     parser.add_argument("--work-res", type=str, default="1920x1080", help='Work resolution string like "1280x720" or "1920x1080".')
     parser.add_argument("--perf-res", type=str, default="1280x720", help='Performance resolution string like "1280x720" or "1920x1080".')
     parser.add_argument("--fallback-res", type=str, default="1280x720", help='Fallback resolution string like "1280x720" or "1920x1080".')
     parser.add_argument("--performance", action="store_true", help="Uses performance mode.")
-
+    
     parser.add_argument("--force-calib", action="store_true", help="Force re-calibration (recompute even if cached).")
     parser.add_argument("--synthetic", action="store_true", help="Send synthetic 9ft table pockets (no camera)")
+    
+    # parser.add_argument("--qr-enabled", action="store_true", help="Enables QR code reader mode.")
+    # parser.add_argument("--qr-required-count", type=int, default=6, help="Number of QR codes used. Must be a symetric number not lower than 4.")
+    
+    
+    
     parser.add_argument("--paper-size-m", type=float, default=0.16, help="Size of the square paper with the QR code on it.")
-
+    
+    
+    # parser.add_argument("--qr-scan-interval-frames", type=int, default=3, help="Scan QR code every N frames.")
+    # parser.add_argument("--qr-scan-interval-frames", type=int, default=3, help="Scan QR code every N frames.")
+    # parser.add_argument("--qr-stable-frames-required", type=int, default=3, help="Scan QR code every N frames.")
+    # parser.add_argument("--qr-resend-interval", type=int, default=3, help="Resend the QR code every N frames.")
+        
     args = parser.parse_args()
-
-    debug_source_count = sum([
-        1 if args.debug_static else 0,
-        1 if args.debug_phone else 0,
-        1 if args.debug_video is not None else 0,
-    ])
-
-    if debug_source_count > 1:
-        print("Static image analysis, local debug video, and live phone capture cannot run at the same time.")
+    
+       
+    # count = args.qr_required_count
+    # if args.qr_enabled:
+    #     if count is None or count < 4 or count > 12 or count % 2 != 0:
+    #         print("The required number of QR code is between 4 and 12 and must be an even number.") 
+    #         exit()
+    
+    if args.debug_static and args.debug_phone:
+        print("Static image analysis and live capture cannot run at the same time.")
         exit()
-
-    if args.debug and debug_source_count == 0:
-        print("Either static image analysis, local debug video, or live capture must be enabled while running in debug mode.")
+    if (not args.debug_static and not args.debug_phone) and args.debug:
+        print("Either static image analysis or live capture must be enabled while running in debug mode.")
         exit()
-
-    if args.debug_video is not None and not args.debug:
-        print("Local debug video requires --debug.")
-        exit()
-
+        
     if args.debug_use_config:
         args.debug_conf = "../Configuration/predator_9ft_virtual_debug.json"
-
+        
     if args.debug_offline and not args.debug:
         print("You need to run this in general debug mode.")
         exit()
-
+        
+    if args.debug_offline and not args.debug_static:
+        print("Offline mode means, you need to provide static images to your feed.")
+        exit()
+        
     # work-res and performance  cannot be set together choose one.
+    
     if args.work_res is not None and args.performance:
         print("Performance is set to true, so working resolution is going to be overriden to 720p.")
         args.work_res = "1280x720"
-
+    
+    
     if args.calibrate_only:
         # Use provided calib-res or fall back to your PERFORMANCE_RESOLUTION
         calib_dims = args.calib_res or args.perf_res or args.fallback_res
@@ -1024,19 +1007,20 @@ if __name__ == "__main__":
         calibrator = Calibrator(calib_dims)
         calibrator.run_calibration_only(calib_dims)
         print("Done. Re-run the application without the --calibrate-only tag.")
-        exit()
-
+        exit()        
     if args.synthetic:
         print("Testing synthetic data to verify table object drawing function.")
         exit()
         # synth_test()
     else:
         try:
+            # if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
+            #     print(f"Chosen detection mode {args.detection_mode}.")
             install_dependecies_for_other_projects(["pix2pockets"])
+            # radius_range = tuple(map(int, args.ball_radius_range.split(",")))
             main(
                 args.debug_conf,
                 args.debug_image,
-                args.debug_video,
                 args.debug_pocket_display,
                 args.debug_offline,
                 args.debug_static,

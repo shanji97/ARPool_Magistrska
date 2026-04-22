@@ -80,36 +80,38 @@ def _validate_ip(ip: str):
     pattern = r"^\d{1,3}(\.\d{1,3}){3}$"
     return re.match(pattern, ip) is not None
 
-def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = False, is_offline_run: bool = False) -> tuple[str, str]: 
-    if is_offline_run:
+def setup_connection(connect_to_quest: bool = False, is_editor_build: bool = False, is_offline_run: bool = False) -> tuple[str, str]:
+    # Offline mode should disable only Quest transport.
+    # DroidCam / live phone input must still be allowed in offline runs.
+    if is_offline_run and connect_to_quest:
         return None, None
-    
+
     key: str = "quest_3_primary" if connect_to_quest else "droid_cam"
     cached = _load_connection_data(key)
+
     if cached and not is_editor_build:
         print(f"[INFO] Using cached {key}: {cached['ip']}:{cached['port']}")
         return cached["ip"], cached["port"]
+
     if connect_to_quest and is_editor_build:
-        return "127.0.0.1","5005"
-        
-    
+        return "127.0.0.1", "5005"
+
     ip: str = input(
         "Enter Quest 3 IP address (e.g., 192.168.0.40): "
         if connect_to_quest else
-        "Enter DroidCam IP address (e.g., 192.168.0.40): ").strip()
-        
+        "Enter DroidCam IP address (e.g., 192.168.0.40): "
+    ).strip()
+
     while not _validate_ip(ip):
         print("Invalid IP format. Try again.")
-        if connect_to_quest:
-            ip = input("IP: ").strip()
-        else:
-            ip = input("Enter DroidCam IP address: ").strip()
-    port:str = (
+        ip = input("IP: " if connect_to_quest else "Enter DroidCam IP address: ").strip()
+
+    port: str = (
         input("Enter Quest 3 port [default=5005]: ").strip() or "5005"
         if connect_to_quest else
         input("Enter DroidCam port [default=4747]: ").strip() or "4747"
     )
-    
+
     _persist_connection_data(ip, port, key)
     return ip, port
 
