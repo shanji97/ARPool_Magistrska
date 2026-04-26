@@ -4,9 +4,9 @@ import json
 import socket
 from enum import Enum
 from typing import Tuple, Optional
+import time
 
 from calibration import Calibrator
-
 class FocusMode(Enum):
     Auto = 0
     Continuous = 1
@@ -117,17 +117,25 @@ class DroidCamController:
     
     def _sync_torch_state(self):
         cam_id = str(self.current_camera)
-        if self.CAMERA_MAP[self.current_camera]['torch_supported']:
-            desired_state = self.torch_state.get(cam_id, False)
-            info = self.get_camera_info()
-            actual_state = info.get("led_on", 0) == 1
-            print(f"Torch Sync for Camera {cam_id}: Desired={'ON' if desired_state else 'OFF'} | Actual={'ON' if actual_state else 'OFF'}")
-            if desired_state != actual_state:
-                self._put("/v1/camera/torch_toggle")
-                self.torch_state[cam_id] = actual_state
-                self._save_torch_state()
-        else:
+
+        if not self.CAMERA_MAP[self.current_camera]["torch_supported"]:
             print("Torch not available on current camera.")
+            return
+
+        desired_state = bool(self.torch_state.get(cam_id, False))
+        info = self.get_camera_info()
+        actual_state = info.get("led_on", 0) == 1
+
+        print(
+            f"Torch Sync for Camera {cam_id}: "
+            f"Desired={'ON' if desired_state else 'OFF'} | "
+            f"Actual={'ON' if actual_state else 'OFF'}"
+        )
+
+        if desired_state != actual_state:
+            self._put("/v1/camera/torch_toggle")
+            self.torch_state[cam_id] = desired_state
+            self._save_torch_state()
 
     def toggle_torch(self):
         camera_id = str(self.current_camera)
@@ -232,7 +240,7 @@ class DroidCamController:
             self.reset_all_torch_states()
         elif command == "set_focus_mode":
             if args:
-                self._controller.set_focus_mode(args[0])
+                self.set_focus_mode(args[0])
         elif command == "set_manual_focus_value":
             if args:
                 self.set_manual_focus_value(args[0])
@@ -269,3 +277,46 @@ class DroidCamController:
         else:
             print(f"Unknown command: {command}")
             return None, is_changing_camera, reset_pocket_globals
+        
+    
+    def check_keys(self, dimensions: str = "1920x1080", key: Optional[str] = None, rescan_debunce_time_seconds: float = 0.75, last_rescan_request_time: float = 5):
+        if key is None:
+            return (False, None, False, time.time())
+        
+        force_rescan = False
+        reset_pocket_globals = False
+        camera_info, is_changing_camera, reset_pocket_globals = self.send_camera_command("dump_camera_info")
+       
+        if key == ord('q'):
+            return (False, camera_info, None, None)
+        elif key == ord('t'):
+            self.send_camera_command("toggle_torch")
+        elif key == ord('f'):
+            self.send_camera_command("set_focus_mode", 2)  # Manual focus mode
+            self.send_camera_command("set_manual_focus_value", 0.5)
+        elif key == ord('z'):
+            self.send_camera_command("set_zoom", 2.0)
+        elif key == ord('e'):
+            self.send_camera_command("set_exposure", 1.0)
+        elif key == ord('c'):
+            # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
+            next_cam = (self.current_camera + 1) % len(self.CAMERA_MAP)
+            _, is_changing_camera, reset_pocket_globals = self.send_camera_command("select_camera", next_cam, dimensions)
+            camera_info = self.send_camera_command("dump_camera_info")
+        elif key in [ord('0'), ord('1'), ord('2'), ord('3')]: # Hardcoded for iPhone pro max 16 or phones with same 4 camera setup.
+            camera_number = int(chr(key))
+            self.send_camera_command("select_camera", camera_number, dimensions)
+            camera_info, is_changing_camera, reset_pocket_globals = self.send_camera_command("dump_camera_info")
+        elif key == ord('i'):
+            camera_info, is_changing_camera, reset_pocket_globals = self.send_camera_command("dump_camera_info")  # Camera info.
+        elif key == ord('r'):
+           
+            now = time.time()
+            if(now - last_rescan_request_time) >= rescan_debunce_time_seconds:
+                force_rescan = True
+                last_rescan_request_time = now
+                return(True, camera_info, force_rescan, last_rescan_request_time, reset_pocket_globals, is_changing_camera)
+            print("[pockets] Re-scan requested (r)")
+            
+        
+        return (True, camera_info, force_rescan, time.time(), reset_pocket_globals, is_changing_camera)

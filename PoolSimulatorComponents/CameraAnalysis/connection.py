@@ -48,7 +48,7 @@ class UsbTcpSender:
 
     def _create_socket(self) -> socket.socket:
         if self.is_offline_run:
-            return None
+            return
         
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -117,3 +117,15 @@ class UsbTcpSender:
             return 
         with self._lock:
             self._close_quiet_unlocked()
+            
+    def send_bootstrap_payloads(self, payloads, debug: bool = False):
+        if not payloads:
+            return
+
+        for payload in payloads:
+            if not payload:
+                continue
+
+            sent = self.send(payload)
+            if debug and not sent:
+                print(f"[USB] Bootstrap payload transfer failed: {payload!r}")

@@ -36,10 +36,10 @@ def line_pockets(pockets_xy, decimals: int = 7):
         return ""
     return "p " + ";".join(_fmt2(x, y, decimals) for (x, y) in pockets_xy)
 
-def line_configuration_name(configuration_name: str):
+def _line_configuration_name(configuration_name: str):
     return "E " + configuration_name
 
-def line_quest_peers(quest_entries: List[Dict[str, str]]) -> str:
+def _line_quest_peers(quest_entries: List[Dict[str, str]]) -> str:
     parts = [
         f"{str(entry.get('ip', '')).strip()},{str(entry.get('role', '')).strip()}"
         for entry in (quest_entries or [])
@@ -208,9 +208,6 @@ def p2p_classification_to_balltype(ball_id: int) -> str:
 
 def build_conf_transfer_block(
     pockets=None,
-    table_LW_m=None,
-    ball_diameter_m=0.05715,
-    camera_height_m=2.5,
     detection_entries: List[Dict] = None,
     discard_diamonds: bool = True,
     pos_decimals: int = 7,
@@ -224,8 +221,27 @@ def build_conf_transfer_block(
         conf_decimals=conf_decimals,
         vel_decimals=vel_decimals
     )
-    lines = [line_pockets(pockets, decimals=pos_decimals)]
-    for f in ball_lines:
-        if f:
-            lines.append(f)
+
+    lines = []
+
+    pocket_line = line_pockets(pockets, decimals=pos_decimals)
+    if pocket_line:
+        lines.append(pocket_line)
+
+    lines.extend(line for line in ball_lines if line)
+
     return "\n".join(lines) + "\n"
+
+def build_bootstrap_payloads(primary_ip: str, secondary_quest_ip: str,  configuration_name: Optional[str],):
+    payloads = []
+
+    if configuration_name:
+        payloads.append(_line_configuration_name(configuration_name))
+
+    if primary_ip and secondary_quest_ip:
+        payloads.append(_line_quest_peers([
+            {"ip": primary_ip, "role": "p"},
+            {"ip": secondary_quest_ip, "role": "s"},
+        ]))
+
+    return payloads
