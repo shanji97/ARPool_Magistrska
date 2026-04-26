@@ -22,12 +22,6 @@ SUPPORTED_DEBUG_VIDEO_SUFFIXES = {
     ".webm",
 }
 
-
-from connection import UsbTcpSender
-from formatters import(
-    line_configuration_name
-)
-
 CONFIG_PATH = Path("../Configuration")
 CONFIG_PATH.mkdir(parents=True, exist_ok=True)
 

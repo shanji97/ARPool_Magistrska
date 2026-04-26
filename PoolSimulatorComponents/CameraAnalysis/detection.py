@@ -24,11 +24,10 @@ from formatters import (
     LABEL_MAP,
     build_conf_transfer_block,
     group_entries_by_type,
-    line_configuration_name,
     line_cue_stick,
     line_pockets,
-    line_quest_peers,
-    p2p_classification_to_balltype
+    p2p_classification_to_balltype,
+    build_bootstrap_payloads
 )
 
 def _estimate_ball_layout_delta_m(previous_entries, current_entries):
@@ -61,7 +60,6 @@ def _estimate_ball_layout_delta_m(previous_entries, current_entries):
 
     return float(max_delta_m)
 
-
 def _update_ball_stability(previous_entries, current_entries, stable_frames):
     if current_entries is None or len(current_entries) < CUE_TRACK_MIN_BALLS:
         return current_entries, 0, False, float("inf")
@@ -71,7 +69,6 @@ def _update_ball_stability(previous_entries, current_entries, stable_frames):
     cue_tracking_enabled = stable_frames >= int(CUE_TRACK_STABLE_REQUIRED_FRAMES)
 
     return current_entries, stable_frames, cue_tracking_enabled, float(layout_delta_m)
-
 
 def _build_ball_debug_view(frame_bgr, yolo_detections):
     debug_view = frame_bgr.copy()
@@ -95,7 +92,6 @@ def _build_ball_debug_view(frame_bgr, yolo_detections):
         )
 
     return debug_view
-
 
 def _build_cue_debug_view(frame_bgr, cue_info, stable_ball_frames, layout_delta_m):
     debug_view = frame_bgr.copy()
@@ -153,10 +149,6 @@ def _show_cue_debug_windows(frame_bgr, cue_info, stable_ball_frames, layout_delt
     if cue_info is not None and cue_info.get("debug_mask") is not None:
         cv2.imshow("debug-cue-mask", cue_info["debug_mask"])
     
-
-# from testing import synth_test
-
-# MODIFIED: ISSUE-86 transport optimization settings.
 BALL_SEND_POSITION_DECIMALS = 4
 BALL_SEND_CONF_DECIMALS = 3
 BALL_SEND_VELOCITY_DECIMALS = 3
@@ -173,13 +165,13 @@ POCKET_STABLE_REQUIRED_FRAMES = 8
 
 POCKET_SCAN_INTERVAL_FRAMES = 5
 POCKET_RESEND_INTERVAL_SEC = 10.0
-RESCAN_DEBOUNCE_TIME = 0.75
 
 CUE_TRACK_STABLE_REQUIRED_FRAMES = 8
 CUE_TRACK_MAX_BALL_DELTA_M = 0.0035
 CUE_TRACK_MIN_BALLS = 2
 CUE_MIN_CONFIDENCE = 0.35
 
+# Multiplayer
 QUEST_SECONDARY_QUEST_IP = "192.168.0.41"  # UPDATED: replace with the actual LAN IP of Quest 3 #2.
 QUEST_SECONDARY_QUEST_PORT = "5005"        # UPDATED: kept explicit for future protocol growth.
 QUEST_CONNECT_TIMEOUT_SEC = 0.25           # UPDATED: short timeout so missing Quest does not stall detection.
@@ -187,33 +179,6 @@ QUEST_SEND_TIMEOUT_SEC = 0.25              # UPDATED: short send timeout for the
 QUEST_RETRY_INITIAL_DELAY_SEC = 0.25       # UPDATED: kept small because detection must stay responsive.
 QUEST_RETRY_MAX_DELAY_SEC = 1.0            # UPDATED: bounded retry window for Quest reconnects.
 QUEST_BOOTSTRAP_RESEND_INTERVAL_SEC = 2.0  # UPDATED: periodic resend so Quest app restarts recover automatically.
-
-def _build_bootstrap_payloads(primary_ip: Optional[str], configuration_name: Optional[str]):
-    payloads = []
-
-    if configuration_name:
-        payloads.append(line_configuration_name(configuration_name))
-
-    if primary_ip and QUEST_SECONDARY_QUEST_IP:
-        payloads.append(line_quest_peers([
-            {"ip": primary_ip, "role": "p"},
-            {"ip": QUEST_SECONDARY_QUEST_IP, "role": "s"},
-        ]))
-
-    return payloads
-
-def _send_bootstrap_payloads(usb_sender: UsbTcpSender, payloads, debug: bool = False):
-    if usb_sender is None or not payloads:
-        return
-
-    for payload in payloads:
-        if not payload:
-            continue
-
-        sent = usb_sender.send(payload)
-        if debug and not sent:
-            print(f"[USB] Bootstrap payload transfer failed: {payload!r}")
-
 
 # Runtime state
 _controller = None
@@ -228,7 +193,6 @@ _is_changing_camera = False
 _pockets_px_cached = None
 _pockets_ready = False
 _force_rescan = False
-_last_rescan_request_time = 0.0
 _frame_index = 0
 _pockets_adjusted = False
 _pockets_px_adjusted_cached = None
@@ -363,49 +327,6 @@ def reset_globals():
     
     global _pockets_xy_m_adjusted_cached
     _pockets_xy_m_adjusted_cached = None
-    
-# Camera control part
-def check_keys(dimensions: str = "1920x1080"):
-    global _controller, _is_changing_camera
-    if _controller is None:
-        ip, port = setup_connection(False, False, False)
-        _controller = DroidCamController(ip, port)
-    
-    camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
-    key = cv2.waitKey(1)
-    if key == ord('q'):
-        return (False, camera_info)
-    elif key == ord('t'):
-        _controller.send_camera_command("toggle_torch")
-    elif key == ord('f'):
-        _controller.send_camera_command("set_focus_mode", 2)  # Manual focus mode
-        _controller.send_camera_command("set_manual_focus_value", 0.5)
-    elif key == ord('z'):
-        _controller.send_camera_command("set_zoom", 2.0)
-    elif key == ord('e'):
-        _controller.send_camera_command("set_exposure", 1.0)
-    elif key == ord('c'):
-        # Cycle through cameras 0 -> 1 -> 2 -> 3 -> 0 ...
-        next_cam = (_controller.current_camera + 1) % len(_controller.CAMERA_MAP)
-        _, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("select_camera", next_cam, dimensions)
-        camera_info = _controller.send_camera_command("dump_camera_info")
-    elif key in [ord('0'), ord('1'), ord('2'), ord('3')]:
-        camera_number = int(chr(key))
-        _controller.send_camera_command("select_camera", camera_number, dimensions)
-        camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")
-    elif key == ord('i'):
-       camera_info, _is_changing_camera, reset_pocket_globals = _controller.send_camera_command("dump_camera_info")  # Camera info.
-    elif key == ord('r'):
-        global _force_rescan, _last_rescan_request_time
-        now = time.time()
-        if(now - _last_rescan_request_time) >= RESCAN_DEBOUNCE_TIME:
-            _force_rescan = True
-            _last_rescan_request_time = now
-        print("[pockets] Re-scan requested (r)")
-        
-    if reset_pocket_globals:
-        reset_pocket_globals()
-    return (True, camera_info)
 
 def main(
          debug_config_name: Optional[str],
@@ -467,22 +388,21 @@ def main(
         retry_max_delay_s=QUEST_RETRY_MAX_DELAY_SEC,
         is_offline_run=debug_offline                        
     )
-    bootstrap_payloads = _build_bootstrap_payloads(q_ip, configuration_name_for_unity) 
     last_bootstrap_attempt_time = 0.0
+    bootstrap_payloads = build_bootstrap_payloads(q_ip, QUEST_SECONDARY_QUEST_IP, configuration_name_for_unity)
+    initial_usb_connection_ready = False
 
     if not debug_offline:
-        print("Open Unity application. After 10 seconds the application is going to continue.")
-        time.sleep(10)
-
         initial_usb_connection_ready = usb_sender.connect()
+
         if (not initial_usb_connection_ready) and is_editor_build:
             open_ports(5005, is_editor_build)
             initial_usb_connection_ready = usb_sender.connect()
 
         if not initial_usb_connection_ready:
-            print("[USB] Initial connection to the primary Quest failed. Detection will continue and the sender will retry automatically.")
-        else:
-            _send_bootstrap_payloads(usb_sender, bootstrap_payloads, debug)
+            print("[USB] Initial Quest connection failed. Detection will continue and reconnect on send.")
+
+    usb_sender.send_bootstrap_payloads(bootstrap_payloads, debug)
 
     debug_frame = None
     dimensions = None
@@ -530,7 +450,7 @@ def main(
         ip, port = setup_connection(False, False, debug_offline)
         global _controller
         _controller = DroidCamController(ip, port)
-        capture, dimensions = open_stream(            work_resolution,            performance_mode,            perf_resoulution,            fallback_resoulution,            debug,            debug_static,            debug_offline        )
+        capture, dimensions = open_stream(work_resolution, performance_mode, perf_resoulution, fallback_resoulution, debug, debug_static, debug_offline)
 
         if capture is None:
             print("Could not open stream.")
@@ -550,6 +470,8 @@ def main(
 
     retry_count = 0
     pockets_px_raw = None
+    pockets_plane_dbg = None
+    dbg = None
     global _table_fail_streak
     _table_fail_streak = 0
     frame_counter = 0
@@ -604,7 +526,7 @@ def main(
             and (now_bootstrap_sec - last_bootstrap_attempt_time) >= QUEST_BOOTSTRAP_RESEND_INTERVAL_SEC
         ):
             last_bootstrap_attempt_time = now_bootstrap_sec
-            _send_bootstrap_payloads(usb_sender, bootstrap_payloads, debug)
+            usb_sender.send_bootstrap_payloads(bootstrap_payloads, debug)
 
         # Camera switching lock
         if _is_changing_camera:
@@ -654,14 +576,6 @@ def main(
                 elapsed = time.time() - start_time
                 fps = frame_counter / elapsed
                 print(f"[INFO] FPS: {fps:.2f}")
-                
-        # We don't need this bottle neck to run every frame
-        # if debug:
-        #     preview = frame.copy()            
-        #     cv2.putText( preview,f"frame={_frame_index} pockets_ready={_pockets_ready}",(20, 30),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0, 255, 0), 2)
-        #     cv2.imshow("debug-live", preview)
-        #     if (cv2.waitKey(1) & 0xFF) == ord("q"):
-        #         break
 
         frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame
 
@@ -676,7 +590,8 @@ def main(
             continue
 
         corners = _detector.gate_and_smooth_corners(corners, expected_aspect_ratio)
-
+        
+        
         inner_corners, edges_dbg = _detector.detect_inner_cushion_corners(
             frame_bgr=frame,
             approx_table_corners_px=corners,
@@ -707,21 +622,41 @@ def main(
         raw_frame = frame
 
         if not _pockets_ready:
-            if should_scan_this_frame:
-                pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
-                    frame_bgr=frame,
-                    corners_px_inner=inner_corners,
-                    playfield_L_mm=Lmm,
-                    playfield_W_mm=Wmm,
-                    v_thresh=70,
-                    sat_max=180,
-                    roi_frac_corner=0.18,
-                    roi_frac_side_w=0.22,
-                    roi_frac_side_h=0.16,
-                    min_area_px=180,
-                    debug=debug_pocket_display
-                )
+            # if should_scan_this_frame:
+                if debug_static:
+                    pockets_px_raw, pockets_plane_dbg, dbg = _detector.detect_pockets_markerless(
+                        frame_bgr=frame,
+                        corners_px_inner=inner_corners,
+                        playfield_L_mm=Lmm,
+                        playfield_W_mm=Wmm,
+                        v_thresh=70,
+                        sat_max=180,
+                        roi_frac_corner=0.18,
+                        roi_frac_side_w=0.22,
+                        roi_frac_side_h=0.16,
+                        min_area_px=180,
+                        debug=debug_pocket_display,
+                    )
+                else:
 
+                    video_pocket_result = _detector._detect_pockets_video_markerless(
+                        frame_bgr=frame,
+                        outer_corners_px=corners,
+                        inner_corners_px=inner_corners,
+                        use_grayscale=True,
+                        refine_with_local_search=True,
+                        dark_search_radius_px=42,
+                        debug=debug_pocket_display
+                    )
+                    
+                    if video_pocket_result is None:
+                        pockets_px_raw = None  # Fall back to JSON-derived geometric pockets below.
+                        rail_geometry_dbg = None
+                    else:
+                        pockets_px_raw, rail_geometry_dbg = video_pocket_result
+                    
+                    
+                                
                 if pockets_px_raw is None:
                     pockets_px_raw = _detector.warp_mm_points_to_px(H_new, pockets_mm)
                 else:
@@ -800,7 +735,7 @@ def main(
                             text = f"SEND:{labels[i]} ({xm:.3f}m,{ym:.3f}m)"
                             cv2.putText(raw_frame, text, (int(x) + 8, int(y) - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-                    cv2.imshow("debug", raw_frame)
+                    cv2.imshow("debug-pocket-display", raw_frame)
                     if (cv2.waitKey(1) & 0xFF) == ord("q"):
                         break
 
@@ -809,7 +744,6 @@ def main(
 
         yolo_detections = []
         try:
-            print("probamo detektirati")
             yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame, img_size=960)
         except Exception as e:
             print("[yolov5] ball detection failed:", e)
@@ -848,9 +782,6 @@ def main(
         if entries_to_send is not None:
             ball_data = build_conf_transfer_block(
                 pockets=None,
-                table_LW_m=None,
-                ball_diameter_m=ball_diameter_m,
-                camera_height_m=camera_height_m,
                 detection_entries=entries_to_send,
                 discard_diamonds=True,
                 pos_decimals=BALL_SEND_POSITION_DECIMALS,
@@ -1006,8 +937,6 @@ if __name__ == "__main__":
     # parser.add_argument("--qr-enabled", action="store_true", help="Enables QR code reader mode.")
     # parser.add_argument("--qr-required-count", type=int, default=6, help="Number of QR codes used. Must be a symetric number not lower than 4.")
     
-   
-    
     parser.add_argument("--paper-size-m", type=float, default=0.16, help="Size of the square paper with the QR code on it.")
     
     
@@ -1062,10 +991,7 @@ if __name__ == "__main__":
         # synth_test()
     else:
         try:
-            # if args.detection_mode in [DetectionMode.YOLO.value, DetectionMode.Both.value]:
-            #     print(f"Chosen detection mode {args.detection_mode}.")
             install_dependecies_for_other_projects(["pix2pockets"])
-            # radius_range = tuple(map(int, args.ball_radius_range.split(",")))
             main(
                 args.debug_conf,
                 args.debug_image,
