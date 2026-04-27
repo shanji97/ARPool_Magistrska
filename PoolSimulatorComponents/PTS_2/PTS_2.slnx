@@ -5,8 +5,8 @@
   <Project Path="Table.csproj" />
   <Project Path="Classes.csproj" />
   <Project Path="Networking.csproj" />
-  <Project Path="RootAssembly.csproj" />
   <Project Path="UI.csproj" />
+  <Project Path="RootAssembly.csproj" />
   <Project Path="Structs.csproj" />
   <Project Path="Interfaces.csproj" />
 </Solution>
