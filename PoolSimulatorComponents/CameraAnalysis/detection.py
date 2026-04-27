@@ -5,9 +5,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 import warnings
+import os
 
 # Custom imports
 from droid_cam_controller import DroidCamController
+from hsv_runtime_tuner import HsvRuntimeTuner
 from object_detector import ObjectDetector
 from calibration import Calibrator, CALIBRATION_PATTERNS
 from objects_in_environment import EnvironmentConfig
@@ -334,6 +336,7 @@ def main(
          debug_video_path: Optional[str],
          debug_recorded: bool = False,
          debug_pocket_display: bool = False,
+         
          debug_offline: bool = False,
          debug_static: bool = False,
          debug: bool = False,
@@ -344,7 +347,8 @@ def main(
          is_editor_build: bool = False,
          debug_cue_stick: bool = False,
          debug_detection: bool = False,
-         process_unknowns: Optional[bool] = False
+         process_unknowns: Optional[bool] = False,
+         debug_hsv_tuner: bool = False,
          ):
     
     usb_sender = None
@@ -364,15 +368,27 @@ def main(
 
     corner_inset_mm, side_inset_mm = config.pockets.derive_insets()
     pockets_mm = config.table.pocket_mm_positions(corner_inset_mm, side_inset_mm)
-    (Lhsv, Uhsv)  = (config.table.cloth_lower_hsv, config.table.cloth_upper_hsv)
+    cloth_hsv_bounds = config.table.get_cloth_hsv_bounds()
+    if not cloth_hsv_bounds:
+        print("[hsv] No valid HSV cloth ranges are available in the selected environment config.")
+        return
+    Lhsv, Uhsv = cloth_hsv_bounds[0]
+
     Lmm, Wmm, Hmm = config.table.playfield_mm
     ball_diameter_m = config.ball_spec.diameter_m
     expected_aspect_ratio = Lmm / Wmm
     camera_height_m = config.camera.height_from_floor_m
     configuration_name_for_unity = config.get_json_name_for_unity()  # UPDATED: reused for periodic bootstrap resend.
+    active_config_path = os.path.join(EnvironmentConfig.ENVIRONMENT_JSON_PATH, configuration_name_for_unity)
+    
+    hsv_tuner = HsvRuntimeTuner(
+    enabled=debug_hsv_tuner,
+    initial_ranges=cloth_hsv_bounds,
+    config_path=active_config_path,
+    )
 
-    del config
-    del env
+    # del config
+    # del env
 
     global _calib
     _calib = Calibrator(allow_center_crop=True, force_recalib=False)
@@ -546,7 +562,7 @@ def main(
             ret, frame = capture.read()
 
         # Frame error lock
-        if not ret or frame is None:
+        if not ret or frame is None or getattr(frame, "size", 0) == 0:
             if debug_static:
                 print("[debug] Static debug frame invalid. Exiting loop.")
                 break
@@ -579,7 +595,8 @@ def main(
 
         frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if not debug else frame
 
-        table_bounding_box, table_mask, corners = _detector.detect_table(frame, (Lhsv,Uhsv))
+        current_hsv_bounds = hsv_tuner.update_and_get_ranges(frame) if hsv_tuner is not None else cloth_hsv_bounds
+        table_bounding_box, table_mask, corners = _detector.detect_table(frame, current_hsv_bounds)
         
         if table_bounding_box is None or corners is None:
             retry_count += 1
@@ -916,6 +933,8 @@ if __name__ == "__main__":
     
     parser.add_argument("--debug-recorded", action="store_true", help="Use a recorded debug video as the input source.")
     
+    parser.add_argument(    "--debug-hsv-tuner",    action="store_true",    help="Displays HSV trackbars for live table-mask tuning. Press h to print, s to save, a to append.")
+    
     parser.add_argument("--debug-offline", action="store_true", help="If this flag is set to true, there is no need to connect to the debug editor or the application. Works with static images and feed from phone.")
     parser.add_argument("--debug-phone", action="store_true", help="If true, you are running debug mode with a phone (live) capture. Mix with other debug flags.")
     parser.add_argument("--debug-pocket-display", action="store_true", help="If true, you are displaying a window with the pockets marked on the debug image.")
@@ -1008,6 +1027,8 @@ if __name__ == "__main__":
                 args.debug_editor,
                 args.debug_cue,
                 args.debug_detection,
+                False,
+                args.debug_hsv_tuner,
             )
         except Exception as e:
             print(f"Error while executing main loop. Check parameters....Exception: {e}")

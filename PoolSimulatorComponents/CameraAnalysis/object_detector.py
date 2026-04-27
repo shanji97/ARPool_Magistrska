@@ -575,20 +575,38 @@ class ObjectDetector:
         return cv2.GaussianBlur(mask, (kernel_two, kernel_two), 0)
 
     def detect_table(self, frame, hsv_bounds):
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = self._denoise_mask(cv2.inRange(hsv, hsv_bounds[0], hsv_bounds[1]), 3, 5)
+        """
+        Detects the table cloth using one or more HSV ranges.
+
+        This replaces the old single-range-only path. It is backward compatible with:
+            detect_table(frame, (lower_hsv, upper_hsv))
+
+        and supports:
+            detect_table(frame, [(lower_hsv, upper_hsv), ...])
+        """
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return None, None, None
+
+        mask = self._build_table_hsv_mask(frame, hsv_bounds)
+
+        if mask is None or cv2.countNonZero(mask) == 0:
+            return None, mask, None
+
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
-            return None, None, None
+            return None, mask, None
 
         table_contour = max(contours, key=cv2.contourArea)
+
+        if cv2.contourArea(table_contour) < 5000:
+            return None, mask, None
+
         x, y, w, h = cv2.boundingRect(table_contour)
 
         contour_perimeter = cv2.arcLength(table_contour, True)
         epsilon_ratio = 0.02
         approximation = cv2.approxPolyDP(table_contour, epsilon_ratio * contour_perimeter, True)
-        corners = None
 
         if len(approximation) >= 4:
             if len(approximation) == 4:
@@ -598,7 +616,15 @@ class ObjectDetector:
                 bounding_box = cv2.boxPoints(rectangle)
                 corners = self._order_corners(bounding_box)
         else:
-            box = np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], dtype=np.float32)
+            box = np.array(
+                [
+                    [x, y],
+                    [x + w, y],
+                    [x + w, y + h],
+                    [x, y + h],
+                ],
+                dtype=np.float32,
+            )
             corners = self._order_corners(box)
 
         return (x, y, w, h), mask, corners
@@ -1865,3 +1891,103 @@ class ObjectDetector:
             }
 
         return ordered, dbg
+    @staticmethod
+    def _normalize_hsv_bounds(hsv_bounds):
+        """
+        Accepts either:
+        - legacy single range: ((H,S,V), (H,S,V))
+        - new multi range: [((H,S,V), (H,S,V)), ...]
+        - JSON-like range dicts: [{"lower": [...], "upper": [...], "enabled": true}, ...]
+
+        Returns:
+            list[(lower_tuple, upper_tuple)]
+        """
+        if hsv_bounds is None:
+            return []
+
+        def clamp_hsv(values):
+            h, s, v = values
+            return (
+                int(max(0, min(179, h))),
+                int(max(0, min(255, s))),
+                int(max(0, min(255, v))),
+            )
+
+        if (
+            isinstance(hsv_bounds, (list, tuple))
+            and len(hsv_bounds) == 2
+            and isinstance(hsv_bounds[0], (list, tuple, np.ndarray))
+            and isinstance(hsv_bounds[1], (list, tuple, np.ndarray))
+            and len(hsv_bounds[0]) == 3
+            and len(hsv_bounds[1]) == 3
+        ):
+            return [(clamp_hsv(hsv_bounds[0]), clamp_hsv(hsv_bounds[1]))]
+
+        normalized = []
+
+        for item in hsv_bounds:
+            if isinstance(item, dict):
+                if not item.get("enabled", True):
+                    continue
+
+                lower = item.get("lower")
+                upper = item.get("upper")
+            elif isinstance(item, (list, tuple)) and len(item) == 2:
+                lower, upper = item
+            else:
+                continue
+
+            if lower is None or upper is None:
+                continue
+
+            if len(lower) != 3 or len(upper) != 3:
+                continue
+
+            normalized.append((clamp_hsv(lower), clamp_hsv(upper)))
+
+        return normalized
+
+
+    @staticmethod
+    def _hsv_range_mask(hsv_frame, lower, upper):
+        """
+        Creates an HSV mask for one range.
+
+        Hue wrap is supported, although your green ranges probably do not need it.
+        Example wrap case: lower hue 170, upper hue 10.
+        """
+        lower_array = np.array(lower, dtype=np.uint8)
+        upper_array = np.array(upper, dtype=np.uint8)
+
+        if int(lower_array[0]) <= int(upper_array[0]):
+            return cv2.inRange(hsv_frame, lower_array, upper_array)
+
+        lower_high = np.array([lower_array[0], lower_array[1], lower_array[2]], dtype=np.uint8)
+        upper_high = np.array([179, upper_array[1], upper_array[2]], dtype=np.uint8)
+
+        lower_low = np.array([0, lower_array[1], lower_array[2]], dtype=np.uint8)
+        upper_low = np.array([upper_array[0], upper_array[1], upper_array[2]], dtype=np.uint8)
+
+        return cv2.bitwise_or(
+            cv2.inRange(hsv_frame, lower_high, upper_high),
+            cv2.inRange(hsv_frame, lower_low, upper_low),
+        )
+
+
+    def _build_table_hsv_mask(self, frame, hsv_bounds):
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return None
+
+        hsv_ranges = self._normalize_hsv_bounds(hsv_bounds)
+
+        if not hsv_ranges:
+            return None
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        combined_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+
+        for lower, upper in hsv_ranges:
+            range_mask = self._hsv_range_mask(hsv, lower, upper)
+            combined_mask = cv2.bitwise_or(combined_mask, range_mask)
+
+        return self._denoise_mask(combined_mask, 3, 5)

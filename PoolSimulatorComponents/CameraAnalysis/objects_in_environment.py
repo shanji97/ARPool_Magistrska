@@ -1,8 +1,55 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
-from typing import Dict, Tuple, List, Optional, ClassVar
+from typing import Dict, Tuple, List, Optional, ClassVar, Any
 import os
 import json
+
+@dataclass
+class HsvRange:
+    name: str
+    lower: Tuple[int, int, int]
+    upper: Tuple[int, int, int]
+    enabled: bool = True
+
+    @staticmethod
+    def _clamp_hsv(value: Tuple[int, int, int]) -> Tuple[int, int, int]:
+        h, s, v = value
+        return (
+            int(max(0, min(179, h))),
+            int(max(0, min(255, s))),
+            int(max(0, min(255, v))),
+        )
+
+    @staticmethod
+    def from_json_data(data: Any, index: int = 0) -> Optional["HsvRange"]:
+        if isinstance(data, dict):
+            lower = data.get("lower")
+            upper = data.get("upper")
+            name = data.get("name", f"hsv_range_{index + 1}")
+            enabled = bool(data.get("enabled", True))
+        elif isinstance(data, (list, tuple)) and len(data) == 2:
+            lower, upper = data
+            name = f"hsv_range_{index + 1}"
+            enabled = True
+        else:
+            return None
+
+        if not isinstance(lower, (list, tuple)) or not isinstance(upper, (list, tuple)):
+            return None
+
+        if len(lower) != 3 or len(upper) != 3:
+            return None
+
+        return HsvRange(
+            name=str(name),
+            lower=HsvRange._clamp_hsv(tuple(int(v) for v in lower)),
+            upper=HsvRange._clamp_hsv(tuple(int(v) for v in upper)),
+            enabled=enabled,
+        )
+
+    def to_bounds(self) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+        return self._clamp_hsv(self.lower), self._clamp_hsv(self.upper)
+
 
 @dataclass
 class TableSpec:
@@ -11,31 +58,52 @@ class TableSpec:
     overall_mm: Optional[Tuple[int, int]] = None
     notes: str = ""
     cloth_profile: Optional[str] = None
+
+    # Legacy single-range fields are intentionally kept for backward compatibility.
     cloth_lower_hsv: Optional[Tuple[int, int, int]] = None
     cloth_upper_hsv: Optional[Tuple[int, int, int]] = None
-    
+
+    # New schema v3 field. The detector should use this first.
+    cloth_hsv_ranges: Optional[List[HsvRange]] = None
+
+    def get_cloth_hsv_bounds(self) -> List[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
+        ranges = [
+            hsv_range.to_bounds()
+            for hsv_range in (self.cloth_hsv_ranges or [])
+            if hsv_range is not None and hsv_range.enabled
+        ]
+
+        if ranges:
+            return ranges
+
+        if self.cloth_lower_hsv is not None and self.cloth_upper_hsv is not None:
+            return [
+                (
+                    HsvRange._clamp_hsv(tuple(self.cloth_lower_hsv)),
+                    HsvRange._clamp_hsv(tuple(self.cloth_upper_hsv)),
+                )
+            ]
+
+        return []
+
     def pocket_mm_positions(self, corner_inset_mm: float, side_inset_mm: float):
         L, W, H = self.playfield_mm
-        
-        # Corners in mm (origin BL; +X length, +Y width)
+
         TL = (0.0, W)
         TR = (L, W)
         BL = (0.0, 0.0)
         BR = (L, 0.0)
-        # Apply insets along both axes
+
         P_TL = (TL[0] + corner_inset_mm, TL[1] - corner_inset_mm)
         P_TR = (TR[0] - corner_inset_mm, TR[1] - corner_inset_mm)
         P_BL = (BL[0] + corner_inset_mm, BL[1] + corner_inset_mm)
         P_BR = (BR[0] - corner_inset_mm, BR[1] + corner_inset_mm)
-        
-        # Side pockets @ 1/2 of the longer rail, inset inward from bottom/top.
-        P_ML = (0.5 * L, side_inset_mm)           # bottom (y≈0) inward +Y
-        P_MR = (0.5 * L, W - side_inset_mm)       # top    (y≈W) inward -Y
-        
-        return [P_TL, P_TR,  
-                P_ML, P_MR,
-                P_BL, P_BR]
-    
+
+        P_ML = (0.5 * L, side_inset_mm)
+        P_MR = (0.5 * L, W - side_inset_mm)
+
+        return [P_TL,P_TR,P_ML,P_MR,P_BL,P_BR]
+
 @dataclass
 class PocketSpec:
     corner_pocket_diameter_mm: int   # Corner pocket inset is basically radius - so diameter / 2
@@ -148,20 +216,43 @@ class EnvironmentConfig:
 
     DEFAULT_BALLS = BallSpec(.05715,0.1795)
 
-    SCHEMA_VERSION = 2 # Bump every time when a change is made (add/rename/delete). Reset to 1 for final shippment.
+    SCHEMA_VERSION = 3 # Bump every time when a change is made (add/rename/delete). Reset to 1 for final shippment.
 
     def _tuple_or_none(self,x):
         return tuple(x) if isinstance(x, (list, tuple)) else None
 
     def table_from_json_data(self, table_data) -> TableSpec:
-        return TableSpec( 
+        legacy_lower = self._tuple_or_none(table_data.get("cloth_lower_hsv"))
+        legacy_upper = self._tuple_or_none(table_data.get("cloth_upper_hsv"))
+
+        hsv_ranges = []
+
+        for index, range_data in enumerate(table_data.get("cloth_hsv_ranges", []) or []):
+            parsed_range = HsvRange.from_json_data(range_data, index)
+            if parsed_range is not None:
+                hsv_ranges.append(parsed_range)
+
+        if not hsv_ranges and legacy_lower is not None and legacy_upper is not None:
+            hsv_ranges.append(
+                HsvRange(
+                    name=table_data.get("cloth_profile", "legacy_hsv_range") or "legacy_hsv_range",
+                    lower=tuple(int(v) for v in legacy_lower),
+                    upper=tuple(int(v) for v in legacy_upper),
+                    enabled=True,
+                )
+            )
+
+        primary_range = hsv_ranges[0] if hsv_ranges else None
+
+        return TableSpec(
             name=table_data.get("name", "Custom"),
             playfield_mm=self._tuple_or_none(table_data.get("playfield_mm")),
             overall_mm=self._tuple_or_none(table_data.get("overall_mm")),
             notes=table_data.get("notes", ""),
-            cloth_profile=table_data.get("cloth_profile", ""),  # Added v2
-            cloth_lower_hsv=self._tuple_or_none(table_data.get("cloth_lower_hsv")),  # Added v2
-            cloth_upper_hsv=self._tuple_or_none(table_data.get("cloth_upper_hsv"))   # Added v2
+            cloth_profile=table_data.get("cloth_profile", ""),
+            cloth_lower_hsv=primary_range.lower if primary_range is not None else legacy_lower,
+            cloth_upper_hsv=primary_range.upper if primary_range is not None else legacy_upper,
+            cloth_hsv_ranges=hsv_ranges,
         )
 
     def _ensure_dir(self, path: str):
@@ -435,25 +526,45 @@ class EnvironmentConfig:
     
     def set_up_hsv(self, table: TableSpec) -> TableSpec:
         self._print_cloth_menu()
-        choice = self._read_choice([str(i) for i in range(1, len(self.CLOTH_OPTIONS)+1)] + ["c"])
+        choice = self._read_choice([str(i) for i in range(1, len(self.CLOTH_OPTIONS) + 1)] + ["c"])
+
         if choice == "c":
             print("Enter custom HSV lower bound (H,S,V):")
             h_low = self._read_int("Hue min", 0, 179)
             s_low = self._read_int("Sat min", 0, 255)
             v_low = self._read_int("Val min", 0, 255)
+
             print("Enter custom HSV upper bound (H,S,V):")
-            h_up  = self._read_int("Hue max", 0, 179)
-            s_up  = self._read_int("Sat max", 0, 255)
-            v_up  = self._read_int("Val max", 0, 255)
-            table.cloth_profile   = "Custom"
-            table.cloth_lower_hsv = (h_low, s_low, v_low)
-            table.cloth_upper_hsv = (h_up,  s_up,  v_up)
+            h_up = self._read_int("Hue max", 0, 179)
+            s_up = self._read_int("Sat max", 0, 255)
+            v_up = self._read_int("Val max", 0, 255)
+
+            hsv_range = HsvRange(
+                name="Custom",
+                lower=(h_low, s_low, v_low),
+                upper=(h_up, s_up, v_up),
+                enabled=True,
+            )
+
+            table.cloth_profile = "Custom"
+            table.cloth_lower_hsv = hsv_range.lower
+            table.cloth_upper_hsv = hsv_range.upper
+            table.cloth_hsv_ranges = [hsv_range]
             return table
-        
-        name, lower, upper = self.CLOTH_OPTIONS[int(choice)-1]
-        table.cloth_profile   = name
-        table.cloth_lower_hsv = lower
-        table.cloth_upper_hsv = upper
+
+        name, lower, upper = self.CLOTH_OPTIONS[int(choice) - 1]
+
+        hsv_range = HsvRange(
+            name=name,
+            lower=lower,
+            upper=upper,
+            enabled=True,
+        )
+
+        table.cloth_profile = name
+        table.cloth_lower_hsv = hsv_range.lower
+        table.cloth_upper_hsv = hsv_range.upper
+        table.cloth_hsv_ranges = [hsv_range]
         return table
 
     def set_up_pockets(self):
@@ -549,11 +660,7 @@ class EnvironmentConfig:
                 return env
 
             if env is not None:
-                needs_cloth = (
-                    env.table.cloth_profile in (None, "") or
-                    env.table.cloth_lower_hsv is None or
-                    env.table.cloth_upper_hsv is None
-                )
+                needs_cloth = len(env.table.get_cloth_hsv_bounds()) == 0
                 if interactive and needs_cloth:
                     env.table = self.set_up_hsv(env.table)
                     self.save_environment(env, cache_path)
