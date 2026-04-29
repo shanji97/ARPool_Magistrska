@@ -216,7 +216,7 @@ class DroidCamController:
         self.select_camera(Camera.Main.value)
         self.set_zoom(1.0)
         self.set_exposure(0)
-        self.set_white_balance(2900)
+        # self.set_white_balance(2900)
         self.set_focus_mode(FocusMode.Continuous.value)
         print("Default settings applied.")
         self.sync_all_locks()

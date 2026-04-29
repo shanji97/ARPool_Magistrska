@@ -151,6 +151,42 @@ def _show_cue_debug_windows(frame_bgr, cue_info, stable_ball_frames, layout_delt
     if cue_info is not None and cue_info.get("debug_mask") is not None:
         cv2.imshow("debug-cue-mask", cue_info["debug_mask"])
     
+
+def _is_valid_homography(H, min_abs_det: float = 1e-8):
+    # UPDATED: Accept only finite, non-singular 3x3 homographies before caching or reusing them.
+    if H is None:
+        return False
+
+    matrix = np.asarray(H, dtype=np.float64)
+
+    if matrix.shape != (3, 3):
+        return False
+
+    if not np.all(np.isfinite(matrix)):
+        return False
+
+    determinant = float(np.linalg.det(matrix))
+    return np.isfinite(determinant) and abs(determinant) > float(min_abs_det)
+
+
+def _get_cached_or_compute_valid_homography(detector, cached_homography, inner_corners, table_length_mm, table_width_mm, debug: bool = False):
+    # UPDATED: Reuse the first valid cached homography. Recompute only while no valid cache exists.
+    if _is_valid_homography(cached_homography):
+        return cached_homography, cached_homography
+
+    candidate_homography = detector.homography_mm_to_px(inner_corners, table_length_mm, table_width_mm)
+
+    if not _is_valid_homography(candidate_homography):
+        if debug:
+            print("[homography] Candidate rejected because it is None, non-finite, or singular.")
+        return None, cached_homography
+
+    if debug:
+        determinant = float(np.linalg.det(np.asarray(candidate_homography, dtype=np.float64)))
+        print(f"[homography] Valid homography cached. det={determinant:.12e}")
+
+    return candidate_homography, candidate_homography
+
 BALL_SEND_POSITION_DECIMALS = 4
 BALL_SEND_CONF_DECIMALS = 3
 BALL_SEND_VELOCITY_DECIMALS = 3
@@ -624,7 +660,14 @@ def main(
         if inner_corners is None:
             inner_corners = corners
 
-        H_new = _detector.homography_mm_to_px(inner_corners, Lmm, Wmm)
+        H_new, _H_cached = _get_cached_or_compute_valid_homography(  # UPDATED: compute once, then reuse the first valid non-singular homography.
+            _detector,
+            _H_cached,
+            inner_corners,
+            Lmm,
+            Wmm,
+            debug,
+        )
 
         if H_new is None:
             continue
@@ -690,7 +733,8 @@ def main(
                 )
 
                 _pockets_px_cached = pockets_px
-                _H_cached = H_new
+                if _is_valid_homography(H_new):
+                    _H_cached = H_new  # UPDATED: cache only valid non-singular homography.
 
                 if stable:
                     _pockets_ready = True
@@ -717,7 +761,7 @@ def main(
                             _pockets_px_cached = pockets_px_new
                             _pockets_adjusted = True
                 else:
-                    H_new = _H_cached if _H_cached is not None else H_new
+                    H_new = _H_cached if _is_valid_homography(_H_cached) else H_new  # UPDATED: reuse only valid cached homography.
                     pockets_px_raw = _pockets_px_cached
 
         if _pockets_ready and (_H_cached is not None) and (_pockets_px_cached is not None):
