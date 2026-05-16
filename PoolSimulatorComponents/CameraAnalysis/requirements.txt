@@ -8,6 +8,7 @@ ffmpeg-python
 requests
 pandas
 pyarrow
+opencv-contrib-python 
 
 # Tracking (pure-Python)
 scipy
