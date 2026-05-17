@@ -1,12 +1,20 @@
 """
-Generate large QR markers for computer vision calibration.
+Generate large QR markers for ARPool metadata / playfield-data payloads.
 
 Each page contains ONE QR code:
-QR size = EXACTLY the specified QR_SIZE_MM (height) * QR_SIZE_MM (width) dimensions
+- QR square = exactly QR_SIZE_MM x QR_SIZE_MM
+- white cutout margin = exactly WHITE_MARGIN_MM on each side
+- full cutout square = QR_SIZE_MM + 2 * WHITE_MARGIN_MM
 
-Edges are marked with a cut outline and crop marks.
+This matches the physical footprint of the generated ArUco markers:
+- code square = 130 mm
+- white margin = 30 mm
+- cutout square = 190 mm
+- marker count = 10
+- IDs = 0..9
 
 Designed for A4 printing at 100% scale.
+Print with scaling disabled: use "Actual size" / "100%", not "Fit to page".
 
 Python 3.12
 pip install qrcode[pil] reportlab pillow
@@ -29,30 +37,46 @@ from reportlab.lib.utils import ImageReader
 # CONFIGURATION
 # -----------------------------
 
-QR_SIZE_MM = 165
+# Match the already printed ArUco marker format.
+QR_SIZE_MM = 130.0
+WHITE_MARGIN_MM = 30.0
+CUTOUT_SIZE_MM = QR_SIZE_MM + (2.0 * WHITE_MARGIN_MM)
+
 DPI = 600
 
-OUTPUT_FILE = f"qr_markers_{QR_SIZE_MM}mm_A4.pdf"
+# Match ArUco IDs 0..9.
+QR_IDS = list(range(10))
 
-NUMBER_OF_MARKERS = 12
+OUTPUT_FILE = (
+    f"qr_markers_{int(QR_SIZE_MM)}mm_"
+    f"margin{int(WHITE_MARGIN_MM)}mm_"
+    f"ids_{QR_IDS[0]}_to_{QR_IDS[-1]}_A4.pdf"
+)
+
+# Keep labels outside the cutout so they do not affect decoding.
+PRINT_LABEL_INSIDE_CUTOUT = False
+
+# Crop/cut styling.
+CROP_MARK_LEN_MM = 5.0
+CROP_MARK_GAP_MM = 1.0
+CUT_LINE_MM = 0.35
 
 
 @dataclass(frozen=True)
 class MarkerSpec:
+    qr_id: int
     payload: str
     label: str
 
 
 MARKERS: List[MarkerSpec] = [
-    MarkerSpec(payload=f"ARPOOL_MARKER_{i:02}", label=f"M{i:02}")
-    for i in range(1, NUMBER_OF_MARKERS + 1)
+    MarkerSpec(
+        qr_id=qr_id,
+        payload=f"ARPOOL_QR_{qr_id:02}",
+        label=f"QR ID {qr_id:02}",
+    )
+    for qr_id in QR_IDS
 ]
-
-
-# Crop marks
-CROP_MARK_LEN_MM = 5.0
-CROP_MARK_GAP_MM = 1.0
-CUT_LINE_MM = 0.35
 
 
 # -----------------------------
@@ -60,7 +84,7 @@ CUT_LINE_MM = 0.35
 # -----------------------------
 
 def mm_to_px(mm_value: float, dpi: int) -> int:
-    return int(round((mm_value / 25.4) * dpi))
+    return int(round((float(mm_value) / 25.4) * int(dpi)))
 
 
 def make_qr(payload: str) -> Image.Image:
@@ -74,81 +98,106 @@ def make_qr(payload: str) -> Image.Image:
     qr.add_data(payload)
     qr.make(fit=True)
 
-    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-
+    image = qr.make_image(fill_color="black", back_color="white").convert("RGB")
     target_px = mm_to_px(QR_SIZE_MM, DPI)
 
-    img = img.resize((target_px, target_px), Image.NEAREST)
+    # Nearest-neighbour scaling keeps QR modules crisp.
+    return image.resize((target_px, target_px), Image.NEAREST)
 
-    return img
 
-
-def draw_crop_marks(c: canvas.Canvas, x: float, y: float, size: float):
-
-    L = CROP_MARK_LEN_MM * mm
-    G = CROP_MARK_GAP_MM * mm
+def draw_crop_marks(c: canvas.Canvas, x: float, y: float, size: float) -> None:
+    length = CROP_MARK_LEN_MM * mm
+    gap = CROP_MARK_GAP_MM * mm
 
     # bottom-left
-    c.line(x - G - L, y, x - G, y)
-    c.line(x, y - G - L, x, y - G)
+    c.line(x - gap - length, y, x - gap, y)
+    c.line(x, y - gap - length, x, y - gap)
 
     # bottom-right
-    c.line(x + size + G, y, x + size + G + L, y)
-    c.line(x + size, y - G - L, x + size, y - G)
+    c.line(x + size + gap, y, x + size + gap + length, y)
+    c.line(x + size, y - gap - length, x + size, y - gap)
 
     # top-left
-    c.line(x - G - L, y + size, x - G, y + size)
-    c.line(x, y + size + G, x, y + size + G + L)
+    c.line(x - gap - length, y + size, x - gap, y + size)
+    c.line(x, y + size + gap, x, y + size + gap + length)
 
     # top-right
-    c.line(x + size + G, y + size, x + size + G + L, y + size)
-    c.line(x + size, y + size + G, x + size, y + size + G + L)
+    c.line(x + size + gap, y + size, x + size + gap + length, y + size)
+    c.line(x + size, y + size + gap, x + size, y + size + gap + length)
 
 
 # -----------------------------
 # PDF GENERATION
 # -----------------------------
 
-def generate_pdf():
-
-    PAGE_W, PAGE_H = A4
+def generate_pdf() -> None:
+    page_width, page_height = A4
     qr_size_pt = QR_SIZE_MM * mm
+    cutout_size_pt = CUTOUT_SIZE_MM * mm
+    margin_pt = WHITE_MARGIN_MM * mm
 
-    c = canvas.Canvas(OUTPUT_FILE, pagesize=A4)
-
-    for marker in MARKERS:
-
-        img = make_qr(marker.payload)
-
-        x = (PAGE_W - qr_size_pt) / 2
-        y = (PAGE_H - qr_size_pt) / 2
-
-        c.drawImage(
-            ImageReader(img),
-            x,
-            y,
-            width=qr_size_pt,
-            height=qr_size_pt
+    if cutout_size_pt > page_width or cutout_size_pt > page_height:
+        raise ValueError(
+            f"Cutout size {CUTOUT_SIZE_MM:.1f} mm does not fit on A4. "
+            f"Reduce QR_SIZE_MM or WHITE_MARGIN_MM."
         )
 
-        # cut outline
-        c.setLineWidth(CUT_LINE_MM * mm)
-        c.rect(x, y, qr_size_pt, qr_size_pt)
+    pdf = canvas.Canvas(OUTPUT_FILE, pagesize=A4)
 
-        # crop marks
-        draw_crop_marks(c, x, y, qr_size_pt)
+    for marker in MARKERS:
+        image = make_qr(marker.payload)
 
-        # label
-        c.setFont("Helvetica", 10)
-        c.drawString(x + 5 * mm, y + 5 * mm, marker.label)
+        cutout_x = (page_width - cutout_size_pt) / 2.0
+        cutout_y = (page_height - cutout_size_pt) / 2.0
+        qr_x = cutout_x + margin_pt
+        qr_y = cutout_y + margin_pt
 
-        c.showPage()
+        # Explicit white cutout background.
+        pdf.setFillColorRGB(1, 1, 1)
+        pdf.rect(cutout_x, cutout_y, cutout_size_pt, cutout_size_pt, fill=1, stroke=0)
 
-    c.save()
+        # QR square. This includes the QR quiet zone generated by qrcode border=4.
+        pdf.drawImage(
+            ImageReader(image),
+            qr_x,
+            qr_y,
+            width=qr_size_pt,
+            height=qr_size_pt,
+        )
+
+        # Cut outline around full cutout.
+        pdf.setStrokeColorRGB(0, 0, 0)
+        pdf.setLineWidth(CUT_LINE_MM * mm)
+        pdf.rect(cutout_x, cutout_y, cutout_size_pt, cutout_size_pt, fill=0, stroke=1)
+
+        draw_crop_marks(pdf, cutout_x, cutout_y, cutout_size_pt)
+
+        # Label outside the cutout.
+        pdf.setFont("Helvetica", 10)
+        label_y = max(10 * mm, cutout_y - 14 * mm)
+        pdf.drawString(cutout_x, label_y, marker.label)
+        pdf.drawString(cutout_x, label_y - 5 * mm, f"Payload: {marker.payload}")
+        pdf.drawString(
+            cutout_x,
+            label_y - 10 * mm,
+            f"QR square: {QR_SIZE_MM:.0f} mm | white margin: {WHITE_MARGIN_MM:.0f} mm | cutout: {CUTOUT_SIZE_MM:.0f} mm",
+        )
+        pdf.drawString(cutout_x, label_y - 15 * mm, "Print at 100% scale. Do not use Fit to page.")
+
+        if PRINT_LABEL_INSIDE_CUTOUT:
+            pdf.setFont("Helvetica", 8)
+            pdf.drawString(cutout_x + 5 * mm, cutout_y + 5 * mm, marker.label)
+
+        pdf.showPage()
+
+    pdf.save()
 
     print("PDF generated:", OUTPUT_FILE)
-    print("IMPORTANT: Print at 100% scale (disable 'Fit to page').")
-    print(f"The QR square must measure exactly {QR_SIZE_MM} mm.")
+    print("IMPORTANT: Print at 100% scale. Disable Fit to page.")
+    print(f"QR square must measure exactly {QR_SIZE_MM:.1f} mm.")
+    print(f"Full cutout square must measure exactly {CUTOUT_SIZE_MM:.1f} mm.")
+    print(f"QR IDs: {QR_IDS}")
+    print(f"Payloads: {[marker.payload for marker in MARKERS]}")
 
 
 if __name__ == "__main__":

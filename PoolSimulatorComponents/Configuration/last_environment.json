@@ -1,29 +1,13 @@
 {
-  "_schema_version": 3,
+  "_schema_version": 4,
   "table": {
     "name": "Custom",
-    "playfield_mm": [2445, 1225, 810.0],
-    "overall_mm": [2730, 1510],
-    "notes": "User-defined",
-    "cloth_profile": "Green cloth multi-range",
-
-    "cloth_lower_hsv": [60, 100, 60],
-    "cloth_upper_hsv": [90, 255, 255],
-
-    "cloth_hsv_ranges": [
-      {
-        "name": "green_broad_video",
-        "lower": [60, 100, 60],
-        "upper": [90, 255, 255],
-        "enabled": true
-      },
-      {
-        "name": "green_narrow_wb_locked",
-        "lower": [65, 125, 100],
-        "upper": [72, 165, 170],
-        "enabled": true
-      }
-    ]
+    "playfield_mm": [2445.0, 1225.0, 810.0],
+    "overall_mm": [2730.0, 1510.0],
+    "overall_height_mm": 845.0,
+    "rail_top_height_mm": 845.0,
+    "marker_plane_height_mm": 845.0,
+    "notes": "User-defined. Origin is the inner bottom-left playfield corner. Markers are on the raised table edge, 35 mm above the playfield."
   },
   "pockets": {
     "corner_pocket_diameter_mm": 125,
@@ -37,5 +21,46 @@
   },
   "camera": {
     "height_from_floor_m": 2.735
+  },
+  "fiducials": {
+    "coordinate_system": "origin_inner_bottom_left_x_length_y_width_z_floor_mm",
+    "sets": {
+      "aruco": {
+        "marker_type": "aruco",
+        "dictionary_name": "DICT_4X4_50",
+        "marker_size_mm": 130.0,
+        "white_margin_mm": 30.0,
+        "cutout_size_mm": 190.0,
+        "corner_order": "TL_TR_BR_BL",
+        "markers": [
+          { "id": 0, "center_mm": [350.0, -71.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "bottom-left long rail" },
+          { "id": 1, "center_mm": [2095.0, -71.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "bottom-right long rail" },
+          { "id": 2, "center_mm": [350.0, 1296.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "top-left long rail" },
+          { "id": 3, "center_mm": [2095.0, 1296.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "top-right long rail" },
+          { "id": 4, "center_mm": [-71.25, 250.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "left-lower short rail" },
+          { "id": 5, "center_mm": [-71.25, 975.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "left-upper short rail" },
+          { "id": 6, "center_mm": [2516.25, 250.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "right-lower short rail" },
+          { "id": 7, "center_mm": [2516.25, 975.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "right-upper short rail" }
+        ]
+      },
+      "qr": {
+        "marker_type": "qr",
+        "payload_prefix": "ARPOOL_QR_",
+        "marker_size_mm": 130.0,
+        "white_margin_mm": 30.0,
+        "cutout_size_mm": 190.0,
+        "corner_order": "TL_TR_BR_BL",
+        "markers": [
+          { "id": 0, "payload": "ARPOOL_QR_00", "center_mm": [650.0, -71.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "bottom-left long rail QR" },
+          { "id": 1, "payload": "ARPOOL_QR_01", "center_mm": [1795.0, -71.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "bottom-right long rail QR" },
+          { "id": 2, "payload": "ARPOOL_QR_02", "center_mm": [650.0, 1296.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "top-left long rail QR" },
+          { "id": 3, "payload": "ARPOOL_QR_03", "center_mm": [1795.0, 1296.25, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "top-right long rail QR" },
+          { "id": 4, "payload": "ARPOOL_QR_04", "center_mm": [-71.25, 500.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "left-lower short rail QR" },
+          { "id": 5, "payload": "ARPOOL_QR_05", "center_mm": [-71.25, 725.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "left-upper short rail QR" },
+          { "id": 6, "payload": "ARPOOL_QR_06", "center_mm": [2516.25, 500.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "right-lower short rail QR" },
+          { "id": 7, "payload": "ARPOOL_QR_07", "center_mm": [2516.25, 725.0, 845.0], "rotation_deg": 0.0, "enabled": true, "label": "right-upper short rail QR" }
+        ]
+      }
+    }
   }
 }

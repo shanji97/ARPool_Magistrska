@@ -1,701 +1,311 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
-from typing import Dict, Tuple, List, Optional, ClassVar, Any
-import os
-import json
 
-@dataclass
-class HsvRange:
-    name: str
-    lower: Tuple[int, int, int]
-    upper: Tuple[int, int, int]
-    enabled: bool = True
+from dataclasses import replace
+from pathlib import Path
+from typing import Optional
 
-    @staticmethod
-    def _clamp_hsv(value: Tuple[int, int, int]) -> Tuple[int, int, int]:
-        h, s, v = value
-        return (
-            int(max(0, min(179, h))),
-            int(max(0, min(255, s))),
-            int(max(0, min(255, v))),
-        )
-
-    @staticmethod
-    def from_json_data(data: Any, index: int = 0) -> Optional["HsvRange"]:
-        if isinstance(data, dict):
-            lower = data.get("lower")
-            upper = data.get("upper")
-            name = data.get("name", f"hsv_range_{index + 1}")
-            enabled = bool(data.get("enabled", True))
-        elif isinstance(data, (list, tuple)) and len(data) == 2:
-            lower, upper = data
-            name = f"hsv_range_{index + 1}"
-            enabled = True
-        else:
-            return None
-
-        if not isinstance(lower, (list, tuple)) or not isinstance(upper, (list, tuple)):
-            return None
-
-        if len(lower) != 3 or len(upper) != 3:
-            return None
-
-        return HsvRange(
-            name=str(name),
-            lower=HsvRange._clamp_hsv(tuple(int(v) for v in lower)),
-            upper=HsvRange._clamp_hsv(tuple(int(v) for v in upper)),
-            enabled=enabled,
-        )
-
-    def to_bounds(self) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
-        return self._clamp_hsv(self.lower), self._clamp_hsv(self.upper)
+from environment_input import (
+    ensure_directory,
+    load_json,
+    read_bool,
+    read_choice,
+    read_float,
+    read_int,
+    read_optional_float,
+    read_optional_int,
+    save_json,
+)
+from environment_models import (
+    BallSpec,
+    CameraSpec,
+    EnvironmentConfig,
+    FiducialConfig,
+    FiducialMarkerSpec,
+    FiducialSetSpec,
+    PocketSpec,
+    TableSpec,
+)
 
 
-@dataclass
-class TableSpec:
-    name: str
-    playfield_mm: Tuple[float, float, float]
-    overall_mm: Optional[Tuple[int, int]] = None
-    notes: str = ""
-    cloth_profile: Optional[str] = None
+class EnvironmentConfigRepository:
+    ENVIRONMENT_JSON_PATH = Path("../Configuration")
 
-    # Legacy single-range fields are intentionally kept for backward compatibility.
-    cloth_lower_hsv: Optional[Tuple[int, int, int]] = None
-    cloth_upper_hsv: Optional[Tuple[int, int, int]] = None
+    DEFAULT_BALLS = BallSpec(0.05715, 0.1795)
+    DEFAULT_SCHEMA_VERSION = EnvironmentConfig.SCHEMA_VERSION
 
-    # New schema v3 field. The detector should use this first.
-    cloth_hsv_ranges: Optional[List[HsvRange]] = None
-
-    def get_cloth_hsv_bounds(self) -> List[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
-        ranges = [
-            hsv_range.to_bounds()
-            for hsv_range in (self.cloth_hsv_ranges or [])
-            if hsv_range is not None and hsv_range.enabled
-        ]
-
-        if ranges:
-            return ranges
-
-        if self.cloth_lower_hsv is not None and self.cloth_upper_hsv is not None:
-            return [
-                (
-                    HsvRange._clamp_hsv(tuple(self.cloth_lower_hsv)),
-                    HsvRange._clamp_hsv(tuple(self.cloth_upper_hsv)),
-                )
-            ]
-
-        return []
-
-    def pocket_mm_positions(self, corner_inset_mm: float, side_inset_mm: float):
-        L, W, H = self.playfield_mm
-
-        TL = (0.0, W)
-        TR = (L, W)
-        BL = (0.0, 0.0)
-        BR = (L, 0.0)
-
-        P_TL = (TL[0] + corner_inset_mm, TL[1] - corner_inset_mm)
-        P_TR = (TR[0] - corner_inset_mm, TR[1] - corner_inset_mm)
-        P_BL = (BL[0] + corner_inset_mm, BL[1] + corner_inset_mm)
-        P_BR = (BR[0] - corner_inset_mm, BR[1] + corner_inset_mm)
-
-        P_ML = (0.5 * L, side_inset_mm)
-        P_MR = (0.5 * L, W - side_inset_mm)
-
-        return [P_TL,P_TR,P_ML,P_MR,P_BL,P_BR]
-
-@dataclass
-class PocketSpec:
-    corner_pocket_diameter_mm: int   # Corner pocket inset is basically radius - so diameter / 2
-    side_pocket_diameter_mm: int     # Side pockets are typically wider than corne ones
-    corner_jaw_diameter_mm: Optional[int] = None 
-    side_jaw_diameters_mm: Optional[int] = None 
-    # Meaning: Radius of curvature of the jaws (the cushion cut-outs that form the pocket).
-    # Why it matters: A larger radius makes the pocket “accept” more angled shots, while a sharper (small radius) cut is unforgiving.
-    # Kept optional so you can later refine geometry if you want to model rebounds realistically.
-
-    def derive_insets(self):
-          # Use jaw curvature radius if available (CORRECT)
-        if self.corner_jaw_diameter_mm is not None:
-            corner_inset = self.corner_jaw_diameter_mm * 0.5
-        else:
-            # fallback for legacy configs
-            corner_inset = self.corner_pocket_diameter_mm * 0.5
-        
-        if self.side_jaw_diameters_mm is not None:
-            side_inset = self.side_jaw_diameters_mm * 0.5
-        else:
-            side_inset = self.side_pocket_diameter_mm * 0.5
-        
-        return float(corner_inset), float(side_inset)
-    
-@dataclass
-class BallSpec:
-    diameter_m: float = .05715
-    ball_circumference_m: float = 0.1795
-    
-    
-@dataclass
-class CameraSpec:
-    height_from_floor_m: float
-    
-@dataclass
-class EnvironmentConfig:
-    table: TableSpec
-    pockets: PocketSpec
-    ball_spec: BallSpec
-    camera: CameraSpec
-    
-    def pocket_uv_positions(self) -> Dict[str, Tuple[float, float]]:
-        """
-        Returns idealized pocket centers in normalized table coordinates.
-        Corners: (0,0), (1,0), (0,1), (1,1) ; Middles: (0.5,0) and (0.5,1)
-        """
-        return {
-            "corner_BL": (0.0, 0.0),
-            "corner_BR": (1.0, 0.0),
-            "corner_TL": (0.0, 1.0),
-            "corner_TR": (1.0, 1.0),
-            "side_B": (0.5, 0.0),
-            "side_T": (0.5, 1.0)
-        }
-
-    # Playfield (nose-to-nose) + overall (full cabinet) sizes
-    PRESET_TABLES: ClassVar[List[TableSpec]] = [
-    TableSpec("7ft (bar box)",
-        playfield_mm=(1930, 965, 785),
-        overall_mm=(2133, 1120),
-        notes="Common 7ft bar table"),
-    TableSpec("8ft (home)",
-        playfield_mm=(2235, 1118, 785),
-        overall_mm=(2438, 1219),
-        notes="Typical 8ft home table"),
-    TableSpec("8.5ft (pro-8)",
-        playfield_mm=(2340, 1170, 785),
-        overall_mm=(2543, 1272),
-        notes="Pro-8, no standard cabinet ref"),
-    TableSpec("9ft (tournament)",
-        playfield_mm=(2540, 1270, 785),
-        overall_mm=(2743, 1372),
-        notes="WPA tournament size"),
-    TableSpec("10ft (snooker)",
-        playfield_mm=(2845, 1422, 785),
-        overall_mm=(3048, 1524),
-        notes="10ft snooker/billiards"),
+    PRESET_TABLES = [
+        TableSpec("7ft (bar box)", (1930.0, 965.0, 785.0), (2133.0, 1120.0), None, 820.0, 820.0, "Common 7ft bar table"),
+        TableSpec("8ft (home)", (2235.0, 1118.0, 785.0), (2438.0, 1219.0), None, 820.0, 820.0, "Typical 8ft home table"),
+        TableSpec("8.5ft (pro-8)", (2340.0, 1170.0, 785.0), (2543.0, 1272.0), None, 820.0, 820.0, "Pro-8, no standard cabinet ref"),
+        TableSpec("9ft (tournament)", (2540.0, 1270.0, 785.0), (2743.0, 1372.0), None, 820.0, 820.0, "WPA tournament size"),
+        TableSpec("10ft (snooker)", (2845.0, 1422.0, 785.0), (3048.0, 1524.0), None, 820.0, 820.0, "10ft snooker/billiards"),
     ]
 
-    PRESET_POCKETS: ClassVar[List[tuple[str, PocketSpec]]] = [
-    ("Pool (typical relaxed)", PocketSpec(120, 135, corner_jaw_diameter_mm=36, side_jaw_diameters_mm=40)),
-    ("Pool (tighter)",         PocketSpec(110, 125, corner_jaw_diameter_mm=24, side_jaw_diameters_mm=28)),
-    ("Chinese 8-ball (tight)", PocketSpec(105, 120, corner_jaw_diameter_mm=20, side_jaw_diameters_mm=24)),
+    PRESET_POCKETS = [
+        ("Pool (typical relaxed)", PocketSpec(120, 135, corner_jaw_diameter_mm=36, side_jaw_diameters_mm=40)),
+        ("Pool (tighter)", PocketSpec(110, 125, corner_jaw_diameter_mm=24, side_jaw_diameters_mm=28)),
+        ("Chinese 8-ball (tight)", PocketSpec(105, 120, corner_jaw_diameter_mm=20, side_jaw_diameters_mm=24)),
     ]
 
-    PRESET_CLOTHS: ClassVar[Dict[str, Tuple[Tuple[int,int,int], Tuple[int,int,int]]]] = {
-    "Green cloth":       ((35, 40, 40),  (85, 255, 255)),
-    "Blue (tournament)": ((95, 60, 40),  (135,255,255)),
-    "Snooker green":     ((40, 60, 40),  (80, 255, 255)),
-    "Grey cloth":        ((0,  0, 40),   (180, 60, 220)),
-    }
+    def __init__(self, environment_json_path: str | Path | None = None):
+        self.environment_json_path = ensure_directory(environment_json_path or self.ENVIRONMENT_JSON_PATH)
+        self._loaded_json_configuration_name = ""
 
-    # HSV formats -> OpenCV has hue value from 1° to 180° 
-    # https://stackoverflow.com/questions/16685707/why-is-the-range-of-hue-0-180-in-opencv
-    # https://docs.wpilib.org/en/stable/docs/software/vision-processing/wpilibpi/image-thresholding.html
+    def get_json_name_for_unity(self) -> str:
+        return self._loaded_json_configuration_name
 
+    def _path(self, config_name: str) -> Path:
+        return self.environment_json_path / config_name
 
-    # Build an ordered list for UI selection
-    CLOTH_OPTIONS = [
-        ("Green cloth",       *PRESET_CLOTHS["Green cloth"]),
-        ("Blue (tournament)", *PRESET_CLOTHS["Blue (tournament)"]),
-        ("Snooker green",     *PRESET_CLOTHS["Snooker green"]),
-        ("Grey cloth",        *PRESET_CLOTHS["Grey cloth"]),
-    ]
-
-    ENVIRONMENT_JSON_PATH = "../Configuration/"
-
-    __loaded_json_configuration_name: str = ""
-
-    DEFAULT_BALLS = BallSpec(.05715,0.1795)
-
-    SCHEMA_VERSION = 3 # Bump every time when a change is made (add/rename/delete). Reset to 1 for final shippment.
-
-    def _tuple_or_none(self,x):
-        return tuple(x) if isinstance(x, (list, tuple)) else None
-
-    def table_from_json_data(self, table_data) -> TableSpec:
-        legacy_lower = self._tuple_or_none(table_data.get("cloth_lower_hsv"))
-        legacy_upper = self._tuple_or_none(table_data.get("cloth_upper_hsv"))
-
-        hsv_ranges = []
-
-        for index, range_data in enumerate(table_data.get("cloth_hsv_ranges", []) or []):
-            parsed_range = HsvRange.from_json_data(range_data, index)
-            if parsed_range is not None:
-                hsv_ranges.append(parsed_range)
-
-        if not hsv_ranges and legacy_lower is not None and legacy_upper is not None:
-            hsv_ranges.append(
-                HsvRange(
-                    name=table_data.get("cloth_profile", "legacy_hsv_range") or "legacy_hsv_range",
-                    lower=tuple(int(v) for v in legacy_lower),
-                    upper=tuple(int(v) for v in legacy_upper),
-                    enabled=True,
-                )
-            )
-
-        primary_range = hsv_ranges[0] if hsv_ranges else None
-
-        return TableSpec(
-            name=table_data.get("name", "Custom"),
-            playfield_mm=self._tuple_or_none(table_data.get("playfield_mm")),
-            overall_mm=self._tuple_or_none(table_data.get("overall_mm")),
-            notes=table_data.get("notes", ""),
-            cloth_profile=table_data.get("cloth_profile", ""),
-            cloth_lower_hsv=primary_range.lower if primary_range is not None else legacy_lower,
-            cloth_upper_hsv=primary_range.upper if primary_range is not None else legacy_upper,
-            cloth_hsv_ranges=hsv_ranges,
-        )
-
-    def _ensure_dir(self, path: str):
-        directory = os.path.dirname(path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory, exist_ok=True)
-        
-    def save_environment(self, environment_config: EnvironmentConfig, path: str) -> None:
-        self._ensure_dir(path)
-        payload = {
-            "_schema_version": self.SCHEMA_VERSION,
-            "table": asdict(environment_config.table),
-            "pockets": asdict(environment_config.pockets),
-            "ball_spec": asdict(environment_config.ball_spec),
-            "camera": asdict(environment_config.camera)
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+    def save_environment(self, environment_config: EnvironmentConfig, config_name_or_path: str | Path) -> EnvironmentConfig:
+        path = Path(config_name_or_path)
+        if not path.is_absolute() and path.parent == Path("."):
+            path = self._path(str(config_name_or_path))
+        save_json(path, environment_config.to_json_data())
+        self._loaded_json_configuration_name = path.name
         return environment_config
-    
-    def load_last_environment(self, path: str) -> Optional[EnvironmentConfig]:
-        # Sharable data between project modules (for testing and other purposes..., but also to make the setup faster)
-        if not os.path.exists(path):
+
+    def load_environment(self, config_name: str = "last_environment.json") -> Optional[EnvironmentConfig]:
+        path = self._path(config_name)
+        if not path.exists():
             return None
 
-        data = None
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-   
-        schema = data.get("_schema_version", 1)
-        # Table
-        table = self.table_from_json_data(data.get("table", {}))
-        
-        # Original environments objects
-        pockets = PocketSpec(**data["pockets"])
-        ball    = BallSpec(**data["ball_spec"])
-        camera  = CameraSpec(**data["camera"])
-        
-        env = EnvironmentConfig(table, pockets, ball, camera)
-        # Auto upgrade schema
-        if schema < self.SCHEMA_VERSION:
-            try:
-                self.save_environment(env, path)
-            except Exception:
-                pass
-            
-        return env
+        data = load_json(path)
+        environment = EnvironmentConfig.from_json_data(data)
+        self._loaded_json_configuration_name = config_name
 
-    def _print_table_menu(self):
-        print("\n Select TABLE size:")
-        for index, specification in enumerate(self.PRESET_TABLES, start = 1):
-            play_field = f"{specification.playfield_mm[0]}×{specification.playfield_mm[1]} mm"
-            ov = f" / overall {specification.overall_mm[0]}×{specification.overall_mm[1]} mm" if specification.overall_mm else ""
-            print(f" {index}. {specification.name} - playfield {play_field}{ov} ({specification.notes})")
-        print(" c. Custom (enter manually)")
+        schema = int(data.get("_schema_version", 1))
+        if schema < EnvironmentConfig.SCHEMA_VERSION:
+            self.save_environment(environment, config_name)
 
-    def _print_cloth_menu(self):
-        print("\nSelect TABLE CLOTH color profile:")
-        for idx, (name, lower, upper) in enumerate(self.CLOTH_OPTIONS, start=1):
-            print(f"  {idx}. {name} — lower {lower}, upper {upper}")
-        print("  c. Custom (enter HSV ranges manually)")
+        return environment
 
-    def _print_pocket_menu(self):
-        print("\nSelect POCKET profile:")
-        for idx, (name, p) in enumerate(self.PRESET_POCKETS, start=1):
-            cj = f"{p.corner_jaw_diameter_mm} mm" if p.corner_jaw_diameter_mm is not None else "—"
-            sj = f"{p.side_jaw_diameters_mm} mm" if p.side_jaw_diameters_mm is not None else "—"
-            print(f"  {idx}. {name} — mouth: corner {p.corner_pocket_diameter_mm} mm / side {p.side_pocket_diameter_mm} mm; "
-                f"jaw radius: corner {cj} / side {sj}")
-        print("  c. Custom (enter manually)")
-
-    def _read_choice(self, valid_choices: List[str]) -> str:
-        while True:
-            choice = input("> ").strip().lower()
-            if choice in valid_choices:
-                return choice
-            print(f"Please choose one of {valid_choices}.")
-
-    def _read_int(self, prompt: str, min_v: int, max_v: int, default: Optional[int]=None) -> int:
-        while True:
-            raw = input(f"{prompt} [{min_v}..{max_v}]{' (default '+str(default)+')' if default else ''}: ").strip()
-            if not raw and default is not None:
-                return default
-            try: 
-                val = int(float(raw)) 
-                if min_v <= val <= max_v:
-                    return val
-            except ValueError:
-                pass
-            print("Invalid value")
-        
-    def _read_optional_int(self, prompt: str, min_v: int, max_v: int, default: Optional[int] = None) -> Optional[int]:
-        """
-        Like _read_int but allows empty input to keep 'None' (no jaw radius modeled).
-        If a default is provided, hitting Enter returns that default instead of None.
-        """
-        while True:
-            raw = input(
-                f"{prompt} [{min_v}..{max_v}]"
-                + (f" (default {default})" if default is not None else " (Enter for none)")
-                + ": "
-            ).strip()
-            if raw == "":
-                return default  # may be None
-            try:
-                val = int(float(raw))
-                if min_v <= val <= max_v:
-                    return val
-            except ValueError:
-                pass
-            print("Invalid value.")
-
-    def _read_float(self, prompt: str, min_v: float, max_v: float, default: Optional[float]=None) -> float:
-        while True:
-            raw = input(f"{prompt} [{min_v}..{max_v}]{' (default '+str(default)+')' if default else ''}: ").strip()
-            if not raw and default is not None:
-                return default
-            try:
-                val = float(raw)
-                if min_v <= val <= max_v:
-                    return val
-            except ValueError:
-                pass
-            print("Invalid value.")
-
-    def _is_environment_payload(self, data: dict) -> bool:
-        if not isinstance(data, dict):
-            return False
-
-        required_root_keys = {"table", "pockets", "ball_spec", "camera"}
-        if not required_root_keys.issubset(data.keys()):
-            return False
-
-        table = data.get("table")
-        pockets = data.get("pockets")
-        ball_spec = data.get("ball_spec")
-        camera = data.get("camera")
-
-        if not all(isinstance(item, dict) for item in [table, pockets, ball_spec, camera]):
-            return False
-
-        return (
-            "playfield_mm" in table
-            and "diameter_m" in ball_spec
-            and "height_from_floor_m" in camera
-        )
-    
-    def list_environment_configs(self, directory: Optional[str] = None) -> List[dict]:
-        target_directory = directory or self.ENVIRONMENT_JSON_PATH
-
-        if not os.path.isdir(target_directory):
+    def list_environment_configs(self) -> list[dict[str, object]]:
+        if not self.environment_json_path.exists():
             return []
 
-        environments = []
-
-        for file_name in sorted(os.listdir(target_directory)):
-            full_path = os.path.join(target_directory, file_name)
-
-            if not os.path.isfile(full_path) or not file_name.lower().endswith(".json"):
-                continue
-
+        environments: list[dict[str, object]] = []
+        for path in sorted(self.environment_json_path.glob("*.json"), key=lambda item: item.name.lower()):
             try:
-                with open(full_path, "r", encoding="utf-8") as file:
-                    data = json.load(file)
-
+                data = load_json(path)
                 if not self._is_environment_payload(data):
                     continue
-
-                table = data.get("table", {})
-                playfield_mm = table.get("playfield_mm") or []
-
-                environments.append({
-                    "file_name": file_name,
-                    "table_name": table.get("name", "Unknown"),
-                    "playfield_mm": tuple(playfield_mm) if isinstance(playfield_mm, (list, tuple)) else (),
-                    "cloth_profile": table.get("cloth_profile", ""),
-                })
+                table = data.get("table", {}) or {}
+                environments.append(
+                    {
+                        "file_name": path.name,
+                        "table_name": table.get("name", "Unknown"),
+                        "playfield_mm": tuple(table.get("playfield_mm", ())),
+                        "fiducial_sets": tuple((data.get("fiducials", {}) or {}).get("sets", {}).keys()),
+                    }
+                )
             except Exception:
                 continue
-
         return environments
 
     def choose_environment_config_interactive(self, default_config_name: Optional[str] = None) -> Optional[str]:
         environments = self.list_environment_configs()
-
         if not environments:
             print("\nNo valid environment configuration files were found. Falling back to interactive setup.")
             return None
 
         print("\nSelect ENVIRONMENT configuration to load:")
-
         for index, environment in enumerate(environments, start=1):
-            playfield_mm = environment["playfield_mm"]
+            playfield = environment.get("playfield_mm", ())
             playfield_text = (
-                f"{int(playfield_mm[0])}x{int(playfield_mm[1])}x{int(playfield_mm[2])} mm"
-                if len(playfield_mm) == 3 else
-                "unknown playfield"
+                f"{int(playfield[0])}x{int(playfield[1])}x{int(playfield[2])} mm"
+                if isinstance(playfield, tuple) and len(playfield) == 3 else "unknown playfield"
             )
-            cloth_text = f" | cloth {environment['cloth_profile']}" if environment["cloth_profile"] else ""
+            fiducial_sets = ",".join(environment.get("fiducial_sets", ())) or "none"
             default_text = " [default]" if environment["file_name"] == default_config_name else ""
+            print(f"  {index}. {environment['file_name']} | {environment['table_name']} | {playfield_text} | fiducials: {fiducial_sets}{default_text}")
 
-            print(
-                f"  {index}. {environment['file_name']} | "
-                f"{environment['table_name']} | "
-                f"{playfield_text}{cloth_text}{default_text}"
-            )
-
-        print("  n. Create or overwrite the current config interactively")
+        print("  n. Create or overwrite current config interactively")
         if default_config_name:
             print("  Enter. Load default")
 
-        valid_indices = [str(i) for i in range(1, len(environments) + 1)]
-
+        valid_indices = [str(index) for index in range(1, len(environments) + 1)]
         while True:
             choice = input("> ").strip().lower()
-
-            if choice == "" and default_config_name and any(
-                environment["file_name"] == default_config_name for environment in environments
-            ):
+            if choice == "" and default_config_name and any(environment["file_name"] == default_config_name for environment in environments):
                 return default_config_name
-
             if choice == "n":
                 return None
-
             if choice in valid_indices:
-                return environments[int(choice) - 1]["file_name"]
-
+                return str(environments[int(choice) - 1]["file_name"])
             print("Invalid choice.")
-    
-
-    def set_up_table(
-        self,
-        preset_index: int | None = None,
-        custom_playfield_mm: tuple[int, int] | None = None,
-        custom_overall_mm: tuple[int, int] | None = None
-    ) -> TableSpec:
-        from dataclasses import replace
-
-        # Fast paths (non-interactive)
-        if preset_index is not None:
-            # return a COPY, never mutate the preset entry
-            return replace(self.PRESET_TABLES[preset_index - 1])
-
-        if custom_playfield_mm is not None:
-            return TableSpec(
-                name="Custom",
-                playfield_mm=custom_playfield_mm,
-                overall_mm=custom_overall_mm,
-                notes="User-defined",
-            )
-            
-        # Interactive way
-        self._print_table_menu()
-        choice = self._read_choice([str(i) for i in range(1, len(self.PRESET_TABLES)+1)] + ["c"])
-        if choice == "c":
-            user_defined_str = "User-defined"
-            Lpf = self._read_int("Playfield length (mm)", 1500, 3200, 2540)
-            Wpf = self._read_int("Playfield width (mm)", 700, 1800, 1270)
-            Hpf = self._read_float("Playfield height from floor (mm)", 600, 1500, 785)
-            use_overall = input("Do you know overall cabinet size? (y/n): ").strip().lower()
-            overall = None
-            
-            if use_overall == "y":
-                Lov = self._read_int("Overall length (mm)", 2000, 3300, None)
-                Wov = self._read_int("Overall width (mm)", 1000, 1800, None)
-                overall = (Lov, Wov)
-                return TableSpec("Custom", (Lpf, Wpf, Hpf), overall, user_defined_str)
-            return TableSpec("Custom", (Lpf, Wpf, Hpf), overall, user_defined_str)
-        else:
-            return replace(self.PRESET_TABLES[int(choice) - 1])
-    
-    def set_up_hsv(self, table: TableSpec) -> TableSpec:
-        self._print_cloth_menu()
-        choice = self._read_choice([str(i) for i in range(1, len(self.CLOTH_OPTIONS) + 1)] + ["c"])
-
-        if choice == "c":
-            print("Enter custom HSV lower bound (H,S,V):")
-            h_low = self._read_int("Hue min", 0, 179)
-            s_low = self._read_int("Sat min", 0, 255)
-            v_low = self._read_int("Val min", 0, 255)
-
-            print("Enter custom HSV upper bound (H,S,V):")
-            h_up = self._read_int("Hue max", 0, 179)
-            s_up = self._read_int("Sat max", 0, 255)
-            v_up = self._read_int("Val max", 0, 255)
-
-            hsv_range = HsvRange(
-                name="Custom",
-                lower=(h_low, s_low, v_low),
-                upper=(h_up, s_up, v_up),
-                enabled=True,
-            )
-
-            table.cloth_profile = "Custom"
-            table.cloth_lower_hsv = hsv_range.lower
-            table.cloth_upper_hsv = hsv_range.upper
-            table.cloth_hsv_ranges = [hsv_range]
-            return table
-
-        name, lower, upper = self.CLOTH_OPTIONS[int(choice) - 1]
-
-        hsv_range = HsvRange(
-            name=name,
-            lower=lower,
-            upper=upper,
-            enabled=True,
-        )
-
-        table.cloth_profile = name
-        table.cloth_lower_hsv = hsv_range.lower
-        table.cloth_upper_hsv = hsv_range.upper
-        table.cloth_hsv_ranges = [hsv_range]
-        return table
-
-    def set_up_pockets(self):
-        self._print_pocket_menu()
-        choice = self._read_choice([str(i) for i in range(1, len(self.PRESET_POCKETS)+1)] + ["c"])
-        corner_jaw_text = "Corner jaw diameter (mm)"
-        side_jaw_text = "Side jaw diameter (mm)"
-        if choice == "c":
-            corner = self._read_int("Corner pocket mouth (mm)", 95, 160, 120)
-            side   = self._read_int("Side pocket mouth (mm)",   105, 180, 135)
-            corner_jaw = self._read_optional_int(corner_jaw_text, 10, 200, 70)
-            side_jaw   = self._read_optional_int(side_jaw_text,   10, 200, 70)
-            return PocketSpec(
-                corner_pocket_diameter_mm=corner,
-                side_pocket_diameter_mm=side,
-                corner_jaw_diameter_mm=corner_jaw,
-                side_jaw_diameters_mm=side_jaw,
-            )
-        _, preset =self.PRESET_POCKETS[int(choice) - 1]
-        
-        override = input("Override jaw radii? (y/N): ").strip().lower() == "y"
-        if override:
-            return PocketSpec(
-                corner_pocket_diameter_mm = preset.corner_pocket_diameter_mm,
-                side_pocket_diameter_mm = preset.side_pocket_diameter_mm,
-                corner_jaw_diameter_mm = self._read_optional_int(
-                    corner_jaw_text,
-                    10, 
-                    80,
-                    default=preset.corner_jaw_diameter_mm
-                ),
-                side_jaw_diameters_mm = self._read_optional_int(
-                    side_jaw_text,
-                    10, 
-                    80,
-                    default=preset.side_jaw_diameters_mm
-                ),
-            )
-        
-        return preset
-    
-    
-    
-    def set_up_camera_height_mm(self):
-        print("\nEnter camera height from FLOOR (mm), typical 2–3 m:") # The camera sensor is assumed to be on the XY center of the table. Only Z is in question.
-        return self._read_float("Camera height (mm)", 1000, 4000, 2500)
-
-    def get_debug_env_config(self, config_name: str) -> EnvironmentConfig:
-        return self.get_environment_config(False, True, config_name, True)
-    
-    def get_json_name_for_unity(self):
-        if self.__loaded_json_configuration_name is None or self.__loaded_json_configuration_name == "":
-            self.get_environment_config()
-        return self.__loaded_json_configuration_name
 
     def get_environment_config(
         self,
         interactive: bool = True,
         use_last_known: bool = True,
         config_name: str = "last_environment.json",
-        debug: bool = False
+        debug: bool = False,
     ) -> EnvironmentConfig:
-
-        env = None
-
-        if (config_name is None or len(config_name) == 0) and debug:
-            print("No debug config specified. Using last known environment.")
-            return self.get_environment_config(
-                interactive=interactive,
-                use_last_known=use_last_known,
-                config_name="last_environment.json",
-                debug=False
-            )
-
         if interactive:
-            chosen_config_name = self.choose_environment_config_interactive(
-                default_config_name=config_name if use_last_known else None
-            )
-            if chosen_config_name is not None:
-                config_name = chosen_config_name
+            chosen = self.choose_environment_config_interactive(config_name if use_last_known else None)
+            if chosen is not None:
+                config_name = chosen
                 use_last_known = True
 
-        cache_path = os.path.join(self.ENVIRONMENT_JSON_PATH, config_name)
-        self.__loaded_json_configuration_name = config_name
-
         if use_last_known:
-            env = self.load_last_environment(cache_path)
+            environment = self.load_environment(config_name)
+            if environment is not None:
+                return environment
 
-            if env is not None:
-                env._EnvironmentConfig__loaded_json_configuration_name = config_name
+        environment = self.create_environment_interactive() if interactive else self.default_environment()
+        return self.save_environment(environment, config_name)
 
-            if debug:
-                return env
-
-            if env is not None:
-                needs_cloth = len(env.table.get_cloth_hsv_bounds()) == 0
-                if interactive and needs_cloth:
-                    env.table = self.set_up_hsv(env.table)
-                    self.save_environment(env, cache_path)
-                    env._EnvironmentConfig__loaded_json_configuration_name = config_name
-                    return env
-
-        if env is not None:
-            return env
-
-        if interactive:
-            table = self.set_up_table()
-            table = self.set_up_hsv(table)
-            pockets = self.set_up_pockets()
-            camera_height_mm = self.set_up_camera_height_mm()
-        else:
-            from dataclasses import replace
-
-            table = replace(self.PRESET_TABLES[3])
-            low, up = self.PRESET_CLOTHS["Grey cloth"]
-            table.cloth_profile = "Grey cloth"
-            table.cloth_lower_hsv = low
-            table.cloth_upper_hsv = up
-
-            pockets = self.PRESET_POCKETS[0][1]
-            camera_height_mm = 2500
-
-        camera_height_m = camera_height_mm / 1000
-
-        env = EnvironmentConfig(
-            table,
-            pockets,
-            self.DEFAULT_BALLS,
-            CameraSpec(camera_height_m)
+    def default_environment(self) -> EnvironmentConfig:
+        table = TableSpec(
+            name="Custom",
+            playfield_mm=(2445.0, 1225.0, 810.0),
+            overall_mm=(2730.0, 1510.0),
+            overall_height_mm=845.0,
+            rail_top_height_mm=845.0,
+            marker_plane_height_mm=845.0,
+            notes="User-defined",
+        )
+        return EnvironmentConfig(
+            table=table,
+            pockets=PocketSpec(125, 105, corner_jaw_diameter_mm=114, side_jaw_diameters_mm=100),
+            ball_spec=self.DEFAULT_BALLS,
+            camera=CameraSpec(2.735),
+            fiducials=self.build_default_fiducials(table),
         )
 
-        self.save_environment(env, cache_path)
-        env._EnvironmentConfig__loaded_json_configuration_name = config_name
-        return env
+    def create_environment_interactive(self) -> EnvironmentConfig:
+        table = self.set_up_table()
+        pockets = self.set_up_pockets()
+        camera_height_mm = self.set_up_camera_height_mm()
+        return EnvironmentConfig(
+            table=table,
+            pockets=pockets,
+            ball_spec=self.DEFAULT_BALLS,
+            camera=CameraSpec(camera_height_mm / 1000.0),
+            fiducials=self.build_default_fiducials(table),
+        )
+
+    def set_up_table(self) -> TableSpec:
+        print("\nSelect TABLE size:")
+        for index, specification in enumerate(self.PRESET_TABLES, start=1):
+            playfield = f"{int(specification.playfield_mm[0])}x{int(specification.playfield_mm[1])} mm"
+            overall = f" / overall {int(specification.overall_mm[0])}x{int(specification.overall_mm[1])} mm" if specification.overall_mm else ""
+            print(f" {index}. {specification.name} - playfield {playfield}{overall} ({specification.notes})")
+        print(" c. Custom")
+
+        valid_choices = [str(index) for index in range(1, len(self.PRESET_TABLES) + 1)] + ["c"]
+        choice = read_choice(">", valid_choices)
+        if choice != "c":
+            table = replace(self.PRESET_TABLES[int(choice) - 1])
+            table.rail_top_height_mm = read_optional_float("Rail/top-edge height from floor (mm)", 600.0, 1500.0, table.playfield_height_mm() + 35.0)
+            table.marker_plane_height_mm = read_optional_float("Marker plane height from floor (mm)", 600.0, 1500.0, table.rail_top_height_mm)
+            table.overall_height_mm = table.rail_top_height_mm
+            return table
+
+        length = read_float("Playfield length (mm)", 1500.0, 3200.0, 2445.0)
+        width = read_float("Playfield width (mm)", 700.0, 1800.0, 1225.0)
+        height = read_float("Playfield height from floor (mm)", 600.0, 1500.0, 810.0)
+        overall = None
+        if read_bool("Do you know overall cabinet length/width?", True):
+            overall_length = read_float("Overall length (mm)", 1800.0, 3500.0, 2730.0)
+            overall_width = read_float("Overall width (mm)", 900.0, 2000.0, 1510.0)
+            overall = (overall_length, overall_width)
+        rail_top_height = read_optional_float("Rail/top-edge height from floor (mm)", 600.0, 1500.0, height + 35.0)
+        marker_plane_height = read_optional_float("Marker plane height from floor (mm)", 600.0, 1500.0, rail_top_height)
+        return TableSpec(
+            name="Custom",
+            playfield_mm=(length, width, height),
+            overall_mm=overall,
+            overall_height_mm=rail_top_height,
+            rail_top_height_mm=rail_top_height,
+            marker_plane_height_mm=marker_plane_height,
+            notes="User-defined",
+        )
+
+    def set_up_pockets(self) -> PocketSpec:
+        print("\nSelect POCKET profile:")
+        for index, (name, pocket) in enumerate(self.PRESET_POCKETS, start=1):
+            print(f"  {index}. {name} - corner {pocket.corner_pocket_diameter_mm} mm / side {pocket.side_pocket_diameter_mm} mm")
+        print("  c. Custom")
+        valid_choices = [str(index) for index in range(1, len(self.PRESET_POCKETS) + 1)] + ["c"]
+        choice = read_choice(">", valid_choices)
+        if choice != "c":
+            return replace(self.PRESET_POCKETS[int(choice) - 1][1])
+        return PocketSpec(
+            corner_pocket_diameter_mm=read_int("Corner pocket mouth (mm)", 95, 160, 125),
+            side_pocket_diameter_mm=read_int("Side pocket mouth (mm)", 105, 180, 105),
+            corner_jaw_diameter_mm=read_optional_int("Corner jaw diameter (mm)", 10, 200, 114),
+            side_jaw_diameters_mm=read_optional_int("Side jaw diameter (mm)", 10, 200, 100),
+        )
+
+    def set_up_camera_height_mm(self) -> float:
+        print("\nEnter camera height from FLOOR (mm), typical 2-3 m:")
+        return read_float("Camera height (mm)", 1000.0, 4000.0, 2735.0)
+
+    def build_default_fiducials(self, table: TableSpec) -> FiducialConfig:
+        length = table.playfield_length_mm()
+        width = table.playfield_width_mm()
+        rail_x, rail_y = table.rail_center_offsets_mm()
+        marker_z = table.effective_marker_plane_height_mm()
+
+        # Conservative table-edge positions. These avoid pocket openings and keep enough spread for pose estimation.
+        aruco_positions = [
+            (0, (350.0, -rail_y, marker_z), "bottom-left long rail"),
+            (1, (length - 350.0, -rail_y, marker_z), "bottom-right long rail"),
+            (2, (350.0, width + rail_y, marker_z), "top-left long rail"),
+            (3, (length - 350.0, width + rail_y, marker_z), "top-right long rail"),
+            (4, (-rail_x, 250.0, marker_z), "left-lower short rail"),
+            (5, (-rail_x, width - 250.0, marker_z), "left-upper short rail"),
+            (6, (length + rail_x, 250.0, marker_z), "right-lower short rail"),
+            (7, (length + rail_x, width - 250.0, marker_z), "right-upper short rail"),
+        ]
+
+        qr_positions = [
+            (0, (650.0, -rail_y, marker_z), "bottom-left long rail QR"),
+            (1, (length - 650.0, -rail_y, marker_z), "bottom-right long rail QR"),
+            (2, (650.0, width + rail_y, marker_z), "top-left long rail QR"),
+            (3, (length - 650.0, width + rail_y, marker_z), "top-right long rail QR"),
+            (4, (-rail_x, 500.0, marker_z), "left-lower short rail QR"),
+            (5, (-rail_x, width - 500.0, marker_z), "left-upper short rail QR"),
+            (6, (length + rail_x, 500.0, marker_z), "right-lower short rail QR"),
+            (7, (length + rail_x, width - 500.0, marker_z), "right-upper short rail QR"),
+        ]
+
+        aruco_set = FiducialSetSpec(
+            marker_type="aruco",
+            dictionary_name="DICT_4X4_50",
+            marker_size_mm=130.0,
+            white_margin_mm=30.0,
+            cutout_size_mm=190.0,
+            corner_order="TL_TR_BR_BL",
+            markers=[
+                FiducialMarkerSpec(id=marker_id, center_mm=center, rotation_deg=0.0, label=label)
+                for marker_id, center, label in aruco_positions
+            ],
+        )
+
+        qr_set = FiducialSetSpec(
+            marker_type="qr",
+            payload_prefix="ARPOOL_QR_",
+            marker_size_mm=130.0,
+            white_margin_mm=30.0,
+            cutout_size_mm=190.0,
+            corner_order="TL_TR_BR_BL",
+            markers=[
+                FiducialMarkerSpec(id=marker_id, center_mm=center, rotation_deg=0.0, label=label, payload=f"ARPOOL_QR_{marker_id:02}")
+                for marker_id, center, label in qr_positions
+            ],
+        )
+
+        return FiducialConfig(
+            coordinate_system="origin_inner_bottom_left_x_length_y_width_z_floor_mm",
+            sets={"aruco": aruco_set, "qr": qr_set},
+        )
+
+    @staticmethod
+    def _is_environment_payload(data: dict) -> bool:
+        if not isinstance(data, dict):
+            return False
+        required = {"table", "pockets", "ball_spec", "camera"}
+        return required.issubset(data.keys())
