@@ -1,6 +1,4 @@
-﻿// Attach to: GameObject that owns the TCP input pipeline in the receiving Unity scene.
-
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -68,6 +66,10 @@ public class UsbSocketReceiver : MonoBehaviour
         if (svc == null || _questSessionSvc == null)
             return;
 
+#if UNITY_EDITOR
+        HandleIssue84OverrideRegressionRepeat();
+#endif
+
         byte processedThisFrame = 0;
         while (processedThisFrame < MaxBlocksPerFrame && _blocks.TryDequeue(out string block))
         {
@@ -82,7 +84,6 @@ public class UsbSocketReceiver : MonoBehaviour
 
             processedThisFrame++;
         }
-
     }
 
     public void StartServer()
@@ -133,12 +134,13 @@ public class UsbSocketReceiver : MonoBehaviour
 
     private void EnsureQuestSessionSvc()
     {
-        if (_questSessionSvc != null) return;
+        if (_questSessionSvc != null)
+            return;
+
         _questSessionSvc = QuestSessionService.Instance;
         if (_questSessionSvc == null)
             Debug.LogWarning("[UsbSocketReceiver] '_questSessionSvc' is not assigned.");
     }
-
 
     private void AcceptLoop()
     {
@@ -177,7 +179,7 @@ public class UsbSocketReceiver : MonoBehaviour
                 }
                 catch
                 {
-                    // UPDATED: keep socket setup resilient on Android / Quest runtime.
+                    // Some Android / Quest runtime socket implementations may reject KeepAlive configuration.
                 }
 
                 if (VerboseLogs)
@@ -308,7 +310,7 @@ public class UsbSocketReceiver : MonoBehaviour
 
         List<DetectedPocketSnapshot2D> parsedPocketSnapshot = null;
         List<DetectedBallSnapshot2D> parsedBallSnapshot2D = null;
-        List<QuestPeerRuntimeState> parsedQuestPeerSnapshot = null; // UPDATED: q token snapshot.
+        List<QuestPeerRuntimeState> parsedQuestPeerSnapshot = null;
         bool hasParsedCueStickSnapshot = false;
         DetectedCueStickSnapshot2D parsedCueStickSnapshot = default;
 
@@ -324,10 +326,10 @@ public class UsbSocketReceiver : MonoBehaviour
                 ReadOnlySpan<char> token = separator > 0 ? line[..separator] : line;
                 ReadOnlySpan<char> body = separator > 0 ? line[(separator + 1)..] : ReadOnlySpan<char>.Empty;
 
-                if (BallTypeWire.TryParseToken(token, out BallType ballType))
+                if (token.SequenceEqual("b"))
                 {
                     parsedBallSnapshot2D ??= new List<DetectedBallSnapshot2D>(svc.MAX_BALL_COUNT);
-                    ParseBalls(line, ballType, parsedBallSnapshot2D);
+                    ParseAggregateBalls(body, parsedBallSnapshot2D);
                 }
                 else if (token.SequenceEqual("q"))
                 {
@@ -340,7 +342,7 @@ public class UsbSocketReceiver : MonoBehaviour
                             Debug.Log(
                                 "[USB] Parsed quest peer snapshot: " +
                                 $"{parsedQuestPeerSnapshot.Count} peer(s), " +
-                                $"authoritative=" +
+                                "authoritative=" +
                                 $"{parsedQuestPeerSnapshot.Find(p => p.Role == DeviceInformation.PrimaryQuest)?.IpAddress ?? "<none>"}");
                         }
                     }
@@ -415,7 +417,7 @@ public class UsbSocketReceiver : MonoBehaviour
                         cachedPocketsXZ ??= new (float x, float z)[svc.MAX_POCKET_COUNT];
                         Array.Copy(parsedPockets, cachedPocketsXZ, svc.MAX_POCKET_COUNT);
 
-                        svc.SetRawDetectedPocketXZ(parsedPockets); // UPDATED: raw Python pocket cache always stays available.
+                        svc.SetRawDetectedPocketXZ(parsedPockets);
 
                         parsedPocketSnapshot = new List<DetectedPocketSnapshot2D>(svc.MAX_POCKET_COUNT);
                         for (byte i = 0; i < svc.MAX_POCKET_COUNT; i++)
@@ -456,6 +458,10 @@ public class UsbSocketReceiver : MonoBehaviour
                         Debug.LogWarning($"[USB] Ignored malformed cue stick line: '{line.ToString()}'");
                     }
                 }
+                else if (VerboseLogs)
+                {
+                    Debug.LogWarning($"[USB] Ignored unsupported wire token '{token.ToString()}'.");
+                }
             }
 
             if (newLine < 0)
@@ -469,7 +475,7 @@ public class UsbSocketReceiver : MonoBehaviour
         {
             if (_questSessionSvc != null)
             {
-                _questSessionSvc.ApplyPeerSnapshot(parsedQuestPeerSnapshot); // UPDATED: q token is stored outside TableService.
+                _questSessionSvc.ApplyPeerSnapshot(parsedQuestPeerSnapshot);
             }
             else
             {
@@ -538,7 +544,7 @@ public class UsbSocketReceiver : MonoBehaviour
             return false;
 
         List<QuestPeerRuntimeState> provisionalPeers = new(4);
-        float now = Time.unscaledTime; // UPDATED: session liveness timestamp for q snapshot.
+        float now = Time.unscaledTime;
 
         while (!remaining.IsEmpty)
         {
@@ -570,7 +576,6 @@ public class UsbSocketReceiver : MonoBehaviour
         parsedQuestPeers = provisionalPeers;
         return true;
     }
-
 
     private static bool TryParseQuestPeerRole(ReadOnlySpan<char> raw, out DeviceInformation role)
     {
@@ -691,13 +696,9 @@ public class UsbSocketReceiver : MonoBehaviour
         return applied;
     }
 
-    private void ParseBalls(ReadOnlySpan<char> line, BallType ballType, List<DetectedBallSnapshot2D> targetSnapshot)
+    private void ParseAggregateBalls(ReadOnlySpan<char> body, List<DetectedBallSnapshot2D> targetSnapshot)
     {
-        int spaceIndex = line.IndexOf(' ');
-        if (spaceIndex < 0 || spaceIndex >= line.Length - 1)
-            return;
-
-        ReadOnlySpan<char> data = line[(spaceIndex + 1)..].Trim();
+        ReadOnlySpan<char> data = body.Trim();
         if (data.IsEmpty)
             return;
 
@@ -710,10 +711,10 @@ public class UsbSocketReceiver : MonoBehaviour
                 continue;
 
             string[] parts = entry.Split(',', StringSplitOptions.None);
-            if (parts.Length < 6)
+            if (parts.Length < 4)
             {
                 if (VerboseLogs)
-                    Debug.LogWarning($"[USB] Skipping malformed ball entry (expected 6 fields): '{entry}'");
+                    Debug.LogWarning($"[USB] Skipping malformed aggregate ball entry (expected at least 4 fields): '{entry}'");
 
                 continue;
             }
@@ -722,23 +723,38 @@ public class UsbSocketReceiver : MonoBehaviour
                 !TryParseFlexibleFloat(parts[1], out float y))
             {
                 if (VerboseLogs)
-                    Debug.LogWarning($"[USB] Skipping ball entry due to invalid position: '{entry}'");
+                    Debug.LogWarning($"[USB] Skipping aggregate ball entry due to invalid position: '{entry}'");
 
                 continue;
             }
 
-            byte rawIncomingId = TryParseRawIncomingId(parts[2], (byte)ballType);
+            ReadOnlySpan<char> typeToken = parts[2].Trim().AsSpan();
+            if (!BallTypeWire.TryParseToken(typeToken, out BallType ballType))
+            {
+                if (VerboseLogs)
+                    Debug.LogWarning($"[USB] Skipping aggregate ball entry due to invalid type token: '{entry}'");
+
+                continue;
+            }
 
             if (!TryParseFlexibleFloat(parts[3], out float conf))
             {
                 if (VerboseLogs)
-                    Debug.LogWarning($"[USB] Skipping ball entry due to invalid confidence: '{entry}'");
+                    Debug.LogWarning($"[USB] Skipping aggregate ball entry due to invalid confidence: '{entry}'");
 
                 continue;
             }
 
-            TryParseFlexibleFloat(parts[4], out float vx, 0f);
-            TryParseFlexibleFloat(parts[5], out float vy, 0f);
+            float vx = 0f;
+            float vy = 0f;
+
+            if (parts.Length >= 6)
+            {
+                TryParseFlexibleFloat(parts[4], out vx, 0f);
+                TryParseFlexibleFloat(parts[5], out vy, 0f);
+            }
+
+            byte rawIncomingId = (byte)ballType;
 
             targetSnapshot.Add(
                 new DetectedBallSnapshot2D(
@@ -748,30 +764,6 @@ public class UsbSocketReceiver : MonoBehaviour
                     conf,
                     new Vector2Float(vx, vy)));
         }
-    }
-
-    private static byte TryParseRawIncomingId(string raw, byte fallbackValue)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return fallbackValue;
-
-        string cleaned = raw.Trim();
-
-        if (cleaned == "\\" ||
-            cleaned == "/" ||
-            cleaned == "u" ||
-            cleaned == "\"\"" ||
-            cleaned == "''" ||
-            cleaned.Equals("null", StringComparison.OrdinalIgnoreCase) ||
-            cleaned.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-            cleaned.Equals("nan", StringComparison.OrdinalIgnoreCase))
-        {
-            return fallbackValue;
-        }
-
-        return byte.TryParse(cleaned, NumberStyles.Integer, CultureInfo.InvariantCulture, out byte parsedValue)
-            ? parsedValue
-            : fallbackValue;
     }
 
     private static bool TryParseCueStick(ReadOnlySpan<char> body, out DetectedCueStickSnapshot2D cueStickSnapshot)
@@ -885,10 +877,23 @@ public class UsbSocketReceiver : MonoBehaviour
         const string block =
             "E predator_9ft_virtual_debug.json\n" +
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
-            "e 1.2500000,0.6350000,8,0.97,0.00,0.00\n" +
-            "c 1.2700000,0.4000000,/,0.92,0.15,-0.10\n" +
-            "st 0.3000000,0.5000000,9,0.88,0.20,-0.05; 0.4500000,0.5200000,10,0.91,\"\",''; 0.6000000,0.5400000,11,\\,-0.10,0.00; 0.7500000,0.5600000,12,0.66,0.00,0.00; 0.9000000,0.5800000,13,0.80,0.05,0.02; 1.0500000,0.6000000,14,0.74,-0.02,0.03; 1.2000000,0.6200000,15,0.60,\\,0.00\n" +
-            "so 0.3500000,0.3000000,1,0.95,0.10,0.00; 0.5000000,0.3200000,2,0.93,-0.12,0.04; 0.6500000,0.3400000,3,\\,-0.05,\\; 0.8000000,0.3600000,4,0.85,0.00,0.00; 0.9500000,0.3800000,5,0.70,\\,\\; 1.1000000,0.4000000,6,0.78,0.03,-0.01; 1.2500000,0.4200000,7,0.82,0.01,0.02\n";
+            "b " +
+            "1.2500000,0.6350000,e,0.97,0.00,0.00; " +
+            "1.2700000,0.4000000,c,0.92,0.15,-0.10; " +
+            "0.3000000,0.5000000,st,0.88,0.20,-0.05; " +
+            "0.4500000,0.5200000,st,0.91,0.00,0.00; " +
+            "0.6000000,0.5400000,st,0.00,-0.10,0.00; " +
+            "0.7500000,0.5600000,st,0.66,0.00,0.00; " +
+            "0.9000000,0.5800000,st,0.80,0.05,0.02; " +
+            "1.0500000,0.6000000,st,0.74,-0.02,0.03; " +
+            "1.2000000,0.6200000,st,0.60,0.00,0.00; " +
+            "0.3500000,0.3000000,so,0.95,0.10,0.00; " +
+            "0.5000000,0.3200000,so,0.93,-0.12,0.04; " +
+            "0.6500000,0.3400000,so,0.00,-0.05,0.00; " +
+            "0.8000000,0.3600000,so,0.85,0.00,0.00; " +
+            "0.9500000,0.3800000,so,0.70,0.00,0.00; " +
+            "1.1000000,0.4000000,so,0.78,0.03,-0.01; " +
+            "1.2500000,0.4200000,so,0.82,0.01,0.02\n";
 
         ParseBlock(block, localPocketsXZ);
     }
@@ -936,7 +941,7 @@ public class UsbSocketReceiver : MonoBehaviour
         string block = BuildFullSessionIntegrationBlock();
 
         Debug.Log("[USB] Injecting full session integration block through the receiver queue.");
-        EnqueueBlock(block); // UPDATED: tests the same queued Update() -> ParseBlock() path as live data.
+        EnqueueBlock(block);
     }
 
     [ContextMenu("USB/Test Inject Full Session Block (over local TCP)")]
@@ -958,7 +963,7 @@ public class UsbSocketReceiver : MonoBehaviour
         }
 
         if (!_running)
-            StartServer(); // UPDATED: make the test self-contained in Editor.
+            StartServer();
 
         string block = BuildFullSessionIntegrationBlock();
 
@@ -972,6 +977,7 @@ public class UsbSocketReceiver : MonoBehaviour
             Debug.LogError($"[USB] Failed to inject full session integration block over local TCP: {ex}");
         }
     }
+
     private void SendLocalTcpPayload(string block)
     {
         using TcpClient client = new();
@@ -993,23 +999,46 @@ public class UsbSocketReceiver : MonoBehaviour
             "E last_environment.json\n" +
             "q 192.168.0.40,p;192.168.0.41,s\n" +
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
-            "e 0.6196690,0.5729381,8,0.91796875,\\,\\\n" +
-            "c 0.1438348,0.5885691,/,0.935546875,\\,\\\n" +
-            "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n" +
-            "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n" +
+            "b " +
+            "0.6196690,0.5729381,e,0.91796875; " +
+            "0.1438348,0.5885691,c,0.935546875; " +
+            "2.1871898,1.1307166,st,0.94091796875; " +
+            "1.6080190,0.4053252,st,0.93994140625; " +
+            "1.8339624,1.0690025,st,0.92431640625; " +
+            "2.1732988,0.4029377,st,0.92333984375; " +
+            "0.4337689,0.7016096,st,0.91845703125; " +
+            "1.0316985,0.4764176,st,0.9111328125; " +
+            "1.2302539,-0.0113007,st,0.8681640625; " +
+            "0.2275915,0.5222517,so,0.93505859375; " +
+            "0.2587466,1.1564102,so,0.93115234375; " +
+            "0.5787677,0.2162453,so,0.92431640625; " +
+            "1.9773390,0.2994787,so,0.92431640625; " +
+            "1.6321940,0.5848715,so,0.9228515625; " +
+            "1.3385810,0.4352357,so,0.9208984375\n" +
             "s 0.3069,0.8606;-0.2317,-0.9728;0.2485,0.6155;0.98\n";
     }
 
     private static string BuildIssue83StripeNearLowerMiddlePocketBlock()
     {
         return
-            //"E predator_9ft_virtual_debug.json\n" +
             "E last_environment.json\n" +
             "p 0.0320000,1.2400000;2.5080001,1.2400000;1.2700000,0.0600000;1.2700000,1.2100000;0.0320000,0.0320000;2.5080001,0.0320000\n" +
-            "e 0.6196690,0.5729381,8,0.91796875,\\,\\\n" +
-            "c 0.1438348,0.5885691,/,0.935546875,\\,\\\n" +
-            "st 2.1871898,1.1307166,u,0.94091796875,\\,\\; 1.6080190,0.4053252,u,0.93994140625,\\,\\; 1.8339624,1.0690025,u,0.92431640625,\\,\\; 2.1732988,0.4029377,u,0.92333984375,\\,\\; 0.4337689,0.7016096,u,0.91845703125,\\,\\; 1.0316985,0.4764176,u,0.9111328125,\\,\\; 1.2302539,-0.0113007,u,0.8681640625,\\,\\\n" +
-            "so 0.2275915,0.5222517,u,0.93505859375,\\,\\; 0.2587466,1.1564102,u,0.93115234375,\\,\\; 0.5787677,0.2162453,u,0.92431640625,\\,\\; 1.9773390,0.2994787,u,0.92431640625,\\,\\; 1.6321940,0.5848715,u,0.9228515625,\\,\\; 1.3385810,0.4352357,u,0.9208984375,\\,\\\n";
+            "b " +
+            "0.6196690,0.5729381,e,0.91796875; " +
+            "0.1438348,0.5885691,c,0.935546875; " +
+            "2.1871898,1.1307166,st,0.94091796875; " +
+            "1.6080190,0.4053252,st,0.93994140625; " +
+            "1.8339624,1.0690025,st,0.92431640625; " +
+            "2.1732988,0.4029377,st,0.92333984375; " +
+            "0.4337689,0.7016096,st,0.91845703125; " +
+            "1.0316985,0.4764176,st,0.9111328125; " +
+            "1.2302539,-0.0113007,st,0.8681640625; " +
+            "0.2275915,0.5222517,so,0.93505859375; " +
+            "0.2587466,1.1564102,so,0.93115234375; " +
+            "0.5787677,0.2162453,so,0.92431640625; " +
+            "1.9773390,0.2994787,so,0.92431640625; " +
+            "1.6321940,0.5848715,so,0.9228515625; " +
+            "1.3385810,0.4352357,so,0.9208984375\n";
     }
 
     [ContextMenu("USB/Start Repeating ISSUE-84 Override Regression Block")]
@@ -1044,7 +1073,6 @@ public class UsbSocketReceiver : MonoBehaviour
         _nextIssue84OverrideRegressionInjectTime =
             Time.unscaledTime + Mathf.Max(0.05f, repeatIssue84OverrideRegressionIntervalSec);
 
-        Debug.Log("Looop executed");
         TestInjectIssue83StripeNearLowerMiddlePocket();
     }
 

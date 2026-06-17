@@ -15,6 +15,7 @@ from droid_cam_controller import DroidCamController
 from formatters import (
     LABEL_MAP,
     build_bootstrap_payloads,
+    build_conf_transfer_block,
     p2p_classification_to_balltype,
 )
 from helpers import (
@@ -132,6 +133,85 @@ def _detections_to_pixel_entries(yolo_detections, process_unknowns: bool = False
     return entries
 
 
+def _try_map_pixel_entries_to_table_entries(pixel_entries, frame_bgr, config):
+    """
+    Converts YOLO pixel-space detections into table-space metre entries.
+
+    This function is intentionally a guarded placeholder in the current
+    config-only fiducial baseline. It must not return raw pixel coordinates
+    as x/y because the Quest-side receiver expects table-space metres.
+
+    Future implementation steps:
+    1. detect configured ArUco or QR fiducials from the frame,
+    2. estimate the camera-to-table transform or planar homography,
+    3. map x_px/y_px into table-space x/y metres,
+    4. return entries shaped for build_conf_transfer_block(...).
+
+    Expected output shape once implemented:
+    [
+        {
+            "type": "c" | "e" | "so" | "st" | "u",
+            "x": table_x_m,
+            "y": table_y_m,
+            "conf": confidence,
+        }
+    ]
+    """
+
+    _ = pixel_entries
+    _ = frame_bgr
+    _ = config
+
+    return []
+
+
+def _send_table_detection_entries(
+    usb_sender,
+    ball_transport,
+    table_entries,
+    ball_diameter_m: float,
+    camera_height_m: float,
+    debug: bool,
+):
+    if usb_sender is None:
+        return False
+
+    if not table_entries:
+        ball_transport.reset()
+        return False
+
+    now_sec = time.time()
+    entries_to_send = ball_transport.push(table_entries, now_sec)
+
+    if entries_to_send is None:
+        return False
+
+    data = build_conf_transfer_block(
+        pockets=None,
+        table_LW_m=None,
+        ball_diameter_m=ball_diameter_m,
+        camera_height_m=camera_height_m,
+        detection_entries=entries_to_send,
+        discard_diamonds=True,
+        pos_decimals=BALL_SEND_POSITION_DECIMALS,
+        conf_decimals=BALL_SEND_CONF_DECIMALS,
+        vel_decimals=BALL_SEND_VELOCITY_DECIMALS,
+        use_aggregate_ball_line=True,
+    )
+
+    if not data.strip():
+        return False
+
+    sent = usb_sender.send(data)
+
+    if debug and sent:
+        print(data)
+    elif debug:
+        print("[USB] Ball transfer failed. The sender will retry on the next send.")
+
+    return sent
+
+
 def _summarize_environment_config(config, configuration_name: str) -> None:
     length_mm, width_mm, playfield_height_mm = config.table.playfield_mm
     marker_plane_height_mm = config.table.effective_marker_plane_height_mm()
@@ -160,6 +240,7 @@ def _summarize_environment_config(config, configuration_name: str) -> None:
         ids = [marker.id for marker in enabled_markers]
         dictionary_text = f", dictionary={marker_set.dictionary_name}" if marker_set.dictionary_name else ""
         payload_text = f", payloadPrefix={marker_set.payload_prefix}" if marker_set.payload_prefix else ""
+
         print(
             f"[config] Fiducial set '{marker_type}': "
             f"count={len(enabled_markers)}, size={marker_set.marker_size_mm:.1f} mm, "
@@ -208,7 +289,7 @@ def open_stream(
 
     ret, _ = capture.read()
     if not ret:
-        print(f"Could not connect to DroidCam server. Check IP {_controller.ip} and PORT {_controller.port}. Also make sure")
+        print(f"Could not connect to DroidCam server. Check IP {_controller.ip} and PORT {_controller.port}.")
         capture.release()
         return None, None
 
@@ -263,6 +344,7 @@ def check_keys(dimensions: str = "1920x1080"):
 
     if key == ord("q"):
         return False, camera_info
+
     if key == ord("t"):
         _controller.send_camera_command("toggle_torch")
     elif key == ord("f"):
@@ -315,8 +397,10 @@ def _resolve_input_source(
         work_w, work_h = map(int, work_resolution.split("x"))
         debug_frame = cv2.resize(debug_frame, (work_w, work_h), interpolation=cv2.INTER_AREA)
         dimensions = work_resolution
+
         print(f"[debug] Using static image as fake feed: {resolved_debug_image_path}.")
         print(f"[debug] Resized debug image to work-res: {dimensions}")
+
         return capture, dimensions, debug_frame
 
     if debug_recorded:
@@ -338,11 +422,13 @@ def _resolve_input_source(
             print(f"[debug-recorded] Source resolution: {source_w}x{source_h} -> work-res: {dimensions}")
         else:
             print(f"[debug-recorded] Using work-res: {dimensions}")
+
         return capture, dimensions, debug_frame
 
     global _controller
     ip, port = setup_connection(False, False, debug_offline)
     _controller = DroidCamController(ip, port)
+
     capture, dimensions = open_stream(
         work_resolution,
         performance_mode,
@@ -431,9 +517,11 @@ def main(
 
     if not debug_offline:
         initial_usb_connection_ready = usb_sender.connect()
+
         if (not initial_usb_connection_ready) and is_editor_build:
             open_ports(5005, is_editor_build)
             initial_usb_connection_ready = usb_sender.connect()
+
         if not initial_usb_connection_ready:
             print("[USB] Initial Quest connection failed. Detection will continue and reconnect on send.")
 
@@ -522,6 +610,7 @@ def main(
 
                 if capture is not None:
                     capture.release()
+
                 capture, dimensions = open_stream(
                     work_resolution,
                     performance_mode,
@@ -544,7 +633,6 @@ def main(
 
             frame = _calib.undistort_frame_if_needed(frame, _map1, _map2) if _calib is not None else frame
 
-
             yolo_detections = []
             try:
                 yolo_detections = _detector.detect_balls_yolov5(frame_bgr=frame, img_size=BALL_YOLO_IMAGE_SIZE)
@@ -554,14 +642,20 @@ def main(
 
             pixel_entries = _detections_to_pixel_entries(yolo_detections, process_unknowns)
 
-            # Table-space mapping is intentionally not active in this config-only baseline.
-            # Next implementation step:
-            #   1. detect ArUco markers from frame using config.get_fiducial_set("aruco")
-            #   2. estimate camera/table pose or homography
-            #   3. map each pixel entry to table-space metres
-            #   4. build and send the normal detection payload
-            _ = pixel_entries
-            _ = ball_transport
+            table_entries = _try_map_pixel_entries_to_table_entries(
+                pixel_entries=pixel_entries,
+                frame_bgr=frame,
+                config=config,
+            )
+
+            _send_table_detection_entries(
+                usb_sender=usb_sender,
+                ball_transport=ball_transport,
+                table_entries=table_entries,
+                ball_diameter_m=config.ball_spec.diameter_m,
+                camera_height_m=config.camera.height_from_floor_m,
+                debug=debug,
+            )
 
             if debug_detection:
                 _show_ball_debug_windows(frame, yolo_detections)
@@ -575,10 +669,13 @@ def main(
     finally:
         if debug_detection or debug_static or debug_recorded or debug:
             cv2.destroyAllWindows()
+
         if capture is not None:
             capture.release()
+
         if usb_sender is not None:
             usb_sender.close()
+
         if _detector is not None:
             _detector.dispose()
 
@@ -611,11 +708,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    debug_source_count = sum([
-        1 if args.debug_static else 0,
-        1 if args.debug_recorded else 0,
-        1 if args.debug_phone else 0,
-    ])
+    debug_source_count = sum(
+        [
+            1 if args.debug_static else 0,
+            1 if args.debug_recorded else 0,
+            1 if args.debug_phone else 0,
+        ]
+    )
 
     if debug_source_count > 0 and not args.debug:
         print("Debug source flags require --debug.")
